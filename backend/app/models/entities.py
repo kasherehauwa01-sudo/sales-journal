@@ -16,6 +16,7 @@ class ImportBatch(Base):
     added_rows: Mapped[int] = mapped_column(Integer, default=0); duplicate_rows: Mapped[int] = mapped_column(Integer, default=0)
     skipped_rows: Mapped[int] = mapped_column(Integer, default=0); error_rows: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int | None] = mapped_column(Integer); error_text: Mapped[str | None] = mapped_column(Text)
+    log_text: Mapped[str | None] = mapped_column(Text)
     errors: Mapped[list["ImportError"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
 
 class Sale(Base, TimestampMixin):
