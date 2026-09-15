@@ -1,0 +1,2 @@
+import {useEffect,useState} from 'react';import {api} from '../api/client';
+export function useApi<T>(path:string){const [data,setData]=useState<T>();const [loading,setLoading]=useState(true);const [error,setError]=useState('');useEffect(()=>{let active=true;setLoading(true);api<T>(path).then(x=>active&&setData(x)).catch(e=>active&&setError(e.message)).finally(()=>active&&setLoading(false));return()=>{active=false}},[path]);return {data,loading,error}}
