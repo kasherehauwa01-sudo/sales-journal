@@ -9,7 +9,7 @@ from app.repositories.sales import filtered_sales
 from app.schemas import ItemOut, SaleOut, SalePage
 router=APIRouter(prefix="/sales",tags=["Продажи"])
 @router.get("",response_model=SalePage)
-async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),sort_by:str="sale_date",sort_dir:str="desc",search:str|None=None,date_from:date|None=None,date_to:date|None=None,department:str|None=None,client:str|None=None,author:str|None=None,price_type:str|None=None,promotion:str|None=None,social:bool|None=None,has_card:bool|None=None,min_amount:Decimal|None=None,max_amount:Decimal|None=None,min_discount:Decimal|None=None,max_discount:Decimal|None=None,db:AsyncSession=Depends(get_db)):
+async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),sort_by:str="sale_date",sort_dir:str="desc",search:str|None=None,date_from:date|None=None,date_to:date|None=None,departments:list[str]|None=Query(None),client:str|None=None,author:str|None=None,price_type:str|None=None,promotion:str|None=None,social:bool|None=None,discount_card_percent:Decimal|None=None,min_amount:Decimal|None=None,max_amount:Decimal|None=None,min_discount:Decimal|None=None,max_discount:Decimal|None=None,db:AsyncSession=Depends(get_db)):
  kw=locals().copy();kw.pop("db");[kw.pop(x) for x in ("page","page_size","sort_by","sort_dir")]
  base=filtered_sales(select(Sale),**kw);total=await db.scalar(select(func.count()).select_from(base.subquery())) or 0
  allowed={x.name:getattr(Sale,x.name) for x in Sale.__table__.columns};col=allowed.get(sort_by,Sale.sale_date);order=desc(col) if sort_dir=="desc" else asc(col)

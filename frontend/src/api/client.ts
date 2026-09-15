@@ -1,3 +1,3 @@
 const base=(import.meta.env.VITE_BASE_PATH||'/vr/sales/').replace(/\/$/,'');export const API=`${base}/api`;
 export async function api<T>(path:string,init?:RequestInit):Promise<T>{const response=await fetch(`${API}${path}`,init);if(!response.ok){let message=`Ошибка ${response.status}`;try{const body=await response.json();message=body.detail||message}catch{}throw new Error(message)}return response.json()}
-export function query(params:Record<string,string|number|boolean|undefined>){const q=new URLSearchParams();Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!=='')q.set(k,String(v))});return q.toString()}
+export function query(params:Record<string,string|number|boolean|string[]|undefined>){const q=new URLSearchParams();Object.entries(params).forEach(([k,v])=>{if(Array.isArray(v)){v.forEach(item=>q.append(k,item))}else if(v!==undefined&&v!=='')q.set(k,String(v))});return q.toString()}
