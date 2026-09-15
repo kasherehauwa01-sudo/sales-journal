@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from app.importer.parser import LEGACY_COLUMNS,find_header,identify_column,normalize_sale,parse_items
+from app.importer.parser import LEGACY_COLUMNS,decimal,find_header,identify_column,normalize_sale,parse_items
 BASE={"sale_date":"14.09.2026","document_number":"42","department":"Европа","total_amount":"1 245,50","products":"A1 | C1 | Крем | 2 | 700 | 622,75"}
 def test_normalization_and_items():
  row=normalize_sale(BASE);assert row["sale_date"]==date(2026,9,14);assert row["total_amount"]==Decimal("1245.50");assert row["items"][0]["quantity"]==Decimal("2")
@@ -65,3 +65,18 @@ def test_products_from_real_export_are_split_and_labels_removed():
  assert items[0]["name"]=="Сковорода"
  assert items[0]["quantity"]==Decimal("2")
  assert items[0]["actual_price"]==Decimal("2008.32")
+
+
+def test_negative_percent_is_not_scaled_by_one_hundred():
+ assert decimal("-17%",percent=True)==Decimal("-17")
+ assert decimal("-15",percent=True)==Decimal("-15")
+ row=normalize_sale({**BASE,"discount_percent":"-17%","discount_card_percent":"-15"})
+ assert row["discount_percent"]==Decimal("-17")
+ assert row["discount_card_percent"]==Decimal("-15")
+
+
+def test_excel_fraction_is_converted_to_percent():
+ assert decimal(-0.17,percent=True)==Decimal("-17.00")
+ assert decimal(0.17,percent=True)==Decimal("17.00")
+ assert decimal("0,5%",percent=True)==Decimal("0.5")
+ assert decimal("-0,6",percent=True)==Decimal("-0.6")

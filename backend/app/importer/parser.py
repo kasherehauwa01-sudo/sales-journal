@@ -53,7 +53,8 @@ def looks_like_legacy_sale(row:list[Any])->bool:
  return bool(str(row[2] or "").strip() and str(row[4] or "").strip() and amount is not None)
 def decimal(v:Any, percent=False)->Decimal|None:
  if v in (None,""): return None
- if isinstance(v,(int,float,Decimal)): d=Decimal(str(v))
+ is_numeric=isinstance(v,(int,float,Decimal)) and not isinstance(v,bool)
+ if is_numeric: d=Decimal(str(v))
  else:
   s=re.sub(r"[^0-9,\.\-]","",str(v).replace(" ",""));
   if not s:return None
@@ -61,7 +62,10 @@ def decimal(v:Any, percent=False)->Decimal|None:
   else:s=s.replace(",",".")
   try:d=Decimal(s)
   except InvalidOperation: raise ValueError(f"Некорректное число: {v}")
- if percent and d<=1 and d!=0: d*=100
+ # Excel хранит 17% числом 0.17, а текстовые выгрузки — строкой «17%».
+ # Масштабируем только числовую Excel-дробь и обязательно учитываем
+ # модуль: прежняя проверка `d <= 1` ошибочно превращала -17% в -1700%.
+ if percent and is_numeric and Decimal("0")<abs(d)<=Decimal("1"): d*=100
  return d
 def parse_date(v:Any)->date:
  if isinstance(v,datetime):return v.date()
