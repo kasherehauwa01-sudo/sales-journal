@@ -12,6 +12,7 @@ ALIASES = {
  "discount_card_percent":["% дк","дк %"], "discount_card_number":["№ дк","номер дк"], "social":["социальная"],
  "certificate_amount":["сумма сертификатов"], "promotion":["акция"], "phone":["телефон","номер телефона"], "products":["товары","состав продажи","номенклатура"]}
 REQUIRED={"sale_date","document_number","department","total_amount"}
+LEGACY_COLUMNS=("row_number","sale_date","document_number","client","department","total_amount","base_amount","discount_percent","reason","author","price_type","discount_card_percent","discount_card_number","social","certificate_amount","promotion","phone","products")
 def norm(v:Any)->str:
  return re.sub(r"\s+"," ",str(v or "").replace("\xa0"," ").strip().lower().replace("ё","е"))
 def compact(v:Any)->str:
@@ -36,7 +37,20 @@ def find_header(rows:list[list[Any]],scan_limit:int=1000)->tuple[int,dict[str,in
   merged:dict[str,int]={}
   for _,mapping in recent:merged.update(mapping)
   if REQUIRED.issubset(merged):return idx,merged,best
+ # Резервный путь только для известной 18-колоночной выгрузки. Он нужен для старых XLS,
+ # в которых xlrd иногда возвращает подписи шапки с повреждённой кодировкой.
+ for idx,row in enumerate(rows[:scan_limit]):
+  if len(row)<len(LEGACY_COLUMNS) or idx+1>=len(rows):continue
+  header_cells=sum(bool(norm(value)) for value in row[:len(LEGACY_COLUMNS)])
+  if header_cells>=14 and looks_like_legacy_sale(rows[idx+1]):
+   return idx,{key:position for position,key in enumerate(LEGACY_COLUMNS)},best
  return None if not best else (-1,{},best)
+def looks_like_legacy_sale(row:list[Any])->bool:
+ if len(row)<len(LEGACY_COLUMNS):return False
+ try:
+  parse_date(row[1]);amount=decimal(row[5])
+ except (TypeError,ValueError):return False
+ return bool(str(row[2] or "").strip() and str(row[4] or "").strip() and amount is not None)
 def decimal(v:Any, percent=False)->Decimal|None:
  if v in (None,""): return None
  if isinstance(v,(int,float,Decimal)): d=Decimal(str(v))
@@ -66,16 +80,29 @@ def parse_phone(v:Any)->str|None:
 def parse_items(text:Any)->list[dict]:
  raw=str(text or "").strip()
  if not raw:return []
- parts=[p.strip() for p in re.split(r"[\n;]+",raw) if p.strip()]
+ # В реальной выгрузке следующая позиция может начинаться после переноса строки
+ # или сразу после разделителя `| Артикул:`.
+ parts=[p.strip() for p in re.split(r"(?:[\n;]+|\|\s*(?=Артикул\s*:))",raw,flags=re.I) if p.strip()]
  result=[]
  # Поддерживаются строки с разделителями | и табуляцией; неизвестный формат сохраняется как название.
  for part in parts:
   fields=[x.strip() for x in re.split(r"\s*[|\t]\s*",part)]
   item={"article":None,"code":None,"name":part,"quantity":Decimal("1"),"base_price":None,"actual_price":None,"extra_data":part}
   if len(fields)>=3:
-   item.update(article=fields[0] or None,code=fields[1] or None,name=fields[2] or part)
-   for key,pos in (("quantity",3),("base_price",4),("actual_price",5)):
-    if len(fields)>pos and fields[pos]: item[key]=decimal(fields[pos])
+   labelled={}
+   for field in fields:
+    if ":" in field:
+     label,value=field.split(":",1);label=compact(label);value=value.strip()
+     for aliases,key in (({"артикул","арт"},"article"),({"код","кодтовара"},"code"),({"наименование","товар"},"name"),({"количество","колво"},"quantity"),({"ценабазовая","базоваяцена"},"base_price"),({"цена","ценапродажи"},"actual_price")):
+      if label in aliases:labelled[key]=value;break
+   if labelled:
+    item.update(article=labelled.get("article") or None,code=labelled.get("code") or None,name=labelled.get("name") or part)
+    for key in ("quantity","base_price","actual_price"):
+     if labelled.get(key):item[key]=decimal(labelled[key])
+   else:
+    item.update(article=fields[0] or None,code=fields[1] or None,name=fields[2] or part)
+    for key,pos in (("quantity",3),("base_price",4),("actual_price",5)):
+     if len(fields)>pos and fields[pos]: item[key]=decimal(fields[pos])
   else:
    m=re.match(r"(?:(?P<article>\S+)\s+)?(?P<name>.+?)\s+[xх*]\s*(?P<qty>[\d,.]+)(?:\s+по\s+(?P<price>[\d,.]+))?$",part,re.I)
    if m:item.update(article=m["article"],name=m["name"],quantity=decimal(m["qty"]) or Decimal(1),actual_price=decimal(m["price"]))
