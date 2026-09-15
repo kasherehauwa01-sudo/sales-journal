@@ -4,30 +4,69 @@ services:
     container_name: sales-journal-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-sales}
-      POSTGRES_USER: ${POSTGRES_USER:-sales}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Создайте POSTGRES_PASSWORD в .env}
-    volumes: [sales_db:/var/lib/postgresql/data]
-    healthcheck: {test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"], interval: 10s, timeout: 5s, retries: 10}
+      POSTGRES_DB: "${POSTGRES_DB:-sales}"
+      POSTGRES_USER: "${POSTGRES_USER:-sales}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Создайте POSTGRES_PASSWORD в .env}"
+    volumes:
+      - sales_db:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   backend:
-    build: ./backend
+    build:
+      context: ./backend
     container_name: sales-journal-backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sales}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-sales}
-      BASE_PATH: ${BASE_PATH:-/vr/sales}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://kvasmix.ru}
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sales}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-sales}"
+      BASE_PATH: "${BASE_PATH:-/vr/sales}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-https://kvasmix.ru}"
       UPLOAD_DIR: /data/imports
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    volumes: [sales_imports:/data/imports]
-    ports: ["127.0.0.1:${BACKEND_PORT:-8010}:8000"]
-    depends_on: {db: {condition: service_healthy}}
-    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"], interval: 15s, timeout: 5s, retries: 10}
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      - sales_imports:/data/imports
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8010}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
   frontend:
-    build: {context: ./frontend, args: {VITE_BASE_PATH: ${VITE_BASE_PATH:-/vr/sales/}}}
+    build:
+      context: ./frontend
+      args:
+        VITE_BASE_PATH: "${VITE_BASE_PATH:-/vr/sales/}"
     container_name: sales-journal-frontend
     restart: unless-stopped
-    ports: ["127.0.0.1:${FRONTEND_PORT:-8011}:8080"]
-    depends_on: {backend: {condition: service_healthy}}
-    healthcheck: {test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"], interval: 15s, timeout: 5s, retries: 10}
-volumes: {sales_db: {}, sales_imports: {}}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8011}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:8080/health
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  sales_db:
+  sales_imports:
