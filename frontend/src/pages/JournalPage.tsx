@@ -3,22 +3,23 @@ import {useState} from 'react';
 import {Link} from 'react-router-dom';
 import {api,query} from '../api/client';
 import {MultiSelect} from '../components/MultiSelect';
+import {PeriodPicker,type Period} from '../components/PeriodPicker';
 import {SaleDrawer} from '../components/SaleDrawer';
 import {Empty,ErrorBox,Loading} from '../components/States';
 import {useApi} from '../hooks/useApi';
 import type {Sale,SalePage} from '../types';
 import {date,money,percent} from '../utils/format';
 
-type Filters={search:string;date_from:string;date_to:string;departments:string[];client:string;author:string;price_type:string;promotion:string;social:string;discount_card_percent:string;min_amount:string;max_amount:string;min_discount:string;max_discount:string};
+type Filters={search:string;period:Period;date_from:string;date_to:string;departments:string[];client:string;author:string;price_type:string;promotion:string;social:string;discount_card_percent:string;min_amount:string;max_amount:string;min_discount:string;max_discount:string};
 type FilterOptions={departments:string[];authors:string[];price_types:string[];promotions:string[];discount_card_percents:number[]};
-const initial:Filters={search:'',date_from:'',date_to:'',departments:[],client:'',author:'',price_type:'',promotion:'',social:'',discount_card_percent:'',min_amount:'',max_amount:'',min_discount:'',max_discount:''};
+const initial:Filters={search:'',period:'all',date_from:'',date_to:'',departments:[],client:'',author:'',price_type:'',promotion:'',social:'',discount_card_percent:'',min_amount:'',max_amount:'',min_discount:'',max_discount:''};
 
 export function JournalPage(){
   const [draft,setDraft]=useState<Filters>(initial);const [filters,setFilters]=useState<Filters>(initial);
   const [page,setPage]=useState(1);const [pageSize,setPageSize]=useState(50);const [sort,setSort]=useState('sale_date');const [dir,setDir]=useState('desc');const [selected,setSelected]=useState<Sale>();
   const {data:options}=useApi<FilterOptions>('/filters');
   const cardOptions=Array.from(new Set([5,7,10,15,20,...(options?.discount_card_percents||[])])).sort((a,b)=>a-b);
-  const path=`/sales?${query({...filters,page,page_size:pageSize,sort_by:sort,sort_dir:dir})}`;
+  const {period:_,...apiFilters}=filters;const path=`/sales?${query({...apiFilters,page,page_size:pageSize,sort_by:sort,sort_dir:dir})}`;
   const {data,loading,error}=useApi<SalePage>(path);
   function apply(){setPage(1);setFilters(draft)}
   function reset(){setDraft(initial);setFilters(initial);setPage(1)}
@@ -28,9 +29,8 @@ export function JournalPage(){
     <div className="page-title"><div><h1>Журнал продаж</h1><p>Все загруженные продажи в едином реестре</p></div><Link className="primary" to="/imports"><Upload size={18}/>Загрузить XLS</Link></div>
     <section className="panel filters">
       <div className="search"><Search/><input placeholder="Документ, клиент, телефон, карта или товар" value={draft.search} onChange={e=>setDraft({...draft,search:e.target.value})} onKeyDown={e=>e.key==='Enter'&&apply()}/></div>
+      <PeriodPicker value={draft} onChange={period=>setDraft({...draft,...period})}/>
       <div className="filter-grid">
-        <label>С даты<input type="date" value={draft.date_from} onChange={e=>setDraft({...draft,date_from:e.target.value})}/></label>
-        <label>По дату<input type="date" value={draft.date_to} onChange={e=>setDraft({...draft,date_to:e.target.value})}/></label>
         <label>Подразделение<MultiSelect options={options?.departments||[]} value={draft.departments} onChange={departments=>setDraft({...draft,departments})} placeholder="Все подразделения"/></label>
         <label>Клиент<input value={draft.client} onChange={e=>setDraft({...draft,client:e.target.value})}/></label>
         <label>Автор<input value={draft.author} onChange={e=>setDraft({...draft,author:e.target.value})}/></label>
