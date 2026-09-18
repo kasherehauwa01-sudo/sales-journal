@@ -1,49 +1,48 @@
-import {ChevronLeft,ChevronRight,Filter,RotateCcw,Search,Upload} from 'lucide-react';
+import {ChevronLeft,ChevronRight,Filter,RotateCcw,Search,Settings2,Trash2,Upload,X} from 'lucide-react';
 import {useState} from 'react';
 import {Link} from 'react-router-dom';
 import {api,query} from '../api/client';
+import {Autocomplete} from '../components/Autocomplete';
 import {MultiSelect} from '../components/MultiSelect';
+import {PeriodPicker,type Period} from '../components/PeriodPicker';
 import {SaleDrawer} from '../components/SaleDrawer';
 import {Empty,ErrorBox,Loading} from '../components/States';
 import {useApi} from '../hooks/useApi';
 import type {Sale,SalePage} from '../types';
 import {date,money,percent} from '../utils/format';
 
-type Filters={search:string;date_from:string;date_to:string;departments:string[];client:string;author:string;price_type:string;promotion:string;social:string;discount_card_percent:string;min_amount:string;max_amount:string;min_discount:string;max_discount:string};
-type FilterOptions={departments:string[];authors:string[];price_types:string[];promotions:string[];discount_card_percents:number[]};
-const initial:Filters={search:'',date_from:'',date_to:'',departments:[],client:'',author:'',price_type:'',promotion:'',social:'',discount_card_percent:'',min_amount:'',max_amount:'',min_discount:'',max_discount:''};
+type Filters={search:string;period:Period;date_from:string;date_to:string;departments:string[];client:string;price_type:string;social:string;discount_card_percent:string;min_amount:string;max_amount:string;min_discount:string;max_discount:string};
+type FilterOptions={departments:string[];price_types:string[];discount_card_percents:number[]};
+type ColumnKey='sale_date'|'document_number'|'client'|'department'|'total_amount'|'base_amount'|'discount_percent'|'author'|'price_type'|'promotion';
+const initial:Filters={search:'',period:'all',date_from:'',date_to:'',departments:[],client:'',price_type:'',social:'',discount_card_percent:'',min_amount:'',max_amount:'',min_discount:'',max_discount:''};
+const columns:Array<[ColumnKey,string]>=[['sale_date','Дата'],['document_number','№ документа'],['client','Клиент'],['department','Подразделение'],['total_amount','Сумма'],['base_amount','Базовая'],['discount_percent','Скидка'],['author','Автор'],['price_type','Тип цены'],['promotion','Акция']];
+const columnCacheKey='sales-journal-visible-columns';
+function cachedColumns(){try{const saved=JSON.parse(localStorage.getItem(columnCacheKey)||'null');if(Array.isArray(saved))return columns.map(([key])=>key).filter(key=>saved.includes(key))}catch{}return columns.map(([key])=>key)}
+function cell(sale:Sale,key:ColumnKey){const value=sale[key];if(key==='sale_date')return date(String(value));if(key==='total_amount'||key==='base_amount')return money(value as string|number);if(key==='discount_percent')return percent(value as string|number);if(key==='document_number')return <b>{value}</b>;if(key==='promotion')return value?<span className="badge">{value}</span>:'—';return value||'—'}
 
 export function JournalPage(){
   const [draft,setDraft]=useState<Filters>(initial);const [filters,setFilters]=useState<Filters>(initial);
-  const [page,setPage]=useState(1);const [pageSize,setPageSize]=useState(50);const [sort,setSort]=useState('sale_date');const [dir,setDir]=useState('desc');const [selected,setSelected]=useState<Sale>();
-  const {data:options}=useApi<FilterOptions>('/filters');
-  const cardOptions=Array.from(new Set([5,7,10,15,20,...(options?.discount_card_percents||[])])).sort((a,b)=>a-b);
-  const path=`/sales?${query({...filters,page,page_size:pageSize,sort_by:sort,sort_dir:dir})}`;
-  const {data,loading,error}=useApi<SalePage>(path);
-  function apply(){setPage(1);setFilters(draft)}
-  function reset(){setDraft(initial);setFilters(initial);setPage(1)}
+  const [page,setPage]=useState(1);const [pageSize,setPageSize]=useState(100);const [sort,setSort]=useState('sale_date');const [dir,setDir]=useState('desc');const [sale,setSale]=useState<Sale>();
+  const [ids,setIds]=useState<Set<number>>(new Set());const [excluded,setExcluded]=useState<Set<number>>(new Set());const [all,setAll]=useState(false);const [revision,setRevision]=useState(0);const [deleting,setDeleting]=useState(false);
+  const [visible,setVisible]=useState<ColumnKey[]>(cachedColumns);const [columnsOpen,setColumnsOpen]=useState(false);
+  const {data:options}=useApi<FilterOptions>('/filters');const cardOptions=Array.from(new Set([5,7,10,15,20,...(options?.discount_card_percents||[])])).sort((a,b)=>a-b);
+  const {period:_,...apiFilters}=filters;const path=`/sales?${query({...apiFilters,page,page_size:pageSize,sort_by:sort,sort_dir:dir,_revision:revision})}`;const {data,loading,error}=useApi<SalePage>(path);
+  const pageIds=data?.items.map(item=>item.id)||[];const checked=(id:number)=>all?!excluded.has(id):ids.has(id);const pageChecked=pageIds.length>0&&pageIds.every(checked);const count=all?Math.max(0,(data?.total||0)-excluded.size):ids.size;
+  function clearSelection(){setIds(new Set());setExcluded(new Set());setAll(false)}
+  function apply(){setPage(1);setFilters(draft);clearSelection()}
+  function reset(){setDraft(initial);setFilters(initial);setPage(1);clearSelection()}
   function sortBy(key:string){setSort(key);setDir(sort===key&&dir==='desc'?'asc':'desc')}
-  async function open(id:number){setSelected(await api<Sale>(`/sales/${id}`))}
+  async function open(id:number){setSale(await api<Sale>(`/sales/${id}`))}
+  function toggle(id:number){if(all)setExcluded(current=>{const next=new Set(current);next.has(id)?next.delete(id):next.add(id);return next});else setIds(current=>{const next=new Set(current);next.has(id)?next.delete(id):next.add(id);return next})}
+  function togglePage(){if(all){setExcluded(current=>{const next=new Set(current);pageIds.forEach(id=>pageChecked?next.add(id):next.delete(id));return next})}else setIds(current=>{const next=new Set(current);pageIds.forEach(id=>pageChecked?next.delete(id):next.add(id));return next})}
+  function selectAll(){setAll(true);setIds(new Set());setExcluded(new Set())}
+  function toggleColumn(key:ColumnKey){setVisible(current=>{const next=current.includes(key)?current.filter(item=>item!==key):columns.map(([name])=>name).filter(name=>name===key||current.includes(name));localStorage.setItem(columnCacheKey,JSON.stringify(next));return next})}
+  async function remove(){if(!count||!confirm(`Удалить выбранные строки (${count})? Это действие нельзя отменить.`))return;const deleteFilters=Object.fromEntries(Object.entries(apiFilters).filter(([,value])=>value!==''&&(!Array.isArray(value)||value.length>0)));setDeleting(true);try{await api<{deleted:number}>('/sales',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({all,ids:[...ids],excluded_ids:[...excluded],filters:deleteFilters})});clearSelection();setRevision(value=>value+1);setSale(undefined)}catch(error){alert(error instanceof Error?error.message:'Не удалось удалить выбранные строки')}finally{setDeleting(false)}}
   return <div className="page">
     <div className="page-title"><div><h1>Журнал продаж</h1><p>Все загруженные продажи в едином реестре</p></div><Link className="primary" to="/imports"><Upload size={18}/>Загрузить XLS</Link></div>
-    <section className="panel filters">
-      <div className="search"><Search/><input placeholder="Документ, клиент, телефон, карта или товар" value={draft.search} onChange={e=>setDraft({...draft,search:e.target.value})} onKeyDown={e=>e.key==='Enter'&&apply()}/></div>
-      <div className="filter-grid">
-        <label>С даты<input type="date" value={draft.date_from} onChange={e=>setDraft({...draft,date_from:e.target.value})}/></label>
-        <label>По дату<input type="date" value={draft.date_to} onChange={e=>setDraft({...draft,date_to:e.target.value})}/></label>
-        <label>Подразделение<MultiSelect options={options?.departments||[]} value={draft.departments} onChange={departments=>setDraft({...draft,departments})} placeholder="Все подразделения"/></label>
-        <label>Клиент<input value={draft.client} onChange={e=>setDraft({...draft,client:e.target.value})}/></label>
-        <label>Автор<input value={draft.author} onChange={e=>setDraft({...draft,author:e.target.value})}/></label>
-        <label>Тип цены<select value={draft.price_type} onChange={e=>setDraft({...draft,price_type:e.target.value})}><option value="">Все типы цен</option>{options?.price_types.map(value=><option key={value} value={value}>{value}</option>)}</select></label>
-        <label>Акция<input value={draft.promotion} onChange={e=>setDraft({...draft,promotion:e.target.value})}/></label>
-        <label>Социальная<select value={draft.social} onChange={e=>setDraft({...draft,social:e.target.value})}><option value="">Все</option><option value="true">Да</option><option value="false">Нет</option></select></label>
-        <label>Дисконтная карта<select value={draft.discount_card_percent} onChange={e=>setDraft({...draft,discount_card_percent:e.target.value})}><option value="">Любая скидка</option>{cardOptions.map(value=><option key={value} value={value}>{value}%</option>)}</select></label>
-        <label>Сумма от<input type="number" value={draft.min_amount} onChange={e=>setDraft({...draft,min_amount:e.target.value})}/></label>
-        <label>Сумма до<input type="number" value={draft.max_amount} onChange={e=>setDraft({...draft,max_amount:e.target.value})}/></label>
-      </div>
-      <div className="actions"><button className="primary" onClick={apply}><Filter size={17}/>Применить</button><button onClick={reset}><RotateCcw size={17}/>Сбросить</button></div>
-    </section>
-    <section className="panel table-panel"><div className="table-meta"><b>Найдено: {data?.total??0}</b><label>Строк<select value={pageSize} onChange={e=>{setPageSize(+e.target.value);setPage(1)}}>{[20,50,100,200].map(x=><option key={x}>{x}</option>)}</select></label></div>{loading?<Loading/>:error?<ErrorBox text={error}/>:!data?.items.length?<Empty/>:<div className="table-wrap journal"><table><thead><tr>{[['sale_date','Дата'],['document_number','№ документа'],['client','Клиент'],['department','Подразделение'],['total_amount','Сумма'],['base_amount','Базовая'],['discount_percent','Скидка'],['author','Автор'],['price_type','Тип цены'],['promotion','Акция']].map(([key,label])=><th key={key} onClick={()=>sortBy(key)}>{label}{sort===key?(dir==='desc'?' ↓':' ↑'):''}</th>)}</tr></thead><tbody>{data.items.map(s=><tr key={s.id} onClick={()=>open(s.id)}><td>{date(s.sale_date)}</td><td><b>{s.document_number}</b></td><td>{s.client||'—'}</td><td>{s.department}</td><td className="money">{money(s.total_amount)}</td><td>{money(s.base_amount)}</td><td>{percent(s.discount_percent)}</td><td>{s.author||'—'}</td><td>{s.price_type||'—'}</td><td>{s.promotion?<span className="badge">{s.promotion}</span>:'—'}</td></tr>)}</tbody></table></div>}<div className="pagination"><button disabled={page<=1} onClick={()=>setPage(page-1)}><ChevronLeft/></button><span>Страница <b>{page}</b> из {data?.pages??1}</span><button disabled={page>=(data?.pages??1)} onClick={()=>setPage(page+1)}><ChevronRight/></button></div></section>
-    {selected&&<SaleDrawer sale={selected} onClose={()=>setSelected(undefined)}/>}
+    <section className="panel filters"><div className="search"><Search/><Autocomplete field="search" placeholder="Документ, клиент или телефон" value={draft.search} onChange={search=>setDraft({...draft,search})} onEnter={apply}/></div><PeriodPicker value={draft} onChange={period=>setDraft({...draft,...period})}/><div className="filter-grid"><label>Подразделение<MultiSelect options={options?.departments||[]} value={draft.departments} onChange={departments=>setDraft({...draft,departments})} placeholder="Все подразделения"/></label><label>Клиент<Autocomplete field="client" placeholder="Начните вводить имя" value={draft.client} onChange={client=>setDraft({...draft,client})}/></label><label>Тип цены<select value={draft.price_type} onChange={e=>setDraft({...draft,price_type:e.target.value})}><option value="">Все типы цен</option>{options?.price_types.map(value=><option key={value} value={value}>{value}</option>)}</select></label><label>Социальная<select value={draft.social} onChange={e=>setDraft({...draft,social:e.target.value})}><option value="">Все</option><option value="true">Да</option><option value="false">Нет</option></select></label><label>Дисконтная карта<select value={draft.discount_card_percent} onChange={e=>setDraft({...draft,discount_card_percent:e.target.value})}><option value="">Любая скидка</option>{cardOptions.map(value=><option key={value} value={value}>{value}%</option>)}</select></label><label>Сумма от<input type="number" value={draft.min_amount} onChange={e=>setDraft({...draft,min_amount:e.target.value})}/></label><label>Сумма до<input type="number" value={draft.max_amount} onChange={e=>setDraft({...draft,max_amount:e.target.value})}/></label></div><div className="actions"><button className="primary" onClick={apply}><Filter size={17}/>Применить</button><button onClick={reset}><RotateCcw size={17}/>Сбросить</button></div></section>
+    <section className="panel table-panel"><div className="table-meta"><div className="selection-tools"><b>Найдено: {data?.total??0}</b>{count>0&&<button className="danger-button" disabled={deleting} onClick={remove}><Trash2 size={16}/>{deleting?'Удаление…':`Удалить выбранные (${count} строк)`}</button>}{!all&&pageChecked&&(data?.total||0)>pageIds.length&&<button onClick={selectAll}>Выделить все ({data?.total} строк)</button>}</div><div className="table-settings"><button onClick={()=>setColumnsOpen(true)}><Settings2 size={16}/>Настройка колонок</button><label>Строк<select value={pageSize} onChange={e=>{setPageSize(+e.target.value);setPage(1)}}>{[20,50,100,200].map(x=><option key={x}>{x}</option>)}</select></label></div></div>{loading?<Loading/>:error?<ErrorBox text={error}/>:!data?.items.length?<Empty/>:<div className="table-wrap journal"><table><thead><tr><th className="select-cell"><label><input type="checkbox" checked={pageChecked} onChange={togglePage}/><span>{pageChecked?'Снять все':'Отметить все'}</span></label></th>{columns.filter(([key])=>visible.includes(key)).map(([key,label])=><th key={key} onClick={()=>sortBy(key)}>{label}{sort===key?(dir==='desc'?' ↓':' ↑'):''}</th>)}</tr></thead><tbody>{data.items.map(item=><tr key={item.id} onClick={()=>open(item.id)}><td className="select-cell" onClick={event=>event.stopPropagation()}><input aria-label={`Выбрать продажу ${item.document_number}`} type="checkbox" checked={checked(item.id)} onChange={()=>toggle(item.id)}/></td>{columns.filter(([key])=>visible.includes(key)).map(([key])=><td key={key} className={key==='total_amount'?'money':''}>{cell(item,key)}</td>)}</tr>)}</tbody></table></div>}<div className="pagination"><button disabled={page<=1} onClick={()=>setPage(page-1)}><ChevronLeft/></button><span>Страница <b>{page}</b> из {data?.pages??1}</span><button disabled={page>=(data?.pages??1)} onClick={()=>setPage(page+1)}><ChevronRight/></button></div></section>
+    {columnsOpen&&<><div className="backdrop" onClick={()=>setColumnsOpen(false)}/><div className="column-modal" role="dialog" aria-modal="true" aria-labelledby="columns-title"><div className="period-modal-head"><div><h2 id="columns-title">Настройка колонок</h2><p>Выберите колонки для отображения в журнале</p></div><button aria-label="Закрыть" onClick={()=>setColumnsOpen(false)}><X/></button></div><div className="column-options">{columns.map(([key,label])=><label key={key}><input type="checkbox" checked={visible.includes(key)} onChange={()=>toggleColumn(key)}/><span>{label}</span></label>)}</div><div className="period-modal-actions"><button className="primary" onClick={()=>setColumnsOpen(false)}>Готово</button></div></div></>}
+    {sale&&<SaleDrawer sale={sale} onClose={()=>setSale(undefined)}/>}
   </div>
 }
