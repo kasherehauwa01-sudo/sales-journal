@@ -6,9 +6,9 @@ from app.models import Sale
 router=APIRouter(tags=["Справочники"])
 @router.get("/filters")
 async def values(db:AsyncSession=Depends(get_db)):
- async def vals(col):return [x for x in (await db.scalars(select(distinct(col)).where(col.is_not(None)).order_by(col).limit(1000))).all() if x]
- card_percents=(await db.scalars(select(distinct(func.abs(Sale.discount_card_percent))).where(Sale.discount_card_percent.is_not(None),Sale.discount_card_percent!=0).order_by(func.abs(Sale.discount_card_percent)))).all()
- return {"departments":await vals(Sale.department),"authors":await vals(Sale.author),"price_types":await vals(Sale.price_type),"promotions":await vals(Sale.promotion),"discount_card_percents":[float(x) for x in card_percents]}
+ async def vals(col):return [x for x in (await db.scalars(select(col).where(col.is_not(None),func.trim(col)!="").distinct().order_by(col).limit(1000))).all()]
+ card_values=(await db.scalars(select(Sale.discount_card_percent).where(Sale.discount_card_percent.is_not(None),Sale.discount_card_percent!=0).distinct())).all()
+ return {"departments":await vals(Sale.department),"clients":await vals(Sale.client),"price_types":await vals(Sale.price_type),"discount_card_percents":sorted({float(abs(x)) for x in card_values})}
 @router.get("/suggestions")
 async def suggestions(q:str=Query(min_length=1,max_length=200),field:str=Query("search",pattern="^(search|client)$"),db:AsyncSession=Depends(get_db)):
  value=q.strip()
