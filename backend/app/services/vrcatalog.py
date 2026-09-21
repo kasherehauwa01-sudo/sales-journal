@@ -1,6 +1,4 @@
 import asyncio,json,time
-from urllib.error import HTTPError
-from urllib.parse import quote,urlencode
 from urllib.request import Request,urlopen
 
 cache:tuple[float,set[str]]|None=None
@@ -34,88 +32,43 @@ def horeca_keys(payload):
    if value:result.add(f"{prefix}:{str(value).strip().lower()}")
  return result
 
-def _request():
+def _integration_search(payload):
  from app.config import settings
- query=urlencode({"property":"HoReCa","property_value":"HoReCa","limit":10000});headers={"Accept":"application/json"}
+ headers={"Accept":"application/json","Content-Type":"application/json"}
  if settings.vrcatalog_api_token:headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
- last=None
- for path in (f"/products?{query}",f"/catalog/products?{query}"):
-  try:
-   with urlopen(Request(f"{settings.vrcatalog_api_url.rstrip('/')}{path}",headers=headers),timeout=30) as response:return horeca_keys(json.load(response))
-  except HTTPError as exc:
-   last=exc
-   if exc.code not in {404,405,422}:raise
- raise last or RuntimeError("Не найден endpoint товаров vrcatalog")
+ request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/integration/products/search",data=json.dumps(payload).encode(),headers=headers,method="POST")
+ with urlopen(request,timeout=30) as response:return json.load(response)
+
+async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,search:str=""):
+ payload={"filters":filters,"page":page,"page_size":page_size}
+ if search:payload["search"]=search
+ return await asyncio.to_thread(_integration_search,payload)
+
+def _pagination(payload):
+ if not isinstance(payload,dict):return {}
+ pagination=payload.get("pagination") if isinstance(payload.get("pagination"),dict) else payload
+ result={key:pagination.get(key) for key in ("total","page","page_size","pages","total_pages","has_next")}
+ if result["total"] is None:
+  nested=next((payload.get(key) for key in ("data","result") if isinstance(payload.get(key),dict)),None)
+  if nested:return _pagination(nested)
+ return result
 
 async def get_horeca_keys():
  global cache
  if cache and time.monotonic()-cache[0]<300:return cache[1]
- try:values=await asyncio.to_thread(_request)
+ try:
+  values=set();page=1;page_size=500;loaded=0
+  while page<=10000:
+   payload=await search_catalog_products(filters={"property:HoReCa":["HoReCa"]},page=page,page_size=page_size);items=_source(payload)
+   if not items:break
+   values.update(horeca_keys(items));loaded+=len(items);pagination=_pagination(payload);total=pagination.get("total");pages=pagination.get("pages") or pagination.get("total_pages");current=pagination.get("page") or page
+   if total is not None and loaded>=int(total):break
+   if pages is not None and int(current)>=int(pages):break
+   if pagination.get("has_next") is False:break
+   if len(items)<page_size:break
+   page+=1
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
  cache=(time.monotonic(),values);return values
 
 def is_horeca(keys:set[str],article,code):
  return any(value and f"{prefix}:{str(value).strip().lower()}" in keys for prefix,value in (("article",article),("code",code)))
-
-def _integration_request(path: str, method: str = "GET", payload=None):
- from app.config import settings
- headers={"Accept":"application/json"}
- if settings.vrcatalog_api_token:
-  headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
- data=None
- if payload is not None:
-  data=json.dumps(payload).encode("utf-8")
-  headers["Content-Type"]="application/json"
- request=Request(
-  f"{settings.vrcatalog_api_url.rstrip('/')}{path}",
-  data=data,
-  headers=headers,
-  method=method,
- )
- with urlopen(request,timeout=30) as response:
-  return json.load(response)
-
-async def get_product_filters():
- try:
-  return await asyncio.to_thread(
-   _integration_request,
-   "/integration/product-filters",
-  )
- except Exception as exc:
-  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
-async def get_product_filter_options(filter_key: str, search: str = "", page: int = 1, page_size: int = 100):
- try:
-  query=urlencode({
-   "search":search,
-   "page":page,
-   "page_size":page_size,
-  })
-  return await asyncio.to_thread(
-   _integration_request,
-   f"/integration/product-filters/{quote(filter_key, safe='')}/options?{query}",
-  )
- except Exception as exc:
-  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
-async def search_catalog_products(
- filters: dict,
- search: str = "",
- page: int = 1,
- page_size: int = 100,
-):
- payload={
-  "filters":filters,
-  "search":search,
-  "page":page,
-  "page_size":page_size,
- }
- try:
-  return await asyncio.to_thread(
-   _integration_request,
-   "/integration/products/search",
-   "POST",
-   payload,
-  )
- except Exception as exc:
-  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
