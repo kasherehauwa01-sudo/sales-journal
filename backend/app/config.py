@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     cors_origins: str = "https://kvasmix.ru"
     upload_dir: Path = Path("/data/imports")
     log_level: str = "INFO"
+    autoload_timezone: str = "Europe/Moscow"
+    clients_vr_api_url: str = "https://kvasmix.ru/vr/clients/api"
+    clients_vr_api_token: str = ""
+    vrcatalog_api_url: str = "https://kvasmix.ru/vr/catalog/api"
+    vrcatalog_api_token: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     @property
     def api_prefix(self) -> str: return f"{self.base_path.rstrip('/')}/api"

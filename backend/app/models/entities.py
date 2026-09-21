@@ -47,3 +47,34 @@ class ImportError(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True); import_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id", ondelete="CASCADE"), index=True)
     row_number: Mapped[int | None] = mapped_column(Integer); message: Mapped[str] = mapped_column(Text); raw_data: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+class FtpConfig(Base, TimestampMixin):
+    __tablename__ = "ftp_config"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    protocol: Mapped[str] = mapped_column(String(16), default="FTP")
+    host: Mapped[str] = mapped_column(String(255)); port: Mapped[int] = mapped_column(Integer, default=21)
+    username: Mapped[str] = mapped_column(String(255)); password: Mapped[str] = mapped_column(Text)
+    directory: Mapped[str] = mapped_column(String(1024), default="/")
+    retries: Mapped[int] = mapped_column(Integer, default=5); retry_delay: Mapped[int] = mapped_column(Integer, default=3)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+class AutoImportLog(Base):
+    __tablename__ = "auto_import_logs"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    filename: Mapped[str | None] = mapped_column(String(512)); status: Mapped[str] = mapped_column(String(32), index=True)
+    message: Mapped[str | None] = mapped_column(Text); import_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id", ondelete="SET NULL"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now()); finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class SmtpConfig(Base, TimestampMixin):
+    __tablename__="smtp_config"
+    id:Mapped[int]=mapped_column(Integer,primary_key=True,default=1);host:Mapped[str]=mapped_column(String(255));port:Mapped[int]=mapped_column(Integer,default=587)
+    security:Mapped[str]=mapped_column(String(16),default="STARTTLS");username:Mapped[str]=mapped_column(String(255));password:Mapped[str]=mapped_column(Text)
+    sender_email:Mapped[str]=mapped_column(String(255));sender_name:Mapped[str]=mapped_column(String(255))
+
+class Scenario(Base, TimestampMixin):
+    __tablename__="scenarios"
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255));email:Mapped[str]=mapped_column(String(255));manager:Mapped[str]=mapped_column(String(255));message_text:Mapped[str]=mapped_column(Text,default="");enabled:Mapped[bool]=mapped_column(Boolean,default=True)
+
+class ScenarioRun(Base):
+    __tablename__="scenario_runs";__table_args__=(UniqueConstraint("scenario_id","run_date"),)
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);scenario_id:Mapped[int]=mapped_column(ForeignKey("scenarios.id",ondelete="CASCADE"));run_date:Mapped[date]=mapped_column(Date);status:Mapped[str]=mapped_column(String(32));message:Mapped[str|None]=mapped_column(Text);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())
