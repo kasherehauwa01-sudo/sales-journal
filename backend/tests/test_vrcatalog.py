@@ -3,7 +3,7 @@ import pytest
 from app.services import vrcatalog
 from app.services.vrcatalog import VrCatalogError,horeca_keys,is_horeca
 
-def setup_function():vrcatalog.cache=None
+def setup_function():vrcatalog.cache=None;vrcatalog.image_cache=None
 
 def test_horeca_products_are_detected_by_article_and_code():
  payload={"items":[{"article":" A-1 ","code":"001","properties":{"HoReCa":"HoReCa"}},{"article":"A-2","properties":{"HoReCa":"Нет"}}]}
@@ -62,3 +62,16 @@ def test_catalog_error_is_wrapped(monkeypatch):
  monkeypatch.setattr(vrcatalog,"search_catalog_products",search)
  with pytest.raises(VrCatalogError,match="vrcatalog недоступен"):
   asyncio.run(vrcatalog.get_horeca_keys())
+
+def test_catalog_images_support_common_image_shapes():
+ payload={"items":[{"code":"1","image_url":"https://img/1.jpg"},{"article":"A2","images":[{"url":"https://img/2.jpg"}]}]}
+ assert vrcatalog.catalog_product_images(payload)=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg"}
+
+def test_catalog_images_are_loaded_in_pages_and_cached(monkeypatch):
+ calls=[]
+ async def search(**kwargs):
+  calls.append(kwargs["page"]);return {"items":[{"code":"1","photo":"https://img/1.jpg"}],"total":1}
+ monkeypatch.setattr(vrcatalog,"search_catalog_products",search)
+ assert asyncio.run(vrcatalog.get_catalog_images({"code:1"}))=={"code:1":"https://img/1.jpg"}
+ assert asyncio.run(vrcatalog.get_catalog_images({"code:1"}))=={"code:1":"https://img/1.jpg"}
+ assert calls==[1]

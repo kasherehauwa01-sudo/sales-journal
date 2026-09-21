@@ -2,6 +2,7 @@ import asyncio,json,time
 from urllib.request import Request,urlopen
 
 cache:tuple[float,set[str]]|None=None
+image_cache:tuple[float,dict[str,str]]|None=None
 class VrCatalogError(RuntimeError):pass
 
 def _source(payload):
@@ -30,6 +31,24 @@ def horeca_keys(payload):
   for prefix,names in (("article",("article","sku","article_number","Артикул")),("code",("code","product_code","Код"))):
    value=next((item.get(name) for name in names if item.get(name)),None)
    if value:result.add(f"{prefix}:{str(value).strip().lower()}")
+ return result
+
+def _image_url(item):
+ value=next((item.get(key) for key in ("photo","image","image_url","photo_url","thumbnail","main_image") if item.get(key)),None)
+ if isinstance(value,dict):value=next((value.get(key) for key in ("url","src","image_url") if value.get(key)),None)
+ if not value and isinstance(item.get("images"),list) and item["images"]:value=item["images"][0]
+ if isinstance(value,dict):value=next((value.get(key) for key in ("url","src","image_url") if value.get(key)),None)
+ return value if isinstance(value,str) else None
+
+def catalog_product_images(payload):
+ result={}
+ for item in _source(payload):
+  if not isinstance(item,dict):continue
+  image=_image_url(item)
+  if not image:continue
+  for prefix,names in (("article",("article","sku","article_number","Артикул")),("code",("code","product_code","Код"))):
+   value=next((item.get(name) for name in names if item.get(name)),None)
+   if value:result[f"{prefix}:{str(value).strip().lower()}"]=image
  return result
 
 def _integration_search(payload):
@@ -69,6 +88,24 @@ async def get_horeca_keys():
    page+=1
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
  cache=(time.monotonic(),values);return values
+
+async def get_catalog_images(wanted_keys:set[str]):
+ global image_cache
+ values=dict(image_cache[1]) if image_cache and time.monotonic()-image_cache[0]<300 else {}
+ if wanted_keys.issubset(values):return {key:values[key] for key in wanted_keys}
+ try:
+  page=1;page_size=500;loaded=0
+  while page<=10000:
+   payload=await search_catalog_products(filters={},page=page,page_size=page_size);items=_source(payload)
+   if not items:break
+   values.update(catalog_product_images(items));loaded+=len(items);pagination=_pagination(payload);total=pagination.get("total");pages=pagination.get("pages") or pagination.get("total_pages");current=pagination.get("page") or page
+   if wanted_keys.issubset(values):break
+   if total is not None and loaded>=int(total):break
+   if pages is not None and int(current)>=int(pages):break
+   if pagination.get("has_next") is False or len(items)<page_size:break
+   page+=1
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ image_cache=(time.monotonic(),values);return {key:values[key] for key in wanted_keys if key in values}
 
 def is_horeca(keys:set[str],article,code):
  return any(value and f"{prefix}:{str(value).strip().lower()}" in keys for prefix,value in (("article",article),("code",code)))
