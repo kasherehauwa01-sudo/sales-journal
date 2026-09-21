@@ -3,7 +3,20 @@ from urllib.error import HTTPError
 from urllib.parse import quote,urlencode
 from urllib.request import Request,urlopen
 
-cache:dict[str,tuple[float,list[str]]]={}
+MANAGER_ORDER=(
+ "Пашута М.С.","Пашута М.С. (Ростов)","Пашута - сети","Родина","Родина Е.В. (Ростов)",
+ "Селянкина Татьяна","Суркова Н.","Трошина Лариса","Шакулова Екатерина","Новожилова М.",
+ "Королева Светлана","Ромащенко Екатерина","Антюфеева Яна","Бабушкина Виктория","Самойлова",
+ "Андреева Дарья","Гаина Татьяна","Гордиенко","Ермохина Ирина","Кульченко Лилия","Никишова Ольга",
+ "Пименова Любовь","Пирожкова Татьяна","Стародубцева Полина","Яицкая Ольга","СОТРУДНИК АВИАТОРОВ",
+ "СОТРУДНИК АХТУБИНСК","СОТРУДНИК БАХТУРОВА","СОТРУДНИК ЕВРОПА","СОТРУДНИК ИДЕЯ",
+ "СОТРУДНИК ПАРКХАУС","СОТРУДНИК ПРИВОЗ","СОТРУДНИК САНВЭЙ","СОТРУДНИК СТРОЙГРАД",
+ "СОТРУДНИК ТУЛАК","СОТРУДНИК ЦИТРУС","СОТРУДНИК ЦУМ","Существующие сотрудники","Клишко Ю.Н.",
+ "МАРКЕТПЛЕЙСЫ","Наш Китай","Нет менеджера","Дегтярев Алексей","Дегтярева Оксана Александровна",
+ "!!!","<>","Временный","Иванчихина Елена","Клецкова Наталья","Салеев Александр Викторов",
+ "СОТРУДНИК АРБУЗ",
+)
+cache:dict[str,tuple[float,object]]={}
 class ClientsVrError(RuntimeError):pass
 
 def _request(paths:list[str]):
@@ -44,6 +57,15 @@ def _manager_clients(payload,manager):
   filtered.append(item)
  return _items(filtered,("client","name","client_name","full_name","Клиент"))
 
+def _client_managers(payload):
+ result={}
+ for item in _source(payload,("clients",)):
+  if not isinstance(item,dict):continue
+  client=next((item.get(key) for key in ("client","name","client_name","full_name","Клиент") if item.get(key)),None)
+  manager=next((item.get(key) for key in ("manager","manager_name","manager_full_name","Менеджер") if item.get(key)),None)
+  if client and manager:result[str(client).strip().lower()]=str(manager).strip()
+ return result
+
 async def _cached(key,loader):
  saved=cache.get(key)
  if saved and time.monotonic()-saved[0]<300:return saved[1]
@@ -52,11 +74,18 @@ async def _cached(key,loader):
  cache[key]=(time.monotonic(),values);return values
 
 async def get_managers():
- return await _cached("managers",lambda:_items(_request(["/managers","/clients/managers","/employees?role=manager","/clients"]),("manager","manager_name","manager_full_name","Менеджер","name","full_name")))
+ managers=await _cached("managers",lambda:_items(_request(["/managers","/clients/managers","/employees?role=manager","/clients"]),("manager","manager_name","manager_full_name","Менеджер","name","full_name")))
+ positions={name:index for index,name in enumerate(MANAGER_ORDER)}
+ return sorted(managers,key=lambda name:(positions.get(name,len(positions)),name.lower()))
 
 async def get_manager_clients(manager:str):
  encoded=quote(manager,safe="");params=urlencode({"manager":manager})
  return await _cached(f"clients:{manager}",lambda:_manager_clients(_request([f"/clients?{params}",f"/clients?manager_name={encoded}",f"/managers/{encoded}/clients",f"/clients"]),manager))
+
+async def get_client_manager(client:str|None):
+ if not client:return None
+ managers=await _cached("client-managers",lambda:_client_managers(_request(["/clients"])))
+ return managers.get(client.strip().lower())
 
 async def resolve_manager_filter(filters:dict,loader=None):
  """Заменяет прикладной фильтр менеджера на SQL-фильтр по его клиентам."""

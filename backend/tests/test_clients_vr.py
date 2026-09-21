@@ -51,9 +51,26 @@ def test_managers_endpoint_service_still_returns_unique_sorted_names(monkeypatch
         "_request",
         lambda _paths: [
             {"manager": "Пашута М.С."},
-            {"manager": "Иванов И.И."},
+            {"manager": "СОТРУДНИК АРБУЗ"},
+            {"manager": "Родина"},
             {"manager": "Пашута М.С."},
         ],
     )
 
-    assert asyncio.run(clients_vr.get_managers()) == ["Иванов И.И.", "Пашута М.С."]
+    assert asyncio.run(clients_vr.get_managers()) == [
+        "Пашута М.С.",
+        "Родина",
+        "СОТРУДНИК АРБУЗ",
+    ]
+
+
+def test_client_manager_is_resolved_with_normalized_client_name(monkeypatch):
+    monkeypatch.setattr(
+        clients_vr,
+        "_request",
+        lambda _paths: [
+            {"client": "  Компания Ромашка  ", "manager": "Пашута М.С."},
+        ],
+    )
+
+    assert asyncio.run(clients_vr.get_client_manager("КОМПАНИЯ РОМАШКА")) == "Пашута М.С."
