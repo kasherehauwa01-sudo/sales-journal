@@ -84,8 +84,11 @@ async def get_manager_clients(manager:str):
 
 async def get_client_manager(client:str|None):
  if not client:return None
- managers=await _cached("client-managers",lambda:_client_managers(_request(["/clients"])))
+ managers=await get_client_managers()
  return managers.get(client.strip().lower())
+
+async def get_client_managers():
+ return await _cached("client-managers",lambda:_client_managers(_request(["/clients"])))
 
 async def resolve_manager_filter(filters:dict,loader=None):
  """Заменяет прикладной фильтр менеджера на SQL-фильтр по его клиентам."""
