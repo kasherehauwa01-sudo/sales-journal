@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Scenario,ScenarioRun,SmtpConfig
 from app.services.scenarios import send_test
+from app.services.email_recipients import parse_recipient_emails
 
 router=APIRouter(tags=["Настройки"])
 class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str
@@ -39,6 +40,10 @@ async def scenarios(db:AsyncSession=Depends(get_db)):return (await db.scalars(se
 async def update_scenario(scenario_id:int,data:ScenarioIn,db:AsyncSession=Depends(get_db)):
  row=await db.get(Scenario,scenario_id)
  if not row:raise HTTPException(404,"Сценарий не найден")
+ try:
+  if data.email.strip():data.email="\n".join(parse_recipient_emails(data.email))
+  elif data.enabled:raise ValueError("Укажите хотя бы один email получателя")
+ except ValueError as exc:raise HTTPException(422,str(exc)) from exc
  for key,value in data.model_dump().items():setattr(row,key,value)
  await db.commit();await db.refresh(row);return row
 @router.delete("/scenarios/{scenario_id}",status_code=204)

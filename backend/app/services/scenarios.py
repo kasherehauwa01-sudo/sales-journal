@@ -11,9 +11,11 @@ from app.models import Sale,SaleItem,Scenario,ScenarioRun,SmtpConfig
 from app.services.clients_vr import get_manager_clients
 from app.services.scenario_periods import report_period
 from app.services.vrcatalog import get_horeca_keys,is_horeca
+from app.services.email_recipients import parse_recipient_emails
 
-def _send(config:SmtpConfig,to:str,subject:str,body:str,attachment:bytes|None=None):
- message=EmailMessage();message["Subject"]=subject;message["From"]=f"{config.sender_name} <{config.sender_email}>";message["To"]=to;message.set_content(body)
+def _send(config:SmtpConfig,to:str|list[str],subject:str,body:str,attachment:bytes|None=None):
+ recipients=[to] if isinstance(to,str) else to
+ message=EmailMessage();message["Subject"]=subject;message["From"]=f"{config.sender_name} <{config.sender_email}>";message["To"]=", ".join(recipients);message.set_content(body)
  if attachment:message.add_attachment(attachment,maintype="application",subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",filename="Продажи HoReCa.xlsx")
  client=smtplib.SMTP_SSL(config.host,config.port,timeout=30) if config.security=="SSL" else smtplib.SMTP(config.host,config.port,timeout=30)
  try:
@@ -39,7 +41,7 @@ async def run_scenario(scenario:Scenario,run_date:date):
    if not is_horeca(horeca_keys,row[0],row[1]):sheet.append(list(row))
   output=BytesIO();book.save(output)
   period_text=f"Период отчета: {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}"
-  await asyncio.to_thread(_send,smtp,scenario.email,"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}".strip(),output.getvalue())
+  await asyncio.to_thread(_send,smtp,parse_recipient_emails(scenario.email),"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}".strip(),output.getvalue())
 
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)
