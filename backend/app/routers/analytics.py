@@ -27,8 +27,9 @@ async def dynamics(group_by:str=Query("day",pattern="^(day|week|month|quarter|ye
  bucket=func.date_trunc(group_by,Sale.sale_date).label("period")
  categories=(("retail","%рознич%"),("special","%спец%"),("corporate","%корпорат%"),("wholesale","%опт%"))
  sections=[func.coalesce(func.sum(case((Sale.price_type.ilike(pattern),Sale.total_amount),else_=0)),0).label(key) for key,pattern in categories]
- q=filters(select(bucket,func.sum(Sale.total_amount).label("revenue"),*sections).group_by(bucket).order_by(bucket),date_from,date_to,department,client,price_type,promotion)
- return [{"period":r.period.date(),"revenue":float(r.revenue or 0),**{key:float(getattr(r,key) or 0) for key,_ in categories}} for r in (await db.execute(q))]
+ checks=[func.sum(case((Sale.price_type.ilike(pattern),1),else_=0)).label(f"{key}_checks") for key,pattern in categories]
+ q=filters(select(bucket,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales_count"),*sections,*checks).group_by(bucket).order_by(bucket),date_from,date_to,department,client,price_type,promotion)
+ return [{"period":r.period.date(),"revenue":float(r.revenue or 0),"sales_count":r.sales_count,**{key:float(getattr(r,key) or 0) for key,_ in categories},**{f"{key}_checks":getattr(r,f"{key}_checks") or 0 for key,_ in categories}} for r in (await db.execute(q))]
 @router.get("/departments")
 async def departments(date_from:date|None=None,date_to:date|None=None,department:str|None=None,db:AsyncSession=Depends(get_db)):
  item=select(SaleItem.sale_id,func.sum(SaleItem.quantity).label("units")).group_by(SaleItem.sale_id).subquery();q=filters(select(Sale.department,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales"),func.avg(Sale.total_amount).label("average_check"),func.coalesce(func.sum(item.c.units),0).label("units"),func.avg(Sale.discount_percent).label("average_discount")).outerjoin(item,item.c.sale_id==Sale.id).group_by(Sale.department).order_by(func.sum(Sale.total_amount).desc()),date_from,date_to,department)
