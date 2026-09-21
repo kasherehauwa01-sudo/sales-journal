@@ -16,8 +16,9 @@ async def process_import(import_id:int):
    for number,raw in rows:
     try:
      if not include_for_filename(batch.filename,raw):batch.skipped_rows+=1;batch.processed_rows+=1;await db.commit();continue
-     data=normalize_sale(raw); dates.append(data["sale_date"]); items=data.pop("items")
-     exists=await db.scalar(select(Sale.id).where(Sale.fingerprint==data["fingerprint"]))
+     data=normalize_sale(raw); dates.append(data["sale_date"]); items=data.pop("items");legacy_fingerprint=data.pop("legacy_fingerprint",None)
+     fingerprints=[data["fingerprint"],legacy_fingerprint] if legacy_fingerprint else [data["fingerprint"]]
+     exists=await db.scalar(select(Sale.id).where(Sale.fingerprint.in_(fingerprints)))
      if exists:batch.duplicate_rows+=1;batch.processed_rows+=1;await db.commit();continue
      sale=Sale(**data,import_id=batch.id);db.add(sale);await db.flush()
      db.add_all([SaleItem(sale_id=sale.id,**item) for item in items]);batch.added_rows+=1;batch.processed_rows+=1

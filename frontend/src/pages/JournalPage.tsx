@@ -9,7 +9,7 @@ import {SaleDrawer} from '../components/SaleDrawer';
 import {Empty,ErrorBox,Loading} from '../components/States';
 import {useApi} from '../hooks/useApi';
 import type {Sale,SalePage} from '../types';
-import {date,money,percent} from '../utils/format';
+import {date,money,percent,saleTotal} from '../utils/format';
 
 type Filters={search:string;period:Period;date_from:string;date_to:string;departments:string[];client:string;price_type:string;social:string;discount_card_percent:string;min_amount:string;max_amount:string;min_discount:string;max_discount:string};
 type FilterOptions={departments:string[];clients:string[];price_types:string[];discount_card_percents:number[]};
@@ -18,7 +18,7 @@ const initial:Filters={search:'',period:'all',date_from:'',date_to:'',department
 const columns:Array<[ColumnKey,string]>=[['sale_date','Дата'],['document_number','№ документа'],['client','Клиент'],['department','Подразделение'],['total_amount','Сумма'],['base_amount','Базовая'],['discount_percent','Скидка'],['author','Автор'],['price_type','Тип цены'],['promotion','Акция']];
 const columnCacheKey='sales-journal-visible-columns';
 function cachedColumns(){try{const saved=JSON.parse(localStorage.getItem(columnCacheKey)||'null');if(Array.isArray(saved))return columns.map(([key])=>key).filter(key=>saved.includes(key))}catch{}return columns.map(([key])=>key)}
-function cell(sale:Sale,key:ColumnKey){const value=sale[key];if(key==='sale_date')return date(String(value));if(key==='total_amount'||key==='base_amount')return money(value as string|number);if(key==='discount_percent')return percent(value as string|number);if(key==='document_number')return <b>{value}</b>;if(key==='promotion')return value?<span className="badge">{value}</span>:'—';return value||'—'}
+function cell(sale:Sale,key:ColumnKey){const value=sale[key];if(key==='sale_date')return date(String(value));if(key==='total_amount')return saleTotal(sale.total_amount,sale.certificate_amount);if(key==='base_amount')return money(value as string|number);if(key==='discount_percent')return percent(value as string|number);if(key==='document_number')return <b>{value}</b>;if(key==='promotion')return value?<span className="badge">{value}</span>:'—';return value||'—'}
 
 export function JournalPage(){
   const [draft,setDraft]=useState<Filters>(initial);const [filters,setFilters]=useState<Filters>(initial);

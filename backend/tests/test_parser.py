@@ -85,3 +85,9 @@ def test_aviators_file_only_includes_aviators_department():
  assert include_for_filename("Продажи Авиаторов.xlsx",{"department":" АВИАТОРОВ "})
  assert not include_for_filename("Продажи Авиаторов.xlsx",{"department":"Центр"})
  assert include_for_filename("Общие продажи.xlsx",{"department":"Центр"})
+
+def test_certificate_is_subtracted_from_total_and_keeps_legacy_fingerprint():
+ row=normalize_sale({**BASE,"certificate_amount":"245,50"})
+ assert row["total_amount"]==Decimal("1000.00")
+ assert row["certificate_amount"]==Decimal("245.50")
+ assert row["legacy_fingerprint"]==normalize_sale(BASE)["fingerprint"]
