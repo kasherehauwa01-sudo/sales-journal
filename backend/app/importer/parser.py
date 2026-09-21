@@ -15,6 +15,9 @@ REQUIRED={"sale_date","document_number","department","total_amount"}
 LEGACY_COLUMNS=("row_number","sale_date","document_number","client","department","total_amount","base_amount","discount_percent","reason","author","price_type","discount_card_percent","discount_card_number","social","certificate_amount","promotion","phone","products")
 def norm(v:Any)->str:
  return re.sub(r"\s+"," ",str(v or "").replace("\xa0"," ").strip().lower().replace("ё","е"))
+def include_for_filename(filename:str,raw:dict)->bool:
+ """Файлы «Авиаторов» содержат свою выборку: из них берём только одноимённое подразделение."""
+ return "авиаторов" not in norm(filename) or norm(raw.get("department"))=="авиаторов"
 def compact(v:Any)->str:
  return re.sub(r"[^a-zа-я0-9%]+","",norm(v).replace("№","n"))
 LOOKUP={norm(alias):key for key,aliases in ALIASES.items() for alias in aliases}
