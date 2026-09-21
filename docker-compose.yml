@@ -28,6 +28,7 @@ services:
       CORS_ORIGINS: "${CORS_ORIGINS:-https://kvasmix.ru}"
       UPLOAD_DIR: /data/imports
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      AUTOLOAD_TIMEZONE: "${AUTOLOAD_TIMEZONE:-Europe/Moscow}"
     volumes:
       - sales_imports:/data/imports
     ports:
