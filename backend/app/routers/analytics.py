@@ -1,9 +1,11 @@
 from datetime import date, timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Sale, SaleItem
+from app.services.clients_vr import ClientsVrError,get_client_managers
+from app.services.manager_analytics import aggregate_manager_sales
 router=APIRouter(prefix="/analytics",tags=["Аналитика"])
 def filters(q,date_from=None,date_to=None,department=None,client=None,price_type=None,promotion=None):
  for col,val in ((Sale.department,department),(Sale.client,client),(Sale.price_type,price_type),(Sale.promotion,promotion)):
@@ -23,9 +25,13 @@ async def overview(date_from:date|None=None,date_to:date|None=None,department:st
   length=(date_to-date_from).days+1;previous=await metrics(db,filters(select(Sale),date_from-timedelta(days=length),date_from-timedelta(days=1),department,client,price_type,promotion))
  return {"current":current,"previous":previous,"changes":{k:pct(v,previous.get(k,0)) for k,v in current.items()} if previous else {}}
 @router.get("/dynamics")
-async def dynamics(group_by:str=Query("day",pattern="^(day|week|month)$"),date_from:date|None=None,date_to:date|None=None,department:str|None=None,client:str|None=None,price_type:str|None=None,promotion:str|None=None,db:AsyncSession=Depends(get_db)):
- bucket=func.date_trunc(group_by,Sale.sale_date).label("period");q=filters(select(bucket,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales_count"),func.avg(Sale.total_amount).label("average_check"),func.sum(Sale.base_amount-Sale.total_amount).label("discount_amount")).group_by(bucket).order_by(bucket),date_from,date_to,department,client,price_type,promotion)
- return [{"period":r.period.date(),"revenue":float(r.revenue or 0),"sales_count":r.sales_count,"average_check":float(r.average_check or 0),"discount_amount":float(r.discount_amount or 0)} for r in (await db.execute(q))]
+async def dynamics(group_by:str=Query("day",pattern="^(day|week|month|quarter|year)$"),date_from:date|None=None,date_to:date|None=None,department:str|None=None,client:str|None=None,price_type:str|None=None,promotion:str|None=None,db:AsyncSession=Depends(get_db)):
+ bucket=func.date_trunc(group_by,Sale.sale_date).label("period")
+ categories=(("retail","%рознич%"),("special","%спец%"),("corporate","%корпорат%"),("wholesale","%опт%"))
+ sections=[func.coalesce(func.sum(case((Sale.price_type.ilike(pattern),Sale.total_amount),else_=0)),0).label(key) for key,pattern in categories]
+ checks=[func.sum(case((Sale.price_type.ilike(pattern),1),else_=0)).label(f"{key}_checks") for key,pattern in categories]
+ q=filters(select(bucket,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales_count"),*sections,*checks).group_by(bucket).order_by(bucket),date_from,date_to,department,client,price_type,promotion)
+ return [{"period":r.period.date(),"revenue":float(r.revenue or 0),"sales_count":r.sales_count,**{key:float(getattr(r,key) or 0) for key,_ in categories},**{f"{key}_checks":getattr(r,f"{key}_checks") or 0 for key,_ in categories}} for r in (await db.execute(q))]
 @router.get("/departments")
 async def departments(date_from:date|None=None,date_to:date|None=None,department:str|None=None,db:AsyncSession=Depends(get_db)):
  item=select(SaleItem.sale_id,func.sum(SaleItem.quantity).label("units")).group_by(SaleItem.sale_id).subquery();q=filters(select(Sale.department,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales"),func.avg(Sale.total_amount).label("average_check"),func.coalesce(func.sum(item.c.units),0).label("units"),func.avg(Sale.discount_percent).label("average_discount")).outerjoin(item,item.c.sale_id==Sale.id).group_by(Sale.department).order_by(func.sum(Sale.total_amount).desc()),date_from,date_to,department)
@@ -38,6 +44,12 @@ async def products(date_from:date|None=None,date_to:date|None=None,department:st
 async def clients(date_from:date|None=None,date_to:date|None=None,department:str|None=None,limit:int=100,db:AsyncSession=Depends(get_db)):
  q=filters(select(Sale.client,func.max(Sale.phone).label("phone"),func.max(Sale.discount_card_number).label("card"),func.count().label("purchases"),func.sum(Sale.total_amount).label("revenue"),func.avg(Sale.total_amount).label("average_check"),func.min(Sale.sale_date).label("first_purchase"),func.max(Sale.sale_date).label("last_purchase"),func.avg(Sale.discount_percent).label("average_discount")).where(Sale.client.is_not(None),func.trim(Sale.client)!=""),date_from,date_to,department).group_by(Sale.client).order_by(func.sum(Sale.total_amount).desc()).limit(limit)
  return [{k:(float(v) if hasattr(v,"as_integer_ratio") else v) for k,v in r._mapping.items()} for r in (await db.execute(q))]
+@router.get("/managers")
+async def managers(date_from:date|None=None,date_to:date|None=None,department:str|None=None,db:AsyncSession=Depends(get_db)):
+ try:client_managers=await get_client_managers()
+ except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ q=filters(select(Sale.client,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales_count")).group_by(Sale.client),date_from,date_to,department)
+ return aggregate_manager_sales((await db.execute(q)).all(),client_managers)
 @router.get("/discounts")
 async def discounts(date_from:date|None=None,date_to:date|None=None,department:str|None=None,db:AsyncSession=Depends(get_db)):
  q=filters(select(func.sum(Sale.base_amount).label("base_amount"),func.sum(Sale.total_amount).label("revenue"),func.sum(Sale.base_amount-Sale.total_amount).label("discount_amount"),func.avg(Sale.discount_percent).label("average_discount"),func.sum(case((Sale.discount_percent>0,1),else_=0)).label("with_discount"),func.sum(case((Sale.discount_percent<=0,1),else_=0)).label("without_discount")),date_from,date_to,department);r=(await db.execute(q)).one();return {k:(float(v or 0)) for k,v in r._mapping.items()}
