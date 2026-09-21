@@ -10,6 +10,7 @@ from app.database import SessionLocal
 from app.models import Sale,SaleItem,Scenario,ScenarioRun,SmtpConfig
 from app.services.clients_vr import get_manager_clients
 from app.services.scenario_periods import report_period
+from app.services.vrcatalog import get_horeca_keys,is_horeca
 
 def _send(config:SmtpConfig,to:str,subject:str,body:str,attachment:bytes|None=None):
  message=EmailMessage();message["Subject"]=subject;message["From"]=f"{config.sender_name} <{config.sender_email}>";message["To"]=to;message.set_content(body)
@@ -33,10 +34,12 @@ async def run_scenario(scenario:Scenario,run_date:date):
   if not smtp:raise RuntimeError("SMTP не настроен")
   client_filter=func.lower(func.trim(Sale.client)).in_(normalized) if normalized else false()
   q=select(SaleItem.article,SaleItem.code,SaleItem.name,func.sum(SaleItem.quantity),func.sum(SaleItem.actual_price*SaleItem.quantity)).join(Sale).where(Sale.sale_date.between(*period),client_filter).group_by(SaleItem.article,SaleItem.code,SaleItem.name).order_by(SaleItem.name)
-  rows=(await db.execute(q)).all();book=Workbook();sheet=book.active;sheet.title="Продажи HoReCa";sheet.append(["Артикул","Код","Товар","Количество","Сумма"])
-  for row in rows:sheet.append(list(row))
+  rows=(await db.execute(q)).all();horeca_keys=await get_horeca_keys();book=Workbook();sheet=book.active;sheet.title="Продажи HoReCa";sheet.append(["Артикул","Код","Товар","Количество","Сумма"])
+  for row in rows:
+   if not is_horeca(horeca_keys,row[0],row[1]):sheet.append(list(row))
   output=BytesIO();book.save(output)
-  await asyncio.to_thread(_send,smtp,scenario.email,"Продажи HoReCa",f"Отчет за период {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}",output.getvalue())
+  period_text=f"Период отчета: {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}"
+  await asyncio.to_thread(_send,smtp,scenario.email,"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}".strip(),output.getvalue())
 
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)

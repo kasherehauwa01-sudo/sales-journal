@@ -148,6 +148,10 @@ curl -I http://127.0.0.1:8011/vr/sales/analytics
 
 Если импорт завершился `failed`, проверьте `error_text`, права volume и логи backend. Чувствительные поля строк не выводятся в штатный лог. PostgreSQL и uploads — persistent volumes и не удаляются при обычном `docker compose down`; команда `down -v` **удалит данные**.
 
+### Интеграция с vrcatalog
+
+Для сценария «Продажи HoReCa» задайте `VRCATALOG_API_URL` и при необходимости `VRCATALOG_API_TOKEN`. Sales Journal запрашивает `GET /products` (с резервным `GET /catalog/products`) с параметрами `property=HoReCa`, `property_value=HoReCa`, `limit=10000`. Ответ может содержать массив в `products`, `items`, `data` или `results`; для сопоставления используются `article`/`sku` и `code`. Найденные товары исключаются из XLSX-отчета.
+
 ## Проверки разработчика
 
 ```bash

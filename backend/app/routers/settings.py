@@ -9,7 +9,7 @@ from app.services.scenarios import send_test
 router=APIRouter(tags=["Настройки"])
 class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str
 class TestEmail(BaseModel):email:str=Field(min_length=3,max_length=255)
-class ScenarioIn(BaseModel):name:str;email:str;manager:str="Трошина Лариса";enabled:bool=True
+class ScenarioIn(BaseModel):name:str;email:str;manager:str="Трошина Лариса";message_text:str="";enabled:bool=True
 def smtp_out(row):return {"host":row.host,"port":row.port,"security":row.security,"username":row.username,"password":"","sender_email":row.sender_email,"sender_name":row.sender_name,"has_password":bool(row.password)}
 @router.get("/smtp/settings")
 async def get_smtp(db:AsyncSession=Depends(get_db)):

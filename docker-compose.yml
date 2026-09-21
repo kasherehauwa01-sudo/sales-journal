@@ -31,6 +31,8 @@ services:
       AUTOLOAD_TIMEZONE: "${AUTOLOAD_TIMEZONE:-Europe/Moscow}"
       CLIENTS_VR_API_URL: "${CLIENTS_VR_API_URL:-https://kvasmix.ru/vr/clients/api}"
       CLIENTS_VR_API_TOKEN: "${CLIENTS_VR_API_TOKEN:-}"
+      VRCATALOG_API_URL: "${VRCATALOG_API_URL:-https://kvasmix.ru/vr/catalog/api}"
+      VRCATALOG_API_TOKEN: "${VRCATALOG_API_TOKEN:-}"
     volumes:
       - sales_imports:/data/imports
     ports:

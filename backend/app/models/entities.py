@@ -73,7 +73,7 @@ class SmtpConfig(Base, TimestampMixin):
 
 class Scenario(Base, TimestampMixin):
     __tablename__="scenarios"
-    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255));email:Mapped[str]=mapped_column(String(255));manager:Mapped[str]=mapped_column(String(255));enabled:Mapped[bool]=mapped_column(Boolean,default=True)
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255));email:Mapped[str]=mapped_column(String(255));manager:Mapped[str]=mapped_column(String(255));message_text:Mapped[str]=mapped_column(Text,default="");enabled:Mapped[bool]=mapped_column(Boolean,default=True)
 
 class ScenarioRun(Base):
     __tablename__="scenario_runs";__table_args__=(UniqueConstraint("scenario_id","run_date"),)
