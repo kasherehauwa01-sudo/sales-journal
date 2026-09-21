@@ -15,6 +15,9 @@ REQUIRED={"sale_date","document_number","department","total_amount"}
 LEGACY_COLUMNS=("row_number","sale_date","document_number","client","department","total_amount","base_amount","discount_percent","reason","author","price_type","discount_card_percent","discount_card_number","social","certificate_amount","promotion","phone","products")
 def norm(v:Any)->str:
  return re.sub(r"\s+"," ",str(v or "").replace("\xa0"," ").strip().lower().replace("ё","е"))
+def include_for_filename(filename:str,raw:dict)->bool:
+ """Файлы «Авиаторов» содержат свою выборку: из них берём только одноимённое подразделение."""
+ return "авиаторов" not in norm(filename) or norm(raw.get("department"))=="авиаторов"
 def compact(v:Any)->str:
  return re.sub(r"[^a-zа-я0-9%]+","",norm(v).replace("№","n"))
 LOOKUP={norm(alias):key for key,aliases in ALIASES.items() for alias in aliases}
@@ -144,6 +147,11 @@ def read_sales(path:Path):
  details="; ".join(diagnostics) or "в книге нет доступных листов"
  raise ValueError(f"Не найдена строка заголовков с обязательными колонками. Проверены первые 1000 строк каждого листа. {details}")
 def normalize_sale(raw:dict)->dict:
- row={"row_number":int(raw["row_number"]) if raw.get("row_number") not in (None,"") else None,"sale_date":parse_date(raw.get("sale_date")),"document_number":str(raw.get("document_number") or "").strip(),"client":str(raw.get("client") or "").strip() or None,"department":str(raw.get("department") or "").strip(),"total_amount":decimal(raw.get("total_amount")),"base_amount":decimal(raw.get("base_amount")),"discount_percent":decimal(raw.get("discount_percent"),True),"reason":str(raw.get("reason") or "").strip() or None,"author":str(raw.get("author") or "").strip() or None,"price_type":str(raw.get("price_type") or "").strip() or None,"discount_card_percent":decimal(raw.get("discount_card_percent"),True),"discount_card_number":str(raw.get("discount_card_number") or "").split(".")[0].strip() or None,"social":parse_bool(raw.get("social")),"certificate_amount":decimal(raw.get("certificate_amount")),"promotion":str(raw.get("promotion") or "").strip() or None,"phone":parse_phone(raw.get("phone")),"original_products_text":str(raw.get("products") or "").strip() or None}
+ gross_amount=decimal(raw.get("total_amount"));certificate_amount=decimal(raw.get("certificate_amount"))
+ total_amount=gross_amount-certificate_amount if gross_amount is not None and certificate_amount is not None and certificate_amount>0 else gross_amount
+ row={"row_number":int(raw["row_number"]) if raw.get("row_number") not in (None,"") else None,"sale_date":parse_date(raw.get("sale_date")),"document_number":str(raw.get("document_number") or "").strip(),"client":str(raw.get("client") or "").strip() or None,"department":str(raw.get("department") or "").strip(),"total_amount":total_amount,"base_amount":decimal(raw.get("base_amount")),"discount_percent":decimal(raw.get("discount_percent"),True),"reason":str(raw.get("reason") or "").strip() or None,"author":str(raw.get("author") or "").strip() or None,"price_type":str(raw.get("price_type") or "").strip() or None,"discount_card_percent":decimal(raw.get("discount_card_percent"),True),"discount_card_number":str(raw.get("discount_card_number") or "").split(".")[0].strip() or None,"social":parse_bool(raw.get("social")),"certificate_amount":certificate_amount,"promotion":str(raw.get("promotion") or "").strip() or None,"phone":parse_phone(raw.get("phone")),"original_products_text":str(raw.get("products") or "").strip() or None}
  if not row["document_number"] or not row["department"] or row["total_amount"] is None:raise ValueError("Не заполнены обязательные поля")
- row["fingerprint"]=fingerprint(row);row["items"]=parse_items(raw.get("products"));return row
+ row["fingerprint"]=fingerprint(row)
+ if certificate_amount is not None and certificate_amount>0:
+  legacy={**row,"total_amount":gross_amount};row["legacy_fingerprint"]=fingerprint(legacy)
+ row["items"]=parse_items(raw.get("products"));return row
