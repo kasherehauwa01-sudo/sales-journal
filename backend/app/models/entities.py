@@ -69,7 +69,7 @@ class SmtpConfig(Base, TimestampMixin):
     __tablename__="smtp_config"
     id:Mapped[int]=mapped_column(Integer,primary_key=True,default=1);host:Mapped[str]=mapped_column(String(255));port:Mapped[int]=mapped_column(Integer,default=587)
     security:Mapped[str]=mapped_column(String(16),default="STARTTLS");username:Mapped[str]=mapped_column(String(255));password:Mapped[str]=mapped_column(Text)
-    sender_email:Mapped[str]=mapped_column(String(255));sender_name:Mapped[str]=mapped_column(String(255));test_email:Mapped[str|None]=mapped_column(String(255))
+    sender_email:Mapped[str]=mapped_column(String(255));sender_name:Mapped[str]=mapped_column(String(255))
 
 class Scenario(Base, TimestampMixin):
     __tablename__="scenarios"

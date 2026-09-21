@@ -7,9 +7,10 @@ from app.models import Scenario,ScenarioRun,SmtpConfig
 from app.services.scenarios import send_test
 
 router=APIRouter(tags=["Настройки"])
-class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str;test_email:str|None=None
+class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str
+class TestEmail(BaseModel):email:str=Field(min_length=3,max_length=255)
 class ScenarioIn(BaseModel):name:str;email:str;manager:str="Трошина Лариса";enabled:bool=True
-def smtp_out(row):return {"host":row.host,"port":row.port,"security":row.security,"username":row.username,"password":"","sender_email":row.sender_email,"sender_name":row.sender_name,"test_email":row.test_email,"has_password":bool(row.password)}
+def smtp_out(row):return {"host":row.host,"port":row.port,"security":row.security,"username":row.username,"password":"","sender_email":row.sender_email,"sender_name":row.sender_name,"has_password":bool(row.password)}
 @router.get("/smtp/settings")
 async def get_smtp(db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1);return smtp_out(row) if row else None
@@ -21,10 +22,11 @@ async def save_smtp(data:SmtpIn,db:AsyncSession=Depends(get_db)):
  if data.password:row.password=data.password
  await db.commit();await db.refresh(row);return smtp_out(row)
 @router.post("/smtp/test")
-async def test_smtp(db:AsyncSession=Depends(get_db)):
+async def test_smtp(data:TestEmail,db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1)
  if not row:raise HTTPException(400,"SMTP не настроен")
- try:await send_test(row)
+ if "@" not in data.email:raise HTTPException(400,"Введите корректный тестовый email")
+ try:await send_test(row,data.email)
  except Exception as exc:raise HTTPException(502,f"Не удалось отправить письмо: {exc}") from exc
  return {"sent":True}
 @router.get("/smtp/history")

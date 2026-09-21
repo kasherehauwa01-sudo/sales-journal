@@ -21,9 +21,8 @@ def _send(config:SmtpConfig,to:str,subject:str,body:str,attachment:bytes|None=No
   client.send_message(message)
  finally:client.quit()
 
-async def send_test(config:SmtpConfig):
- if not config.test_email:raise ValueError("Укажите Email для теста")
- await asyncio.to_thread(_send,config,config.test_email,"Проверка SMTP","Тестовое сообщение Sales Journal")
+async def send_test(config:SmtpConfig,recipient:str):
+ await asyncio.to_thread(_send,config,recipient,"Проверка SMTP","Тестовое сообщение Sales Journal")
 
 async def run_scenario(scenario:Scenario,run_date:date):
  period=report_period(run_date)
