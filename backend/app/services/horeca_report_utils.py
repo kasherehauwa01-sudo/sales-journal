@@ -7,3 +7,6 @@ def build_horeca_products(current_rows,three_month_rows,horeca_keys:set[str]):
   if is_horeca(horeca_keys,article,code):continue
   key=product_key(article,code,name);result.append({"key":key,"photo":None,"article":article,"code":code,"name":name,"period_units":float(units or 0),"three_month_units":three.get(key,0)})
  return sorted(result,key=lambda item:-item["three_month_units"])
+
+def omir_codes(products:list[dict])->list[str]:
+ return [item.get("code") or "" for item in products]
