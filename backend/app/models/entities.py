@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
 
@@ -78,3 +78,7 @@ class Scenario(Base, TimestampMixin):
 class ScenarioRun(Base):
     __tablename__="scenario_runs";__table_args__=(UniqueConstraint("scenario_id","run_date"),)
     id:Mapped[int]=mapped_column(BigInteger,primary_key=True);scenario_id:Mapped[int]=mapped_column(ForeignKey("scenarios.id",ondelete="CASCADE"));run_date:Mapped[date]=mapped_column(Date);status:Mapped[str]=mapped_column(String(32));message:Mapped[str|None]=mapped_column(Text);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())
+
+class ProductReportSet(Base, TimestampMixin):
+    __tablename__="product_report_sets"
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255),unique=True);products:Mapped[list[dict]]=mapped_column(JSON)
