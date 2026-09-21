@@ -8,14 +8,17 @@ from app.database import get_db
 from app.models import Sale, SaleItem
 from app.repositories.sales import filtered_sales
 from app.schemas import ItemOut, SaleOut, SalePage
+from app.services.clients_vr import ClientsVrError,resolve_manager_filter
 router=APIRouter(prefix="/sales",tags=["Продажи"])
 class SaleFilters(BaseModel):
- search:str|None=None;date_from:date|None=None;date_to:date|None=None;departments:list[str]|None=None;clients:list[str]|None=None;client:str|None=None;author:str|None=None;price_type:str|None=None;promotion:str|None=None;social:bool|None=None;discount_card_percent:Decimal|None=None;min_amount:Decimal|None=None;max_amount:Decimal|None=None;min_discount:Decimal|None=None;max_discount:Decimal|None=None
+ search:str|None=None;date_from:date|None=None;date_to:date|None=None;departments:list[str]|None=None;manager:str|None=None;client:str|None=None;author:str|None=None;price_type:str|None=None;promotion:str|None=None;social:bool|None=None;discount_card_percent:Decimal|None=None;min_amount:Decimal|None=None;max_amount:Decimal|None=None;min_discount:Decimal|None=None;max_discount:Decimal|None=None
 class DeleteSales(BaseModel):
  all:bool=False;ids:list[int]=Field(default_factory=list);excluded_ids:list[int]=Field(default_factory=list);filters:SaleFilters=Field(default_factory=SaleFilters)
 @router.get("",response_model=SalePage)
-async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),sort_by:str="sale_date",sort_dir:str="desc",search:str|None=None,date_from:date|None=None,date_to:date|None=None,departments:list[str]|None=Query(None),clients:list[str]|None=Query(None),client:str|None=None,author:str|None=None,price_type:str|None=None,promotion:str|None=None,social:bool|None=None,discount_card_percent:Decimal|None=None,min_amount:Decimal|None=None,max_amount:Decimal|None=None,min_discount:Decimal|None=None,max_discount:Decimal|None=None,db:AsyncSession=Depends(get_db)):
+async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),sort_by:str="sale_date",sort_dir:str="desc",search:str|None=None,date_from:date|None=None,date_to:date|None=None,departments:list[str]|None=Query(None),manager:str|None=None,client:str|None=None,author:str|None=None,price_type:str|None=None,promotion:str|None=None,social:bool|None=None,discount_card_percent:Decimal|None=None,min_amount:Decimal|None=None,max_amount:Decimal|None=None,min_discount:Decimal|None=None,max_discount:Decimal|None=None,db:AsyncSession=Depends(get_db)):
  kw=locals().copy();kw.pop("db");[kw.pop(x) for x in ("page","page_size","sort_by","sort_dir")]
+ try:kw=await resolve_manager_filter(kw)
+ except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  base=filtered_sales(select(Sale),**kw);total=await db.scalar(select(func.count()).select_from(base.subquery())) or 0
  allowed={x.name:getattr(Sale,x.name) for x in Sale.__table__.columns};col=allowed.get(sort_by,Sale.sale_date);order=desc(col) if sort_dir=="desc" else asc(col)
  items=(await db.scalars(base.order_by(order,desc(Sale.id)).offset((page-1)*page_size).limit(page_size))).unique().all()
@@ -23,7 +26,9 @@ async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),
 @router.delete("")
 async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
  if payload.all:
-  matching=filtered_sales(select(Sale.id),**payload.filters.model_dump())
+  try:filters=await resolve_manager_filter(payload.filters.model_dump())
+  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+  matching=filtered_sales(select(Sale.id),**filters)
   if payload.excluded_ids:matching=matching.where(Sale.id.not_in(payload.excluded_ids))
   result=await db.execute(delete(Sale).where(Sale.id.in_(matching)))
  else:
