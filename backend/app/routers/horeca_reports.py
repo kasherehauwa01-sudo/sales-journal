@@ -23,15 +23,19 @@ async def _report(token:str,db):
 @router.get("/{token}")
 async def get_report(token:str,db:AsyncSession=Depends(get_db)):
  report=await _report(token,db)
- products=[dict(item) for item in report.products];missing={item.get("key") for item in products if item.get("key") and not item.get("photo")}
+ return {"period_start":report.period_start,"period_end":report.period_end,"products":report.products}
+
+@router.get("/{token}/images")
+async def get_report_images(token:str,db:AsyncSession=Depends(get_db)):
+ report=await _report(token,db);products=[dict(item) for item in report.products];missing={item.get("key") for item in products if item.get("key") and not item.get("photo")}
  if missing:
   try:
    images=await get_catalog_images(missing)
    for item in products:
     if not item.get("photo"):item["photo"]=images.get(item.get("key"))
    report.products=products;await db.commit()
-  except VrCatalogError:pass  # отчет остается доступным, даже если каталог временно недоступен
- return {"period_start":report.period_start,"period_end":report.period_end,"products":products}
+  except VrCatalogError:return {"images":{}}
+ return {"images":{item["key"]:item["photo"] for item in products if item.get("key") and item.get("photo")}}
 
 @router.post("/{token}/send")
 async def send_report(token:str,data:SendSelection,db:AsyncSession=Depends(get_db)):
