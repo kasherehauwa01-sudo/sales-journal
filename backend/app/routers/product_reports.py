@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import ProductReportSet,Sale,SaleItem
 from app.services.clients_vr import ClientsVrError,get_client_managers,get_manager_clients
+from app.services.vrcatalog import VrCatalogError,get_product_filters,get_product_filter_options,search_catalog_products
 from app.services.product_report_utils import normalize_identifier as _norm,percent_change as _change,previous_period as _previous,product_key as _product_key
 
 router=APIRouter(prefix="/reports/product-sales",tags=["Отчеты"])
@@ -114,7 +115,41 @@ async def update_set(set_id:int,data:SetIn,db:AsyncSession=Depends(get_db)):
 async def delete_set(set_id:int,db:AsyncSession=Depends(get_db)):await db.execute(delete(ProductReportSet).where(ProductReportSet.id==set_id));await db.commit();return Response(status_code=204)
 
 @router.get("/catalog/filters")
-async def catalog_filters():raise HTTPException(501,"CatalogVR пока не предоставляет API метаданных фильтров. Требуется добавить endpoint справочника фильтров в CatalogVR.")
+async def catalog_filters():
+ try:
+  return await get_product_filters()
+ except VrCatalogError as exc:
+  raise HTTPException(502,str(exc)) from exc
+
+@router.get("/catalog/filters/{filter_key}/options")
+async def catalog_filter_options(
+ filter_key:str,
+ search:str="",
+ page:int=Query(1,ge=1),
+ page_size:int=Query(100,ge=1,le=500),
+):
+ try:
+  return await get_product_filter_options(filter_key,search,page,page_size)
+ except VrCatalogError as exc:
+  raise HTTPException(502,str(exc)) from exc
+
+class CatalogProductSearchRequest(BaseModel):
+ filters:dict=Field(default_factory=dict)
+ search:str=""
+ page:int=Field(default=1,ge=1)
+ page_size:int=Field(default=100,ge=1,le=500)
+
+@router.post("/catalog/products/search")
+async def catalog_products_search(data:CatalogProductSearchRequest):
+ try:
+  return await search_catalog_products(
+   data.filters,
+   data.search,
+   data.page,
+   data.page_size,
+  )
+ except VrCatalogError as exc:
+  raise HTTPException(502,str(exc)) from exc
 
 def _sheet(book,title,headers,rows):
  sheet=book.create_sheet(title);sheet.append(headers)

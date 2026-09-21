@@ -1,6 +1,6 @@
 import asyncio,json,time
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote,urlencode
 from urllib.request import Request,urlopen
 
 cache:tuple[float,set[str]]|None=None
@@ -56,3 +56,66 @@ async def get_horeca_keys():
 
 def is_horeca(keys:set[str],article,code):
  return any(value and f"{prefix}:{str(value).strip().lower()}" in keys for prefix,value in (("article",article),("code",code)))
+
+def _integration_request(path: str, method: str = "GET", payload=None):
+ from app.config import settings
+ headers={"Accept":"application/json"}
+ if settings.vrcatalog_api_token:
+  headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
+ data=None
+ if payload is not None:
+  data=json.dumps(payload).encode("utf-8")
+  headers["Content-Type"]="application/json"
+ request=Request(
+  f"{settings.vrcatalog_api_url.rstrip('/')}{path}",
+  data=data,
+  headers=headers,
+  method=method,
+ )
+ with urlopen(request,timeout=30) as response:
+  return json.load(response)
+
+async def get_product_filters():
+ try:
+  return await asyncio.to_thread(
+   _integration_request,
+   "/integration/product-filters",
+  )
+ except Exception as exc:
+  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+async def get_product_filter_options(filter_key: str, search: str = "", page: int = 1, page_size: int = 100):
+ try:
+  query=urlencode({
+   "search":search,
+   "page":page,
+   "page_size":page_size,
+  })
+  return await asyncio.to_thread(
+   _integration_request,
+   f"/integration/product-filters/{quote(filter_key, safe='')}/options?{query}",
+  )
+ except Exception as exc:
+  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+async def search_catalog_products(
+ filters: dict,
+ search: str = "",
+ page: int = 1,
+ page_size: int = 100,
+):
+ payload={
+  "filters":filters,
+  "search":search,
+  "page":page,
+  "page_size":page_size,
+ }
+ try:
+  return await asyncio.to_thread(
+   _integration_request,
+   "/integration/products/search",
+   "POST",
+   payload,
+  )
+ except Exception as exc:
+  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
