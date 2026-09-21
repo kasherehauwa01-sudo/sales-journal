@@ -10,6 +10,7 @@ from app.models import HorecaReport,Scenario,SmtpConfig
 from app.services.email_recipients import parse_recipient_emails
 from app.services.horeca_report_utils import omir_codes
 from app.services.scenarios import _send
+from app.services.vrcatalog import VrCatalogError,get_catalog_images
 
 router=APIRouter(prefix="/reports/horeca",tags=["Отчеты HoReCa"])
 class SendSelection(BaseModel):keys:list[str]=Field(min_length=1,max_length=10000)
@@ -22,7 +23,15 @@ async def _report(token:str,db):
 @router.get("/{token}")
 async def get_report(token:str,db:AsyncSession=Depends(get_db)):
  report=await _report(token,db)
- return {"period_start":report.period_start,"period_end":report.period_end,"products":report.products}
+ products=[dict(item) for item in report.products];missing={item.get("key") for item in products if item.get("key") and not item.get("photo")}
+ if missing:
+  try:
+   images=await get_catalog_images(missing)
+   for item in products:
+    if not item.get("photo"):item["photo"]=images.get(item.get("key"))
+   report.products=products;await db.commit()
+  except VrCatalogError:pass  # отчет остается доступным, даже если каталог временно недоступен
+ return {"period_start":report.period_start,"period_end":report.period_end,"products":products}
 
 @router.post("/{token}/send")
 async def send_report(token:str,data:SendSelection,db:AsyncSession=Depends(get_db)):

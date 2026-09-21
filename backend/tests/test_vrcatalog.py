@@ -64,8 +64,11 @@ def test_catalog_error_is_wrapped(monkeypatch):
   asyncio.run(vrcatalog.get_horeca_keys())
 
 def test_catalog_images_support_common_image_shapes():
- payload={"items":[{"code":"1","image_url":"https://img/1.jpg"},{"article":"A2","images":[{"url":"https://img/2.jpg"}]}]}
- assert vrcatalog.catalog_product_images(payload)=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg"}
+ payload={"items":[{"code":"1","image_url":"https://img/1.jpg"},{"article":"A2","images":[{"url":"https://img/2.jpg"}]},{"code":"3","photos":[{"path":"media/3.jpg"}]}]}
+ assert vrcatalog.catalog_product_images(payload,"https://catalog.example/api")=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg","code:3":"https://catalog.example/api/media/3.jpg"}
+
+def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
+ assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/media/1.jpg"}
 
 def test_catalog_images_are_loaded_in_pages_and_cached(monkeypatch):
  calls=[]
