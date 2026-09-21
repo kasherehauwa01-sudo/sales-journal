@@ -10,3 +10,5 @@ def report_period(day:date):
 def months_before(day:date,months:int):
  total=day.year*12+day.month-1-months;year,month=divmod(total,12);month+=1
  return day.replace(year=year,month=month,day=min(day.day,calendar.monthrange(year,month)[1]))
+
+def manual_test_period(today:date):return today-timedelta(days=13),today

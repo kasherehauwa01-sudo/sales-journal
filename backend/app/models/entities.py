@@ -76,8 +76,8 @@ class Scenario(Base, TimestampMixin):
     id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255));email:Mapped[str]=mapped_column(Text);reply_emails:Mapped[str]=mapped_column(Text,default="");manager:Mapped[str]=mapped_column(String(255));message_text:Mapped[str]=mapped_column(Text,default="");enabled:Mapped[bool]=mapped_column(Boolean,default=True)
 
 class ScenarioRun(Base):
-    __tablename__="scenario_runs";__table_args__=(UniqueConstraint("scenario_id","run_date"),)
-    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);scenario_id:Mapped[int]=mapped_column(ForeignKey("scenarios.id",ondelete="CASCADE"));run_date:Mapped[date]=mapped_column(Date);status:Mapped[str]=mapped_column(String(32));message:Mapped[str|None]=mapped_column(Text);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())
+    __tablename__="scenario_runs"
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);scenario_id:Mapped[int]=mapped_column(ForeignKey("scenarios.id",ondelete="CASCADE"));run_date:Mapped[date]=mapped_column(Date);run_type:Mapped[str]=mapped_column(String(32),default="scheduled");period_start:Mapped[date|None]=mapped_column(Date);period_end:Mapped[date|None]=mapped_column(Date);recipients:Mapped[str|None]=mapped_column(Text);status:Mapped[str]=mapped_column(String(32));message:Mapped[str|None]=mapped_column(Text);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())
 
 class ProductReportSet(Base, TimestampMixin):
     __tablename__="product_report_sets"

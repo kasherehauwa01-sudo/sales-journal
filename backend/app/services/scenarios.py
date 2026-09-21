@@ -26,8 +26,8 @@ def _send(config:SmtpConfig,to:str|list[str],subject:str,body:str,attachment:byt
 async def send_test(config:SmtpConfig,recipient:str):
  await asyncio.to_thread(_send,config,recipient,"Проверка SMTP","Тестовое сообщение Sales Journal")
 
-async def run_scenario(scenario:Scenario,run_date:date):
- period=report_period(run_date)
+async def run_scenario(scenario:Scenario,run_date:date,period_override:tuple[date,date]|None=None):
+ period=period_override or report_period(run_date)
  if not period:return
  clients=await get_manager_clients(scenario.manager);normalized=[x.strip().lower() for x in clients]
  async with SessionLocal() as db:
@@ -38,7 +38,8 @@ async def run_scenario(scenario:Scenario,run_date:date):
    q=select(*group,func.sum(SaleItem.quantity).label("units")).join(Sale).where(Sale.sale_date.between(start,end),client_filter).group_by(*group)
    return (await db.execute(q)).all()
   current=await quantities(*period);three_start=months_before(period[1],3)+timedelta(days=1);three=await quantities(three_start,period[1]);horeca_keys=await get_horeca_keys();products=build_horeca_products(current,three,horeca_keys);report=HorecaReport(token=secrets.token_urlsafe(32),scenario_id=scenario.id,period_start=period[0],period_end=period[1],products=products);db.add(report);await db.commit();link=f"{settings.public_url.rstrip('/')}/reports/horeca/{report.token}";period_text=f"Период отчета: {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}"
-  await asyncio.to_thread(_send,smtp,parse_recipient_emails(scenario.email),"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}\n\nОткрыть перечень товаров: {link}".strip())
+  recipients=parse_recipient_emails(scenario.email);await asyncio.to_thread(_send,smtp,recipients,"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}\n\nОткрыть перечень товаров: {link}".strip())
+  return {"date_from":period[0],"date_to":period[1],"recipients":recipients,"link":link,"products":len(products)}
 
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)
@@ -48,10 +49,10 @@ async def scheduler():
    async with SessionLocal() as db:
     scenarios=(await db.scalars(select(Scenario).where(Scenario.enabled.is_(True)))).all()
     for scenario in scenarios:
-     exists=await db.scalar(select(ScenarioRun.id).where(ScenarioRun.scenario_id==scenario.id,ScenarioRun.run_date==today))
+     exists=await db.scalar(select(ScenarioRun.id).where(ScenarioRun.scenario_id==scenario.id,ScenarioRun.run_date==today,ScenarioRun.run_type=="scheduled"))
      if exists:continue
-     run=ScenarioRun(scenario_id=scenario.id,run_date=today,status="running");db.add(run);await db.commit()
-     try:await run_scenario(scenario,today);run.status="completed";run.message="Отчет отправлен"
+     period=report_period(today);run=ScenarioRun(scenario_id=scenario.id,run_date=today,run_type="scheduled",period_start=period[0],period_end=period[1],recipients=scenario.email,status="running");db.add(run);await db.commit()
+     try:await run_scenario(scenario,today,period);run.status="completed";run.message="Отчет отправлен"
      except Exception as exc:run.status="failed";run.message=str(exc)[:4000]
      await db.commit()
   target=datetime.combine(today+timedelta(days=1),time(0,5),zone);await asyncio.sleep((target-datetime.now(zone)).total_seconds())
