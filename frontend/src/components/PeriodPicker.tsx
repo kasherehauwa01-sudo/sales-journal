@@ -16,7 +16,7 @@ function range(period:Exclude<Period,'all'|'custom'>){
   return {date_from:iso(from),date_to:iso(to)};
 }
 
-export function PeriodPicker({value,onChange}:{value:PeriodValue;onChange:(value:PeriodValue)=>void}){
+export function PeriodPicker({value,onChange,showDay=true}:{value:PeriodValue;onChange:(value:PeriodValue)=>void;showDay?:boolean}){
   const [manualOpen,setManualOpen]=useState(false);const [from,setFrom]=useState(value.date_from);const [to,setTo]=useState(value.date_to);
   useEffect(()=>{if(!manualOpen){setFrom(value.date_from);setTo(value.date_to)}},[value.date_from,value.date_to,manualOpen]);
   function select(period:Period){
@@ -25,7 +25,7 @@ export function PeriodPicker({value,onChange}:{value:PeriodValue;onChange:(value
   }
   function apply(){if(!from||!to||from>to)return;onChange({period:'custom',date_from:from,date_to:to});setManualOpen(false)}
   return <>
-    <div className="period-picker" aria-label="Период">{periods.map(([period,label])=><button type="button" key={period} className={value.period===period?'active':''} onClick={()=>select(period)}>{period==='custom'&&<CalendarDays size={15}/>} {label}</button>)}</div>
+    <div className="period-picker" aria-label="Период">{periods.filter(([period])=>showDay||period!=='day').map(([period,label])=><button type="button" key={period} className={value.period===period?'active':''} onClick={()=>select(period)}>{period==='custom'&&<CalendarDays size={15}/>} {label}</button>)}</div>
     {manualOpen&&<><div className="backdrop" onClick={()=>setManualOpen(false)}/><div className="period-modal" role="dialog" aria-modal="true" aria-labelledby="period-title"><div className="period-modal-head"><div><h2 id="period-title">Ручной выбор периода</h2><p>Укажите начальную и конечную даты</p></div><button type="button" aria-label="Закрыть" onClick={()=>setManualOpen(false)}><X/></button></div><div className="period-modal-fields"><label>Дата от<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>Дата до<input type="date" value={to} min={from} onChange={e=>setTo(e.target.value)}/></label></div>{from&&to&&from>to&&<p className="period-error">Дата окончания не может быть раньше даты начала</p>}<div className="period-modal-actions"><button type="button" onClick={()=>setManualOpen(false)}>Отмена</button><button type="button" className="primary" disabled={!from||!to||from>to} onClick={apply}>Применить</button></div></div></>}
   </>
 }
