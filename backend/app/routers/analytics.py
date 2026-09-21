@@ -23,7 +23,7 @@ async def overview(date_from:date|None=None,date_to:date|None=None,department:st
   length=(date_to-date_from).days+1;previous=await metrics(db,filters(select(Sale),date_from-timedelta(days=length),date_from-timedelta(days=1),department,client,price_type,promotion))
  return {"current":current,"previous":previous,"changes":{k:pct(v,previous.get(k,0)) for k,v in current.items()} if previous else {}}
 @router.get("/dynamics")
-async def dynamics(group_by:str=Query("day",pattern="^(day|week|month)$"),date_from:date|None=None,date_to:date|None=None,department:str|None=None,client:str|None=None,price_type:str|None=None,promotion:str|None=None,db:AsyncSession=Depends(get_db)):
+async def dynamics(group_by:str=Query("day",pattern="^(day|week|month|quarter|year)$"),date_from:date|None=None,date_to:date|None=None,department:str|None=None,client:str|None=None,price_type:str|None=None,promotion:str|None=None,db:AsyncSession=Depends(get_db)):
  bucket=func.date_trunc(group_by,Sale.sale_date).label("period");q=filters(select(bucket,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales_count"),func.avg(Sale.total_amount).label("average_check"),func.sum(Sale.base_amount-Sale.total_amount).label("discount_amount")).group_by(bucket).order_by(bucket),date_from,date_to,department,client,price_type,promotion)
  return [{"period":r.period.date(),"revenue":float(r.revenue or 0),"sales_count":r.sales_count,"average_check":float(r.average_check or 0),"discount_amount":float(r.discount_amount or 0)} for r in (await db.execute(q))]
 @router.get("/departments")
