@@ -33,6 +33,7 @@ services:
       CLIENTS_VR_API_TOKEN: "${CLIENTS_VR_API_TOKEN:-}"
       VRCATALOG_API_URL: "${VRCATALOG_API_URL:-https://kvasmix.ru/vr/catalog/api}"
       VRCATALOG_API_TOKEN: "${VRCATALOG_API_TOKEN:-}"
+      PUBLIC_URL: "${PUBLIC_URL:-https://kvasmix.ru/vr/sales}"
     volumes:
       - sales_imports:/data/imports
     ports:

@@ -1,17 +1,16 @@
-import asyncio,smtplib
+import asyncio,secrets,smtplib
 from datetime import date,datetime,time,timedelta
 from email.message import EmailMessage
-from io import BytesIO
 from zoneinfo import ZoneInfo
-from openpyxl import Workbook
 from sqlalchemy import false,func,select
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Sale,SaleItem,Scenario,ScenarioRun,SmtpConfig
+from app.models import HorecaReport,Sale,SaleItem,Scenario,ScenarioRun,SmtpConfig
 from app.services.clients_vr import get_manager_clients
-from app.services.scenario_periods import report_period
-from app.services.vrcatalog import get_horeca_keys,is_horeca
+from app.services.scenario_periods import months_before,report_period
+from app.services.vrcatalog import get_horeca_keys
 from app.services.email_recipients import parse_recipient_emails
+from app.services.horeca_report_utils import build_horeca_products
 
 def _send(config:SmtpConfig,to:str|list[str],subject:str,body:str,attachment:bytes|None=None):
  recipients=[to] if isinstance(to,str) else to
@@ -34,14 +33,12 @@ async def run_scenario(scenario:Scenario,run_date:date):
  async with SessionLocal() as db:
   smtp=await db.get(SmtpConfig,1)
   if not smtp:raise RuntimeError("SMTP не настроен")
-  client_filter=func.lower(func.trim(Sale.client)).in_(normalized) if normalized else false()
-  q=select(SaleItem.article,SaleItem.code,SaleItem.name,func.sum(SaleItem.quantity),func.sum(SaleItem.actual_price*SaleItem.quantity)).join(Sale).where(Sale.sale_date.between(*period),client_filter).group_by(SaleItem.article,SaleItem.code,SaleItem.name).order_by(SaleItem.name)
-  rows=(await db.execute(q)).all();horeca_keys=await get_horeca_keys();book=Workbook();sheet=book.active;sheet.title="Продажи HoReCa";sheet.append(["Артикул","Код","Товар","Количество","Сумма"])
-  for row in rows:
-   if not is_horeca(horeca_keys,row[0],row[1]):sheet.append(list(row))
-  output=BytesIO();book.save(output)
-  period_text=f"Период отчета: {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}"
-  await asyncio.to_thread(_send,smtp,parse_recipient_emails(scenario.email),"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}".strip(),output.getvalue())
+  client_filter=func.lower(func.trim(Sale.client)).in_(normalized) if normalized else false();group=(SaleItem.article,SaleItem.code,SaleItem.name)
+  async def quantities(start,end):
+   q=select(*group,func.sum(SaleItem.quantity).label("units")).join(Sale).where(Sale.sale_date.between(start,end),client_filter).group_by(*group)
+   return (await db.execute(q)).all()
+  current=await quantities(*period);three_start=months_before(period[1],3)+timedelta(days=1);three=await quantities(three_start,period[1]);horeca_keys=await get_horeca_keys();products=build_horeca_products(current,three,horeca_keys);report=HorecaReport(token=secrets.token_urlsafe(32),scenario_id=scenario.id,period_start=period[0],period_end=period[1],products=products);db.add(report);await db.commit();link=f"{settings.public_url.rstrip('/')}/reports/horeca/{report.token}";period_text=f"Период отчета: {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}"
+  await asyncio.to_thread(_send,smtp,parse_recipient_emails(scenario.email),"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}\n\nОткрыть перечень товаров: {link}".strip())
 
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)

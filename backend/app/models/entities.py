@@ -73,7 +73,7 @@ class SmtpConfig(Base, TimestampMixin):
 
 class Scenario(Base, TimestampMixin):
     __tablename__="scenarios"
-    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255));email:Mapped[str]=mapped_column(Text);manager:Mapped[str]=mapped_column(String(255));message_text:Mapped[str]=mapped_column(Text,default="");enabled:Mapped[bool]=mapped_column(Boolean,default=True)
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255));email:Mapped[str]=mapped_column(Text);reply_emails:Mapped[str]=mapped_column(Text,default="");manager:Mapped[str]=mapped_column(String(255));message_text:Mapped[str]=mapped_column(Text,default="");enabled:Mapped[bool]=mapped_column(Boolean,default=True)
 
 class ScenarioRun(Base):
     __tablename__="scenario_runs";__table_args__=(UniqueConstraint("scenario_id","run_date"),)
@@ -82,3 +82,7 @@ class ScenarioRun(Base):
 class ProductReportSet(Base, TimestampMixin):
     __tablename__="product_report_sets"
     id:Mapped[int]=mapped_column(BigInteger,primary_key=True);name:Mapped[str]=mapped_column(String(255),unique=True);products:Mapped[list[dict]]=mapped_column(JSON)
+
+class HorecaReport(Base):
+    __tablename__="horeca_reports"
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);token:Mapped[str]=mapped_column(String(64),unique=True,index=True);scenario_id:Mapped[int]=mapped_column(ForeignKey("scenarios.id",ondelete="CASCADE"));period_start:Mapped[date]=mapped_column(Date);period_end:Mapped[date]=mapped_column(Date);products:Mapped[list[dict]]=mapped_column(JSON);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())

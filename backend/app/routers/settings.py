@@ -10,7 +10,7 @@ from app.services.email_recipients import parse_recipient_emails
 router=APIRouter(tags=["Настройки"])
 class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str
 class TestEmail(BaseModel):email:str=Field(min_length=3,max_length=255)
-class ScenarioIn(BaseModel):name:str;email:str;manager:str="Трошина Лариса";message_text:str="";enabled:bool=True
+class ScenarioIn(BaseModel):name:str;email:str;reply_emails:str="";manager:str="Трошина Лариса";message_text:str="";enabled:bool=True
 def smtp_out(row):return {"host":row.host,"port":row.port,"security":row.security,"username":row.username,"password":"","sender_email":row.sender_email,"sender_name":row.sender_name,"has_password":bool(row.password)}
 @router.get("/smtp/settings")
 async def get_smtp(db:AsyncSession=Depends(get_db)):
@@ -43,6 +43,8 @@ async def update_scenario(scenario_id:int,data:ScenarioIn,db:AsyncSession=Depend
  try:
   if data.email.strip():data.email="\n".join(parse_recipient_emails(data.email))
   elif data.enabled:raise ValueError("Укажите хотя бы один email получателя")
+  if data.reply_emails.strip():data.reply_emails="\n".join(parse_recipient_emails(data.reply_emails))
+  elif data.enabled:raise ValueError("Укажите хотя бы один email для обратного письма")
  except ValueError as exc:raise HTTPException(422,str(exc)) from exc
  for key,value in data.model_dump().items():setattr(row,key,value)
  await db.commit();await db.refresh(row);return row
