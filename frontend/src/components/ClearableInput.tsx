@@ -1,0 +1,2 @@
+import {X} from 'lucide-react';
+export function ClearableInput({value,onChange,placeholder}:{value:string;onChange:(value:string)=>void;placeholder?:string}){return <div className="clearable-input"><input value={value} placeholder={placeholder} onChange={event=>onChange(event.target.value)}/>{value&&<button type="button" className="input-clear" aria-label="Очистить поле" onClick={()=>onChange('')}><X size={15}/></button>}</div>}
