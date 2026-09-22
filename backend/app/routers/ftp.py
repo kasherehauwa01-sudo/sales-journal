@@ -5,7 +5,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import AutoImportLog,FtpConfig
+from app.models import AutoImportLog,FtpConfig,ImportBatch
 from app.services.ftp_autoload import run_autoload,test_connection
 
 router=APIRouter(prefix="/ftp",tags=["FTP"])
@@ -14,7 +14,7 @@ class FtpInput(BaseModel):
 class FtpOut(BaseModel):
  protocol:str="FTP";host:str="";port:int=21;username:str="";directory:str="/";retries:int=5;retry_delay:int=3;enabled:bool=True;has_password:bool=False
 class LogOut(BaseModel):
- id:int;filename:str|None;status:str;message:str|None;import_id:int|None;started_at:datetime;finished_at:datetime|None
+ id:int;filename:str|None;status:str;message:str|None;import_id:int|None;started_at:datetime;finished_at:datetime|None;loaded_rows:int=0;size_kb:float=0
  model_config={"from_attributes":True}
 
 def output(config:FtpConfig|None):
@@ -47,4 +47,6 @@ async def run_now(background:BackgroundTasks):
  background.add_task(run_autoload);return {"ok":True}
 
 @router.get("/history",response_model=list[LogOut])
-async def history(db:AsyncSession=Depends(get_db)):return (await db.scalars(select(AutoImportLog).order_by(AutoImportLog.id.desc()).limit(200))).all()
+async def history(db:AsyncSession=Depends(get_db)):
+ rows=(await db.execute(select(AutoImportLog,ImportBatch).outerjoin(ImportBatch,ImportBatch.id==AutoImportLog.import_id).order_by(AutoImportLog.id.desc()))).all()
+ return [LogOut(id=entry.id,filename=entry.filename,status=entry.status,message=(batch.error_text if entry.status=="failed" and batch and batch.error_text else entry.message),import_id=entry.import_id,started_at=entry.started_at,finished_at=entry.finished_at,loaded_rows=batch.added_rows if batch else 0,size_kb=round((batch.file_size if batch else 0)/1024,2)) for entry,batch in rows]
