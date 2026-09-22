@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import HorecaReport,Scenario,SmtpConfig
 from app.services.email_recipients import parse_recipient_emails
-from app.services.horeca_report_utils import omir_codes
+from app.services.horeca_report_utils import limit_horeca_products,omir_codes
 from app.services.scenarios import _send
 from app.services.vrcatalog import VrCatalogError,get_catalog_images
 
@@ -23,11 +23,11 @@ async def _report(token:str,db):
 @router.get("/{token}")
 async def get_report(token:str,db:AsyncSession=Depends(get_db)):
  report=await _report(token,db)
- return {"period_start":report.period_start,"period_end":report.period_end,"products":report.products}
+ return {"period_start":report.period_start,"period_end":report.period_end,"products":limit_horeca_products(report.products)}
 
 @router.get("/{token}/images")
 async def get_report_images(token:str,db:AsyncSession=Depends(get_db)):
- report=await _report(token,db);products=[dict(item) for item in report.products];missing={item.get("key") for item in products if item.get("key") and not item.get("photo")}
+ report=await _report(token,db);products=[dict(item) for item in limit_horeca_products(report.products)];missing={item.get("key") for item in products if item.get("key") and not item.get("photo")}
  if missing:
   try:
    images=await get_catalog_images(missing)

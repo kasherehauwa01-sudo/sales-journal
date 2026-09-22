@@ -1,4 +1,4 @@
-from app.services.horeca_report_utils import build_horeca_products,omir_codes
+from app.services.horeca_report_utils import build_horeca_products,limit_horeca_products,omir_codes
 
 def test_products_are_sorted_by_three_month_sales_and_horeca_is_excluded():
  current=[("A1","1","Первый",2),("A2","2","Исключить",5),("A3","3","Третий",1)]
@@ -10,3 +10,7 @@ def test_products_are_sorted_by_three_month_sales_and_horeca_is_excluded():
 
 def test_omir_export_uses_selected_product_codes():
  assert omir_codes([{"code":"001","name":"Первый"},{"code":"ABC-2","name":"Второй"}])==["001","ABC-2"]
+
+def test_horeca_selection_is_limited_to_first_300_products():
+ products=[{"key":str(index)} for index in range(350)]
+ assert limit_horeca_products(products)==products[:300]

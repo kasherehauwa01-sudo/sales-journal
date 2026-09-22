@@ -1,6 +1,8 @@
 from app.services.product_report_utils import product_key
 from app.services.vrcatalog import is_horeca
 
+HORECA_PRODUCT_LIMIT=300
+
 def build_horeca_products(current_rows,three_month_rows,horeca_keys:set[str]):
  three={product_key(x[0],x[1],x[2]):float(x[3] or 0) for x in three_month_rows};result=[]
  for article,code,name,units in current_rows:
@@ -10,3 +12,6 @@ def build_horeca_products(current_rows,three_month_rows,horeca_keys:set[str]):
 
 def omir_codes(products:list[dict])->list[str]:
  return [item.get("code") or "" for item in products]
+
+def limit_horeca_products(products:list[dict])->list[dict]:
+ return products[:HORECA_PRODUCT_LIMIT]
