@@ -3,3 +3,4 @@ export const number=(v:string|number|null|undefined)=>new Intl.NumberFormat('ru-
 export const percent=(v:string|number|null|undefined)=>`${number(v)}%`;
 export const date=(v?:string)=>v?new Intl.DateTimeFormat('ru-RU').format(new Date(`${v.slice(0,10)}T00:00:00`)):'—';
 export const datetime=(v?:string)=>v?new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'}).format(new Date(v)):'—';
+export const saleTotal=(total:string|number|null|undefined,certificate:string|number|null|undefined)=>Number(certificate||0)>0?`${money(total)} + сертификат ${money(certificate)}`:money(total);
