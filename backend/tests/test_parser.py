@@ -117,6 +117,15 @@ def test_utf16_html_export_is_supported(tmp_path):
  _,rows=read_sales(path)
  assert rows[0][1]["document_number"]=="РН-2"
 
+def test_spreadsheet_xml_tags_inside_html_are_supported(tmp_path):
+ path=tmp_path/"sales.html"
+ path.write_text('''<?xml version="1.0"?><Workbook xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet><Table>
+ <Row><Cell><Data>Дата</Data></Cell><Cell><Data>№ Док.</Data></Cell><Cell><Data>Подразделение</Data></Cell><Cell><Data>Сумма</Data></Cell></Row>
+ <Row><Cell><Data>22.09.2026</Data></Cell><Cell><Data>РН-3</Data></Cell><Cell><Data>Авиаторов</Data></Cell><Cell><Data>300</Data></Cell></Row>
+ </Table></Worksheet></Workbook>''',encoding="utf-8")
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-3"
+
 def test_certificate_is_subtracted_from_total_and_keeps_legacy_fingerprint():
  row=normalize_sale({**BASE,"certificate_amount":"245,50"})
  assert row["total_amount"]==Decimal("1000.00")

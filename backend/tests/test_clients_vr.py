@@ -94,6 +94,16 @@ def test_buyer_types_are_unique_and_sorted(monkeypatch):
     assert asyncio.run(clients_vr.get_buyer_types()) == ["HoReCa", "Розница"]
 
 
+def test_buyer_types_support_wrapped_integration_response(monkeypatch):
+    monkeypatch.setattr(
+        clients_vr,
+        "_request",
+        lambda _paths: {"buyer_types": ["Розница", "HoReCa"]},
+    )
+
+    assert asyncio.run(clients_vr.get_buyer_types()) == ["HoReCa", "Розница"]
+
+
 def test_buyer_type_returns_only_matching_clients_and_uses_cache(monkeypatch):
     calls = 0
 

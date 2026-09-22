@@ -128,18 +128,18 @@ def fingerprint(row:dict)->str:
 class _HtmlTables(HTMLParser):
  def __init__(self):super().__init__(convert_charrefs=True);self.tables=[];self.table=None;self.row=None;self.cell=None
  def handle_starttag(self,tag,attrs):
-  tag=tag.lower()
+  tag=tag.lower().split(":")[-1]
   if tag=="table":self.table=[]
-  elif tag=="tr" and self.table is not None:self.row=[]
-  elif tag in {"td","th"} and self.row is not None:self.cell=[]
+  elif tag in {"tr","row"} and self.table is not None:self.row=[]
+  elif tag in {"td","th","cell","data"} and self.row is not None and self.cell is None:self.cell=[]
   elif tag=="br" and self.cell is not None:self.cell.append("\n")
  def handle_data(self,data):
   if self.cell is not None:self.cell.append(data)
  def handle_endtag(self,tag):
-  tag=tag.lower()
-  if tag in {"td","th"} and self.cell is not None:
+  tag=tag.lower().split(":")[-1]
+  if tag in {"td","th","cell"} and self.cell is not None:
    self.row.append("".join(self.cell).strip());self.cell=None
-  elif tag=="tr" and self.row is not None:
+  elif tag in {"tr","row"} and self.row is not None:
    if self.row:self.table.append(self.row)
    self.row=None
   elif tag=="table" and self.table is not None:
@@ -163,16 +163,22 @@ def _html_rows(path:Path)->list[list[list[str]]]:
  else:text=data.decode("utf-8",errors="replace")
  parser=_HtmlTables();parser.feed(text);return parser.tables
 def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
- if path.suffix.lower()==".xlsx":
+ with path.open("rb") as source:signature=source.read(8)
+ if path.suffix.lower()==".xlsx" or signature.startswith(b"PK\x03\x04"):
   import openpyxl
-  wb=openpyxl.load_workbook(path,read_only=True,data_only=True)
-  for ws in wb.worksheets:yield ws.title,[list(r) for r in ws.iter_rows(values_only=True)]
- elif path.suffix.lower() in {".html",".htm"}:
-  for index,rows in enumerate(_html_rows(path),1):yield f"Таблица {index}",rows
- else:
+  # Передаём поток: так XLSX корректно читается даже при ошибочном расширении .html.
+  source=path.open("rb");wb=openpyxl.load_workbook(source,read_only=True,data_only=True)
+  try:
+   for ws in wb.worksheets:yield ws.title,[list(r) for r in ws.iter_rows(values_only=True)]
+  finally:wb.close();source.close()
+ elif path.suffix.lower()==".xls" or signature.startswith(b"\xd0\xcf\x11\xe0"):
   import xlrd
   wb=xlrd.open_workbook(path,on_demand=True)
   for ws in wb.sheets():yield ws.name,[ws.row_values(i) for i in range(ws.nrows)]
+ elif path.suffix.lower() in {".html",".htm"}:
+  for index,rows in enumerate(_html_rows(path),1):yield f"Таблица {index}",rows
+ else:
+  raise ValueError(f"Неподдерживаемый формат файла: {path.suffix or 'без расширения'}")
 def read_sales(path:Path):
  diagnostics=[]
  for sheet,rows in workbook_rows(path):

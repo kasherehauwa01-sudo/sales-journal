@@ -101,7 +101,7 @@ async def get_client_managers():
  return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
 
 async def get_buyer_types():
- return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_type","customer_type","client_type","Вид покупателя")))
+ return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_types","types","values","value","label","buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")))
 
 async def get_buyer_type_clients(buyer_type:str):
  encoded=quote(buyer_type,safe="");params=urlencode({"buyer_type":buyer_type})
