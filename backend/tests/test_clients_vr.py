@@ -80,6 +80,22 @@ def test_client_manager_is_resolved_with_normalized_client_name(monkeypatch):
     assert asyncio.run(clients_vr.get_client_manager("КОМПАНИЯ РОМАШКА")) == "Пашута М.С."
 
 
+def test_client_buyer_types_are_mapped_by_normalized_name(monkeypatch):
+    monkeypatch.setattr(
+        clients_vr,
+        "_request",
+        lambda _paths: [
+            {"client": "  Компания Ромашка  ", "buyer_type": "Розница"},
+            {"client": "Ресторан", "buyer_type_name": "HoReCa"},
+        ],
+    )
+
+    assert asyncio.run(clients_vr.get_client_buyer_types()) == {
+        "компания ромашка": "Розница",
+        "ресторан": "HoReCa",
+    }
+
+
 def test_buyer_types_are_unique_and_sorted(monkeypatch):
     monkeypatch.setattr(
         clients_vr,

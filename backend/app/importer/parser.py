@@ -126,77 +126,25 @@ def fingerprint(row:dict)->str:
  return hashlib.sha256(key.encode()).hexdigest()
 
 class _HtmlTables(HTMLParser):
- def __init__(self):
-  super().__init__(convert_charrefs=True)
-  self.tables=[]
-  self.table=None
-  self.row=None
-  self.cell=None
-
- def _finish_cell(self):
-  if self.cell is not None and self.row is not None:
-   self.row.append("".join(self.cell).strip())
-  self.cell=None
-
- def _finish_row(self):
-  self._finish_cell()
-  if self.row is not None and self.table is not None:
-   if self.row:
-    self.table.append(self.row)
-  self.row=None
-
- def _finish_table(self):
-  self._finish_row()
-  if self.table is not None:
-   if self.table:
-    self.tables.append(self.table)
-  self.table=None
-
+ def __init__(self):super().__init__(convert_charrefs=True);self.tables=[];self.table=None;self.row=None;self.cell=None
  def handle_starttag(self,tag,attrs):
   tag=tag.lower().split(":")[-1]
-
-  if tag=="table":
-   if self.table is not None:
-    self._finish_table()
-   self.table=[]
-
-  elif tag in {"tr","row"} and self.table is not None:
-   # Старые HTML-выгрузки 1С могут не содержать </TR>.
-   if self.row is not None:
-    self._finish_row()
-   self.row=[]
-
-  elif tag in {"td","th","cell","data"} and self.row is not None:
-   # В HTML из 1С </TD> часто отсутствует:
-   # новый <TD> одновременно завершает предыдущую ячейку.
-   if self.cell is not None:
-    self._finish_cell()
-   self.cell=[]
-
-  elif tag=="br" and self.cell is not None:
-   self.cell.append("\n")
-
+  if tag=="table":self.table=[]
+  elif tag in {"tr","row"} and self.table is not None:self.row=[]
+  elif tag in {"td","th","cell","data"} and self.row is not None and self.cell is None:self.cell=[]
+  elif tag=="br" and self.cell is not None:self.cell.append("\n")
  def handle_data(self,data):
-  if self.cell is not None:
-   self.cell.append(data)
-
+  if self.cell is not None:self.cell.append(data)
  def handle_endtag(self,tag):
   tag=tag.lower().split(":")[-1]
-
-  if tag in {"td","th","cell","data"}:
-   self._finish_cell()
-
-  elif tag in {"tr","row"}:
-   self._finish_row()
-
-  elif tag=="table":
-   self._finish_table()
-
- def close(self):
-  super().close()
-  if self.table is not None:
-   self._finish_table()
-
+  if tag in {"td","th","cell"} and self.cell is not None:
+   self.row.append("".join(self.cell).strip());self.cell=None
+  elif tag in {"tr","row"} and self.row is not None:
+   if self.row:self.table.append(self.row)
+   self.row=None
+  elif tag=="table" and self.table is not None:
+   if self.table:self.tables.append(self.table)
+   self.table=None
 def _html_rows(path:Path)->list[list[list[str]]]:
  data=path.read_bytes()
  # Выгрузки 1С встречаются не только в UTF-8/Windows-1251, но и в UTF-16LE.

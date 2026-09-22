@@ -70,8 +70,17 @@ def _client_managers(payload):
   if client and manager:result[str(client).strip().lower()]=str(manager).strip()
  return result
 
+def _client_buyer_types(payload):
+ result={}
+ for item in _source(payload,("clients",)):
+  if not isinstance(item,dict):continue
+  client=next((item.get(key) for key in ("client","name","client_name","full_name","Клиент") if item.get(key)),None)
+  buyer_type=_buyer_type(item)
+  if client and buyer_type:result[str(client).strip().lower()]=str(buyer_type).strip()
+ return result
+
 def _buyer_type(item):
- return next((item.get(key) for key in ("buyer_type","customer_type","client_type","Вид покупателя") if item.get(key)),None) if isinstance(item,dict) else None
+ return next((item.get(key) for key in ("buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя") if item.get(key)),None) if isinstance(item,dict) else None
 
 def _buyer_type_clients(payload,buyer_type):
  return _items([item for item in _source(payload,("clients",)) if str(_buyer_type(item) or "").strip().lower()==buyer_type.strip().lower()],("client","name","client_name","full_name","Клиент"))
@@ -99,6 +108,9 @@ async def get_client_manager(client:str|None):
 
 async def get_client_managers():
  return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
+
+async def get_client_buyer_types():
+ return await _cached("client-buyer-types",lambda:_client_buyer_types(_request(["/integration/clients","/clients"])))
 
 async def get_buyer_types():
  return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_types","types","values","value","label","buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")))

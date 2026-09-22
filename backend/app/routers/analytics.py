@@ -4,8 +4,8 @@ from sqlalchemy import case, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_managers
-from app.services.manager_analytics import aggregate_manager_sales
+from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_buyer_types,get_client_managers
+from app.services.manager_analytics import aggregate_buyer_type_dynamics,aggregate_manager_sales
 router=APIRouter(prefix="/analytics",tags=["Аналитика"])
 def filters(q,date_from=None,date_to=None,department=None,client=None,price_type=None,promotion=None,clients=None):
  for col,val in ((Sale.department,department),(Sale.client,client),(Sale.price_type,price_type),(Sale.promotion,promotion)):
@@ -35,11 +35,10 @@ async def overview(date_from:date|None=None,date_to:date|None=None,department:st
 async def dynamics(group_by:str=Query("day",pattern="^(day|week|month|quarter|year)$"),date_from:date|None=None,date_to:date|None=None,department:str|None=None,client:str|None=None,price_type:str|None=None,promotion:str|None=None,buyer_type:str|None=None,db:AsyncSession=Depends(get_db)):
  buyer_clients=await resolve_buyer_type(buyer_type)
  bucket=func.date_trunc(group_by,Sale.sale_date).label("period")
- categories=(("retail","%рознич%"),("special","%спец%"),("corporate","%корпорат%"),("wholesale","%опт%"))
- sections=[func.coalesce(func.sum(case((Sale.price_type.ilike(pattern),Sale.total_amount),else_=0)),0).label(key) for key,pattern in categories]
- checks=[func.sum(case((Sale.price_type.ilike(pattern),1),else_=0)).label(f"{key}_checks") for key,pattern in categories]
- q=filters(select(bucket,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("sales_count"),*sections,*checks).group_by(bucket).order_by(bucket),date_from,date_to,department,client,price_type,promotion,clients=buyer_clients)
- return [{"period":r.period.date(),"revenue":float(r.revenue or 0),"sales_count":r.sales_count,**{key:float(getattr(r,key) or 0) for key,_ in categories},**{f"{key}_checks":getattr(r,f"{key}_checks") or 0 for key,_ in categories}} for r in (await db.execute(q))]
+ try:client_types=await get_client_buyer_types()
+ except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ q=filters(select(bucket,Sale.client,func.sum(Sale.total_amount).label("revenue"),func.count(Sale.id).label("checks")).group_by(bucket,Sale.client).order_by(bucket),date_from,date_to,department,client,price_type,promotion,clients=buyer_clients)
+ return aggregate_buyer_type_dynamics((await db.execute(q)).all(),client_types)
 @router.get("/departments")
 async def departments(date_from:date|None=None,date_to:date|None=None,department:str|None=None,buyer_type:str|None=None,db:AsyncSession=Depends(get_db)):
  buyer_clients=await resolve_buyer_type(buyer_type)
