@@ -66,6 +66,13 @@ def _integration_search(payload):
  request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/integration/products/search",data=json.dumps(payload).encode(),headers=headers,method="POST")
  with urlopen(request,timeout=30) as response:return json.load(response)
 
+def _integration_batch(payload):
+ from app.config import settings
+ headers={"Accept":"application/json","Content-Type":"application/json"}
+ if settings.vrcatalog_api_token:headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
+ request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/integration/products/batch-info",data=json.dumps(payload).encode(),headers=headers,method="POST")
+ with urlopen(request,timeout=30) as response:return json.load(response)
+
 def _integration_get(path:str,params:dict|None=None):
  from app.config import settings
  headers={"Accept":"application/json"}
@@ -88,6 +95,21 @@ async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,se
  try:return await asyncio.to_thread(_integration_search,payload)
  except VrCatalogError:raise
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+def _catalog_key(prefix:str,value):return f"{prefix}:{str(value).strip().lower()}" if value and str(value).strip() else None
+
+async def get_catalog_batch_info(products:list[dict]):
+ unique={(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):(item.get("code"),item.get("article")) for item in products if item.get("code") or item.get("article")}
+ if len(unique)>5000:raise VrCatalogError("Нельзя проверить более 5000 товаров за один запрос")
+ payload={"products":[{"code":code,"article":article} for code,article in unique.values()]}
+ try:response=await asyncio.to_thread(_integration_batch,payload)
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ result={}
+ for item in _source(response):
+  if not isinstance(item,dict):continue
+  for key in (_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):
+   if key:result[key]=item
+ return result
 
 def _pagination(payload):
  if not isinstance(payload,dict):return {}
@@ -117,55 +139,17 @@ async def get_horeca_keys():
 
 async def get_catalog_images(wanted_keys:set[str]):
  global image_cache
-
  values=dict(image_cache[1]) if image_cache and time.monotonic()-image_cache[0]<300 else {}
-
- missing=wanted_keys-set(values)
-
- if not missing:
-  return {key:values[key] for key in wanted_keys if key in values}
-
+ if wanted_keys.issubset(values):return {key:values[key] for key in wanted_keys}
  try:
-  for wanted_key in missing:
-   if ":" not in wanted_key:
-    continue
-
-   _,search_value=wanted_key.split(":",1)
-   search_value=search_value.strip()
-
-   if not search_value:
-    continue
-
-   payload=await search_catalog_products(
-    filters={},
-    search=search_value,
-    page=1,
-    page_size=50,
-   )
-
-   items=_source(payload)
-   page_images=catalog_product_images(items)
-
-   if any(
-    not urlparse(value).scheme and not value.startswith("data:")
-    for value in page_images.values()
-   ):
+  for wanted in wanted_keys-values.keys():
+   _,search=wanted.split(":",1);payload=await search_catalog_products(filters={},search=search,page=1,page_size=50);page_images=catalog_product_images(payload)
+   if any(not urlparse(value).scheme and not value.startswith("data:") for value in page_images.values()):
     from app.config import settings
-    page_images=catalog_product_images(items,settings.vrcatalog_api_url)
-
-   values.update(page_images)
-
- except Exception as exc:
-  raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
- image_cache=(time.monotonic(),values)
-
- return {
-  key:values[key]
-  for key in wanted_keys
-  if key in values
- }
-
+    page_images=catalog_product_images(payload,settings.vrcatalog_api_url)
+   if wanted in page_images:values[wanted]=page_images[wanted]
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ image_cache=(time.monotonic(),values);return {key:values[key] for key in wanted_keys if key in values}
 
 def is_horeca(keys:set[str],article,code):
  return any(value and f"{prefix}:{str(value).strip().lower()}" in keys for prefix,value in (("article",article),("code",code)))

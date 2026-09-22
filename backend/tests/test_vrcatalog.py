@@ -92,3 +92,17 @@ def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
  payload={"items":[{"id":1,"code":"001","article":"A1","name":"Товар","image_url":"https://catalog/image.jpg","properties":[]}],"total":1,"page":1,"page_size":50,"pages":1}
  monkeypatch.setattr(vrcatalog,"_integration_search",lambda request:payload)
  assert asyncio.run(vrcatalog.search_catalog_products(filters={"brand":["VR"]},search="товар",page=1,page_size=50))==payload
+
+def test_catalog_batch_info_is_one_request_and_maps_code_and_article(monkeypatch):
+ calls=[]
+ def batch(payload):
+  calls.append(payload);return {"items":[{"code":" A-1 ","article":"ART-1","name":"Товар","horeca":False,"image_url":"https://img/1.jpg"}]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":"A-1","article":"ART-1"},{"code":"A-1","article":"ART-1"}]))
+ assert result["code:a-1"]["image_url"]=="https://img/1.jpg"
+ assert result["article:art-1"]["horeca"] is False
+ assert calls==[{"products":[{"code":"A-1","article":"ART-1"}]}]
+
+def test_catalog_batch_info_rejects_more_than_5000_products():
+ with pytest.raises(VrCatalogError,match="5000"):
+  asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(5001)]))

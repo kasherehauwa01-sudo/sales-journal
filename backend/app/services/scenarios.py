@@ -8,9 +8,9 @@ from app.database import SessionLocal
 from app.models import HorecaReport,Sale,SaleItem,Scenario,ScenarioRun,SmtpConfig
 from app.services.clients_vr import get_manager_clients
 from app.services.scenario_periods import months_before,report_period
-from app.services.vrcatalog import get_catalog_images,get_horeca_keys
+from app.services.vrcatalog import get_catalog_batch_info
 from app.services.email_recipients import parse_recipient_emails
-from app.services.horeca_report_utils import build_horeca_products,limit_horeca_products
+from app.services.horeca_report_utils import build_horeca_products_from_info,limit_horeca_products
 
 def _send(config:SmtpConfig,to:str|list[str],subject:str,body:str,attachment:bytes|None=None):
  recipients=[to] if isinstance(to,str) else to
@@ -37,8 +37,7 @@ async def run_scenario(scenario:Scenario,run_date:date,period_override:tuple[dat
   async def quantities(start,end):
    q=select(*group,func.sum(SaleItem.quantity).label("units")).join(Sale).where(Sale.sale_date.between(start,end),client_filter).group_by(*group)
    return (await db.execute(q)).all()
-  current=await quantities(*period);three_start=months_before(period[1],3)+timedelta(days=1);three=await quantities(three_start,period[1]);horeca_keys=await get_horeca_keys();products=limit_horeca_products(build_horeca_products(current,three,horeca_keys));images=await get_catalog_images({item["key"] for item in products})
-  for item in products:item["photo"]=images.get(item["key"])
+  current=await quantities(*period);three_start=months_before(period[1],3)+timedelta(days=1);three=await quantities(three_start,period[1]);catalog_info=await get_catalog_batch_info([{"article":row[0],"code":row[1]} for row in current]);products=limit_horeca_products(build_horeca_products_from_info(current,three,catalog_info))
   report=HorecaReport(token=secrets.token_urlsafe(32),scenario_id=scenario.id,period_start=period[0],period_end=period[1],products=products);db.add(report);await db.commit();link=f"{settings.public_url.rstrip('/')}/reports/horeca/{report.token}";period_text=f"Период отчета: {period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}"
   recipients=parse_recipient_emails(scenario.email);await asyncio.to_thread(_send,smtp,recipients,"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}\n\nОткрыть перечень товаров: {link}".strip())
   return {"date_from":period[0],"date_to":period[1],"recipients":recipients,"link":link,"products":len(products)}
