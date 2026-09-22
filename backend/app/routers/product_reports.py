@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import ProductReportSet,Sale,SaleItem
 from app.services.clients_vr import ClientsVrError,get_client_managers,get_manager_clients
 from app.services.product_report_utils import normalize_identifier as _norm,percent_change as _change,previous_period as _previous,product_key as _product_key
+from app.services.vrcatalog import VrCatalogError,get_product_filter_options,get_product_filters,search_catalog_products
 
 router=APIRouter(prefix="/reports/product-sales",tags=["Отчеты"])
 
@@ -18,6 +19,7 @@ class ReportRequest(BaseModel):
  date_from:date;date_to:date;manager:str|None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False
 class DetailRequest(ReportRequest):product:ProductRef
 class SetIn(BaseModel):name:str=Field(min_length=1,max_length=255);products:list[ProductRef]
+class CatalogSearch(BaseModel):filters:dict[str,list[str]]=Field(default_factory=dict);search:str="";page:int=Field(1,ge=1);page_size:int=Field(50,ge=1,le=500)
 
 def _product_condition(products):
  codes={_norm(x.code) for x in products if _norm(x.code)};articles={_norm(x.article) for x in products if not _norm(x.code) and _norm(x.article)};names={_norm(x.name) for x in products if not _norm(x.code) and not _norm(x.article)};parts=[]
@@ -114,7 +116,19 @@ async def update_set(set_id:int,data:SetIn,db:AsyncSession=Depends(get_db)):
 async def delete_set(set_id:int,db:AsyncSession=Depends(get_db)):await db.execute(delete(ProductReportSet).where(ProductReportSet.id==set_id));await db.commit();return Response(status_code=204)
 
 @router.get("/catalog/filters")
-async def catalog_filters():raise HTTPException(501,"CatalogVR пока не предоставляет API метаданных фильтров. Требуется добавить endpoint справочника фильтров в CatalogVR.")
+async def catalog_filters():
+ try:return await get_product_filters()
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+
+@router.get("/catalog/filters/{filter_key}/options")
+async def catalog_filter_options(filter_key:str,search:str="",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500)):
+ try:return await get_product_filter_options(filter_key,search=search,page=page,page_size=page_size)
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+
+@router.post("/catalog/products/search")
+async def catalog_products_search(data:CatalogSearch):
+ try:return await search_catalog_products(filters=data.filters,search=data.search,page=data.page,page_size=data.page_size)
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
 
 def _sheet(book,title,headers,rows):
  sheet=book.create_sheet(title);sheet.append(headers)

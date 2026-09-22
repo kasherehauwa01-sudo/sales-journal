@@ -1,5 +1,6 @@
 import asyncio,json,time
 from urllib.parse import urljoin,urlparse
+from urllib.parse import quote,urlencode
 from urllib.request import Request,urlopen
 
 cache:tuple[float,set[str]]|None=None
@@ -65,10 +66,28 @@ def _integration_search(payload):
  request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/integration/products/search",data=json.dumps(payload).encode(),headers=headers,method="POST")
  with urlopen(request,timeout=30) as response:return json.load(response)
 
+def _integration_get(path:str,params:dict|None=None):
+ from app.config import settings
+ headers={"Accept":"application/json"}
+ if settings.vrcatalog_api_token:headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
+ query=f"?{urlencode({key:value for key,value in (params or {}).items() if value is not None})}" if params else ""
+ request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/{path.lstrip('/')}{query}",headers=headers,method="GET")
+ with urlopen(request,timeout=30) as response:return json.load(response)
+
+async def get_product_filters():
+ try:return await asyncio.to_thread(_integration_get,"integration/product-filters")
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+async def get_product_filter_options(filter_key:str,*,search:str="",page:int=1,page_size:int=100):
+ try:return await asyncio.to_thread(_integration_get,f"integration/product-filters/{quote(filter_key,safe='')}/options",{"search":search,"page":page,"page_size":page_size})
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
 async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,search:str=""):
  payload={"filters":filters,"page":page,"page_size":page_size}
  if search:payload["search"]=search
- return await asyncio.to_thread(_integration_search,payload)
+ try:return await asyncio.to_thread(_integration_search,payload)
+ except VrCatalogError:raise
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
 
 def _pagination(payload):
  if not isinstance(payload,dict):return {}

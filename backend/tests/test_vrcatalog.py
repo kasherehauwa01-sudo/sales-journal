@@ -78,3 +78,17 @@ def test_catalog_images_are_loaded_in_pages_and_cached(monkeypatch):
  assert asyncio.run(vrcatalog.get_catalog_images({"code:1"}))=={"code:1":"https://img/1.jpg"}
  assert asyncio.run(vrcatalog.get_catalog_images({"code:1"}))=={"code:1":"https://img/1.jpg"}
  assert calls==[1]
+
+def test_catalog_filter_metadata_and_options_use_integration_api(monkeypatch):
+ calls=[]
+ def request(path,params=None):
+  calls.append((path,params));return {"items":["HoReCa"]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ assert asyncio.run(vrcatalog.get_product_filters())=={"items":["HoReCa"]}
+ assert asyncio.run(vrcatalog.get_product_filter_options("property:HoReCa",search="hor",page=2,page_size=50))=={"items":["HoReCa"]}
+ assert calls==[("integration/product-filters",None),("integration/product-filters/property%3AHoReCa/options",{"search":"hor","page":2,"page_size":50})]
+
+def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
+ payload={"items":[{"id":1,"code":"001","article":"A1","name":"Товар","image_url":"https://catalog/image.jpg","properties":[]}],"total":1,"page":1,"page_size":50,"pages":1}
+ monkeypatch.setattr(vrcatalog,"_integration_search",lambda request:payload)
+ assert asyncio.run(vrcatalog.search_catalog_products(filters={"brand":["VR"]},search="товар",page=1,page_size=50))==payload
