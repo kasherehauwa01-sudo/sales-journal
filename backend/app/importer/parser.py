@@ -1,6 +1,7 @@
 import hashlib, re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
 ALIASES = {
@@ -18,6 +19,10 @@ def norm(v:Any)->str:
 def include_for_filename(filename:str,raw:dict)->bool:
  """Файлы «Авиаторов» содержат свою выборку: из них берём только одноимённое подразделение."""
  return "авиаторов" not in norm(filename) or norm(raw.get("department"))=="авиаторов"
+EXCLUDED_DOCUMENT_PREFIXES=("взв-","рнв-","врм-")
+def include_document(raw:dict)->bool:
+ """Исключает возвратные и внутренние документы до создания продажи."""
+ return not norm(raw.get("document_number")).startswith(EXCLUDED_DOCUMENT_PREFIXES)
 def compact(v:Any)->str:
  return re.sub(r"[^a-zа-я0-9%]+","",norm(v).replace("№","n"))
 LOOKUP={norm(alias):key for key,aliases in ALIASES.items() for alias in aliases}
@@ -120,11 +125,42 @@ def fingerprint(row:dict)->str:
  key="|".join([row["sale_date"].isoformat(),norm(row["document_number"]),norm(row["department"]),format(row["total_amount"],".2f")])
  return hashlib.sha256(key.encode()).hexdigest()
 
+class _HtmlTables(HTMLParser):
+ def __init__(self):super().__init__(convert_charrefs=True);self.tables=[];self.table=None;self.row=None;self.cell=None
+ def handle_starttag(self,tag,attrs):
+  tag=tag.lower()
+  if tag=="table":self.table=[]
+  elif tag=="tr" and self.table is not None:self.row=[]
+  elif tag in {"td","th"} and self.row is not None:self.cell=[]
+  elif tag=="br" and self.cell is not None:self.cell.append("\n")
+ def handle_data(self,data):
+  if self.cell is not None:self.cell.append(data)
+ def handle_endtag(self,tag):
+  tag=tag.lower()
+  if tag in {"td","th"} and self.cell is not None:
+   self.row.append("".join(self.cell).strip());self.cell=None
+  elif tag=="tr" and self.row is not None:
+   if self.row:self.table.append(self.row)
+   self.row=None
+  elif tag=="table" and self.table is not None:
+   if self.table:self.tables.append(self.table)
+   self.table=None
+def _html_rows(path:Path)->list[list[list[str]]]:
+ data=path.read_bytes();head=data[:4096].decode("ascii",errors="ignore")
+ match=re.search(r"charset\s*=\s*['\"]?([\w-]+)",head,re.I);encodings=[match.group(1)] if match else []
+ encodings.extend(["utf-8-sig","windows-1251"])
+ for encoding in encodings:
+  try:text=data.decode(encoding);break
+  except (LookupError,UnicodeDecodeError):continue
+ else:text=data.decode("utf-8",errors="replace")
+ parser=_HtmlTables();parser.feed(text);return parser.tables
 def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
  if path.suffix.lower()==".xlsx":
   import openpyxl
   wb=openpyxl.load_workbook(path,read_only=True,data_only=True)
   for ws in wb.worksheets:yield ws.title,[list(r) for r in ws.iter_rows(values_only=True)]
+ elif path.suffix.lower() in {".html",".htm"}:
+  for index,rows in enumerate(_html_rows(path),1):yield f"Таблица {index}",rows
  else:
   import xlrd
   wb=xlrd.open_workbook(path,on_demand=True)

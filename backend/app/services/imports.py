@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
-from app.importer.parser import include_for_filename, normalize_sale, read_sales
+from app.importer.parser import include_document, include_for_filename, normalize_sale, read_sales
 from app.models import ImportBatch, ImportError, Sale, SaleItem
 log=logging.getLogger(__name__)
 async def process_import(import_id:int):
@@ -15,7 +15,7 @@ async def process_import(import_id:int):
    sheet, rows=read_sales(Path(batch.stored_path)); batch.total_rows=len(rows);batch.log_text+=f"Найден лист «{sheet}», строк данных: {len(rows)}\n"; dates=[]
    for number,raw in rows:
     try:
-     if not include_for_filename(batch.filename,raw):batch.skipped_rows+=1;batch.processed_rows+=1;await db.commit();continue
+     if not include_for_filename(batch.filename,raw) or not include_document(raw):batch.skipped_rows+=1;batch.processed_rows+=1;await db.commit();continue
      data=normalize_sale(raw); dates.append(data["sale_date"]); items=data.pop("items");legacy_fingerprint=data.pop("legacy_fingerprint",None)
      fingerprints=[data["fingerprint"],legacy_fingerprint] if legacy_fingerprint else [data["fingerprint"]]
      exists=await db.scalar(select(Sale.id).where(Sale.fingerprint.in_(fingerprints)))

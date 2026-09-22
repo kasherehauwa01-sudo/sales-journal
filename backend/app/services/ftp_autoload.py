@@ -43,14 +43,14 @@ async def run_autoload():
    try:
     def list_files():
      client=_connect(config)
-     try:return [Path(name).name for name in client.nlst() if Path(name).suffix.lower() in {".xls",".xlsx"} and not Path(name).name.upper().startswith("EROOR")]
+     try:return [Path(name).name for name in client.nlst() if Path(name).suffix.lower() in {".xls",".xlsx",".html",".htm"} and not Path(name).name.upper().startswith("EROOR")]
      finally:
       try:client.quit()
       except Exception:client.close()
     filenames=await _with_retries(config,list_files)
    except Exception as exc:
     db.add(AutoImportLog(status="failed",message=f"Не удалось получить список FTP: {exc}",finished_at=datetime.now(timezone.utc)));await db.commit();return
-   if not filenames:db.add(AutoImportLog(status="empty",message="Файлы XLS/XLSX на FTP не найдены",finished_at=datetime.now(timezone.utc)));await db.commit();return
+   if not filenames:db.add(AutoImportLog(status="empty",message="Файлы XLS/XLSX/HTML на FTP не найдены",finished_at=datetime.now(timezone.utc)));await db.commit();return
    for filename in filenames:await _process_file(config,filename)
 
 async def _process_file(config:FtpConfig,filename:str):
