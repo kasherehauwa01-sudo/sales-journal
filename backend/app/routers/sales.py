@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import asc, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Sale, SaleItem
 from app.repositories.sales import filtered_sales
@@ -38,10 +39,10 @@ async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
  return {"deleted":result.rowcount or 0}
 @router.get("/{sale_id}",response_model=SaleOut)
 async def get_sale(sale_id:int,db:AsyncSession=Depends(get_db)):
- sale=await db.get(Sale,sale_id)
+ sale=await db.scalar(select(Sale).options(selectinload(Sale.items)).where(Sale.id==sale_id))
  if not sale:raise HTTPException(404,"Продажа не найдена")
  try:manager=await get_client_manager(sale.client)
- except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ except ClientsVrError:manager=None  # недоступность внешнего справочника не должна блокировать карточку продажи
  return SaleOut.model_validate(sale).model_copy(update={"manager":manager})
 @router.get("/{sale_id}/items",response_model=list[ItemOut])
 async def items(sale_id:int,db:AsyncSession=Depends(get_db)):return (await db.scalars(select(SaleItem).where(SaleItem.sale_id==sale_id))).all()
