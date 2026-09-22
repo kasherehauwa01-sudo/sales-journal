@@ -29,7 +29,11 @@ def _request(paths:list[str]):
    with urlopen(Request(f"{base}{path}",headers=headers),timeout=15) as response:return json.load(response)
   except HTTPError as exc:
    last=exc
-   if exc.code not in {404,405,422}:raise
+   # Старые публичные endpoints остаются резервным вариантом только когда
+   # integration token не настроен. При заданном, но неверном токене ошибку
+   # авторизации не маскируем обходом защищённого API.
+   retryable={404,405,422}|({401,403} if not settings.clients_vr_api_token else set())
+   if exc.code not in retryable:raise
  raise last or RuntimeError("Не найден endpoint clients_vr")
 
 def _source(payload,keys):

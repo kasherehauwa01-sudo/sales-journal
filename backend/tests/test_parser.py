@@ -110,6 +110,13 @@ def test_windows_1251_html_export_is_supported(tmp_path):
  _,rows=read_sales(path)
  assert rows[0][1]["department"]=="Европа"
 
+def test_utf16_html_export_is_supported(tmp_path):
+ path=tmp_path/"sales.html"
+ html='<html><table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>22.09.2026</td><td>РН-2</td><td>Авиаторов</td><td>200</td></tr></table></html>'
+ path.write_bytes(html.encode("utf-16"))
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-2"
+
 def test_certificate_is_subtracted_from_total_and_keeps_legacy_fingerprint():
  row=normalize_sale({**BASE,"certificate_amount":"245,50"})
  assert row["total_amount"]==Decimal("1000.00")

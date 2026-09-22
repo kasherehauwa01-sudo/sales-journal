@@ -146,8 +146,16 @@ class _HtmlTables(HTMLParser):
    if self.table:self.tables.append(self.table)
    self.table=None
 def _html_rows(path:Path)->list[list[list[str]]]:
- data=path.read_bytes();head=data[:4096].decode("ascii",errors="ignore")
- match=re.search(r"charset\s*=\s*['\"]?([\w-]+)",head,re.I);encodings=[match.group(1)] if match else []
+ data=path.read_bytes()
+ # Выгрузки 1С встречаются не только в UTF-8/Windows-1251, но и в UTF-16LE.
+ # UTF-16 без BOM формально декодируется как UTF-8 с NUL-байтами и раньше
+ # приводил к пустому списку таблиц, поэтому определяем его до чтения charset.
+ if data.startswith((b"\xff\xfe",b"\xfe\xff")):encodings=["utf-16"]
+ elif data[:200].count(b"\x00")>20:encodings=["utf-16-le"]
+ else:encodings=[]
+ head=data[:4096].decode("ascii",errors="ignore")
+ match=re.search(r"charset\s*=\s*['\"]?([\w-]+)",head,re.I)
+ if match:encodings.append(match.group(1))
  encodings.extend(["utf-8-sig","windows-1251"])
  for encoding in encodings:
   try:text=data.decode(encoding);break
