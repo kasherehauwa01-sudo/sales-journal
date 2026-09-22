@@ -1,6 +1,7 @@
 import hashlib, re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
 ALIASES = {
@@ -15,6 +16,13 @@ REQUIRED={"sale_date","document_number","department","total_amount"}
 LEGACY_COLUMNS=("row_number","sale_date","document_number","client","department","total_amount","base_amount","discount_percent","reason","author","price_type","discount_card_percent","discount_card_number","social","certificate_amount","promotion","phone","products")
 def norm(v:Any)->str:
  return re.sub(r"\s+"," ",str(v or "").replace("\xa0"," ").strip().lower().replace("ё","е"))
+def include_for_filename(filename:str,raw:dict)->bool:
+ """Файлы «Авиаторов» содержат свою выборку: из них берём только одноимённое подразделение."""
+ return "авиаторов" not in norm(filename) or norm(raw.get("department"))=="авиаторов"
+EXCLUDED_DOCUMENT_PREFIXES=("взв-","рнв-","врм-")
+def include_document(raw:dict)->bool:
+ """Исключает возвратные и внутренние документы до создания продажи."""
+ return not norm(raw.get("document_number")).startswith(EXCLUDED_DOCUMENT_PREFIXES)
 def compact(v:Any)->str:
  return re.sub(r"[^a-zа-я0-9%]+","",norm(v).replace("№","n"))
 LOOKUP={norm(alias):key for key,aliases in ALIASES.items() for alias in aliases}
@@ -117,11 +125,50 @@ def fingerprint(row:dict)->str:
  key="|".join([row["sale_date"].isoformat(),norm(row["document_number"]),norm(row["department"]),format(row["total_amount"],".2f")])
  return hashlib.sha256(key.encode()).hexdigest()
 
+class _HtmlTables(HTMLParser):
+ def __init__(self):super().__init__(convert_charrefs=True);self.tables=[];self.table=None;self.row=None;self.cell=None
+ def handle_starttag(self,tag,attrs):
+  tag=tag.lower()
+  if tag=="table":self.table=[]
+  elif tag=="tr" and self.table is not None:self.row=[]
+  elif tag in {"td","th"} and self.row is not None:self.cell=[]
+  elif tag=="br" and self.cell is not None:self.cell.append("\n")
+ def handle_data(self,data):
+  if self.cell is not None:self.cell.append(data)
+ def handle_endtag(self,tag):
+  tag=tag.lower()
+  if tag in {"td","th"} and self.cell is not None:
+   self.row.append("".join(self.cell).strip());self.cell=None
+  elif tag=="tr" and self.row is not None:
+   if self.row:self.table.append(self.row)
+   self.row=None
+  elif tag=="table" and self.table is not None:
+   if self.table:self.tables.append(self.table)
+   self.table=None
+def _html_rows(path:Path)->list[list[list[str]]]:
+ data=path.read_bytes()
+ # Выгрузки 1С встречаются не только в UTF-8/Windows-1251, но и в UTF-16LE.
+ # UTF-16 без BOM формально декодируется как UTF-8 с NUL-байтами и раньше
+ # приводил к пустому списку таблиц, поэтому определяем его до чтения charset.
+ if data.startswith((b"\xff\xfe",b"\xfe\xff")):encodings=["utf-16"]
+ elif data[:200].count(b"\x00")>20:encodings=["utf-16-le"]
+ else:encodings=[]
+ head=data[:4096].decode("ascii",errors="ignore")
+ match=re.search(r"charset\s*=\s*['\"]?([\w-]+)",head,re.I)
+ if match:encodings.append(match.group(1))
+ encodings.extend(["utf-8-sig","windows-1251"])
+ for encoding in encodings:
+  try:text=data.decode(encoding);break
+  except (LookupError,UnicodeDecodeError):continue
+ else:text=data.decode("utf-8",errors="replace")
+ parser=_HtmlTables();parser.feed(text);return parser.tables
 def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
  if path.suffix.lower()==".xlsx":
   import openpyxl
   wb=openpyxl.load_workbook(path,read_only=True,data_only=True)
   for ws in wb.worksheets:yield ws.title,[list(r) for r in ws.iter_rows(values_only=True)]
+ elif path.suffix.lower() in {".html",".htm"}:
+  for index,rows in enumerate(_html_rows(path),1):yield f"Таблица {index}",rows
  else:
   import xlrd
   wb=xlrd.open_workbook(path,on_demand=True)
@@ -144,6 +191,11 @@ def read_sales(path:Path):
  details="; ".join(diagnostics) or "в книге нет доступных листов"
  raise ValueError(f"Не найдена строка заголовков с обязательными колонками. Проверены первые 1000 строк каждого листа. {details}")
 def normalize_sale(raw:dict)->dict:
- row={"row_number":int(raw["row_number"]) if raw.get("row_number") not in (None,"") else None,"sale_date":parse_date(raw.get("sale_date")),"document_number":str(raw.get("document_number") or "").strip(),"client":str(raw.get("client") or "").strip() or None,"department":str(raw.get("department") or "").strip(),"total_amount":decimal(raw.get("total_amount")),"base_amount":decimal(raw.get("base_amount")),"discount_percent":decimal(raw.get("discount_percent"),True),"reason":str(raw.get("reason") or "").strip() or None,"author":str(raw.get("author") or "").strip() or None,"price_type":str(raw.get("price_type") or "").strip() or None,"discount_card_percent":decimal(raw.get("discount_card_percent"),True),"discount_card_number":str(raw.get("discount_card_number") or "").split(".")[0].strip() or None,"social":parse_bool(raw.get("social")),"certificate_amount":decimal(raw.get("certificate_amount")),"promotion":str(raw.get("promotion") or "").strip() or None,"phone":parse_phone(raw.get("phone")),"original_products_text":str(raw.get("products") or "").strip() or None}
+ gross_amount=decimal(raw.get("total_amount"));certificate_amount=decimal(raw.get("certificate_amount"))
+ total_amount=gross_amount-certificate_amount if gross_amount is not None and certificate_amount is not None and certificate_amount>0 else gross_amount
+ row={"row_number":int(raw["row_number"]) if raw.get("row_number") not in (None,"") else None,"sale_date":parse_date(raw.get("sale_date")),"document_number":str(raw.get("document_number") or "").strip(),"client":str(raw.get("client") or "").strip() or None,"department":str(raw.get("department") or "").strip(),"total_amount":total_amount,"base_amount":decimal(raw.get("base_amount")),"discount_percent":decimal(raw.get("discount_percent"),True),"reason":str(raw.get("reason") or "").strip() or None,"author":str(raw.get("author") or "").strip() or None,"price_type":str(raw.get("price_type") or "").strip() or None,"discount_card_percent":decimal(raw.get("discount_card_percent"),True),"discount_card_number":str(raw.get("discount_card_number") or "").split(".")[0].strip() or None,"social":parse_bool(raw.get("social")),"certificate_amount":certificate_amount,"promotion":str(raw.get("promotion") or "").strip() or None,"phone":parse_phone(raw.get("phone")),"original_products_text":str(raw.get("products") or "").strip() or None}
  if not row["document_number"] or not row["department"] or row["total_amount"] is None:raise ValueError("Не заполнены обязательные поля")
- row["fingerprint"]=fingerprint(row);row["items"]=parse_items(raw.get("products"));return row
+ row["fingerprint"]=fingerprint(row)
+ if certificate_amount is not None and certificate_amount>0:
+  legacy={**row,"total_amount":gross_amount};row["legacy_fingerprint"]=fingerprint(legacy)
+ row["items"]=parse_items(raw.get("products"));return row
