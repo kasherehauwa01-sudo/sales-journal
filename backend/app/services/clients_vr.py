@@ -66,6 +66,12 @@ def _client_managers(payload):
   if client and manager:result[str(client).strip().lower()]=str(manager).strip()
  return result
 
+def _buyer_type(item):
+ return next((item.get(key) for key in ("buyer_type","customer_type","client_type","Вид покупателя") if item.get(key)),None) if isinstance(item,dict) else None
+
+def _buyer_type_clients(payload,buyer_type):
+ return _items([item for item in _source(payload,("clients",)) if str(_buyer_type(item) or "").strip().lower()==buyer_type.strip().lower()],("client","name","client_name","full_name","Клиент"))
+
 async def _cached(key,loader):
  saved=cache.get(key)
  if saved and time.monotonic()-saved[0]<300:return saved[1]
@@ -89,6 +95,13 @@ async def get_client_manager(client:str|None):
 
 async def get_client_managers():
  return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
+
+async def get_buyer_types():
+ return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_type","customer_type","client_type","Вид покупателя")))
+
+async def get_buyer_type_clients(buyer_type:str):
+ encoded=quote(buyer_type,safe="");params=urlencode({"buyer_type":buyer_type})
+ return await _cached(f"buyer-type:{buyer_type}",lambda:_buyer_type_clients(_request([f"/integration/clients?{params}",f"/integration/buyer-types/{encoded}/clients",f"/clients?{params}",f"/buyer-types/{encoded}/clients","/integration/clients","/clients"]),buyer_type))
 
 async def resolve_manager_filter(filters:dict,loader=None):
  """Заменяет прикладной фильтр менеджера на SQL-фильтр по его клиентам."""

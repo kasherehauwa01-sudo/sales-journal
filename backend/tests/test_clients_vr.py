@@ -74,3 +74,35 @@ def test_client_manager_is_resolved_with_normalized_client_name(monkeypatch):
     )
 
     assert asyncio.run(clients_vr.get_client_manager("КОМПАНИЯ РОМАШКА")) == "Пашута М.С."
+
+
+def test_buyer_types_are_unique_and_sorted(monkeypatch):
+    monkeypatch.setattr(
+        clients_vr,
+        "_request",
+        lambda _paths: [
+            {"client": "ИП Альфа", "buyer_type": "Розница"},
+            {"client": "ООО Бета", "buyer_type": "HoReCa"},
+            {"client": "ИП Гамма", "buyer_type": "Розница"},
+        ],
+    )
+
+    assert asyncio.run(clients_vr.get_buyer_types()) == ["HoReCa", "Розница"]
+
+
+def test_buyer_type_returns_only_matching_clients_and_uses_cache(monkeypatch):
+    calls = 0
+
+    def request(_paths):
+        nonlocal calls
+        calls += 1
+        return [
+            {"client": " ИП Альфа ", "buyer_type": " Розница "},
+            {"client": "ООО Бета", "buyer_type": "HoReCa"},
+        ]
+
+    monkeypatch.setattr(clients_vr, "_request", request)
+
+    assert asyncio.run(clients_vr.get_buyer_type_clients("розница")) == ["ИП Альфа"]
+    assert asyncio.run(clients_vr.get_buyer_type_clients("розница")) == ["ИП Альфа"]
+    assert calls == 1

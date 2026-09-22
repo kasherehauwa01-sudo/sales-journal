@@ -8,15 +8,15 @@ from sqlalchemy import delete,distinct,func,or_,select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import ProductReportSet,Sale,SaleItem
-from app.services.clients_vr import ClientsVrError,get_client_managers,get_manager_clients
-from app.services.product_report_utils import normalize_identifier as _norm,percent_change as _change,previous_period as _previous,product_key as _product_key
+from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_managers,get_manager_clients
+from app.services.product_report_utils import localized_summary_rows,normalize_identifier as _norm,percent_change as _change,previous_period as _previous,product_key as _product_key
 from app.services.vrcatalog import VrCatalogError,get_product_filter_options,get_product_filters,search_catalog_products
 
 router=APIRouter(prefix="/reports/product-sales",tags=["Отчеты"])
 
 class ProductRef(BaseModel):article:str|None=None;code:str|None=None;name:str;image_url:str|None=None
 class ReportRequest(BaseModel):
- date_from:date;date_to:date;manager:str|None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False
+ date_from:date;date_to:date;manager:str|None=None;buyer_type:str|None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False
 class DetailRequest(ReportRequest):product:ProductRef
 class SetIn(BaseModel):name:str=Field(min_length=1,max_length=255);products:list[ProductRef]
 class CatalogSearch(BaseModel):filters:dict[str,list[str]]=Field(default_factory=dict);search:str="";page:int=Field(1,ge=1);page_size:int=Field(50,ge=1,le=500)
@@ -35,6 +35,10 @@ async def _conditions(data:ReportRequest,start=None,end=None):
  else:conditions.append(product_condition)
  if data.manager:
   try:clients=await get_manager_clients(data.manager)
+  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+  normalized=[_norm(x) for x in clients];conditions.append(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False)
+ if data.buyer_type:
+  try:clients=await get_buyer_type_clients(data.buyer_type)
   except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
   normalized=[_norm(x) for x in clients];conditions.append(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False)
  return conditions
@@ -142,5 +146,6 @@ async def export(data:ReportRequest,db:AsyncSession=Depends(get_db)):
  try:client_managers=await get_client_managers()
  except ClientsVrError:client_managers={}  # менеджеры в детализации необязательны для формирования Excel
  details_rows=[{**dict(x._mapping),"manager":client_managers.get(_norm(x.client),"Нет менеджера"),"quantity":float(x.quantity),"amount":float(x.amount or 0),"actual_price":float(x.actual_price or 0),"discount":float(x.discount or 0)} for x in detail_source]
- book=Workbook();book.remove(book.active);_sheet(book,"Итоги",["Показатель","Значение"],summary_data.items());_sheet(book,"Товары",["Артикул","Код","Наименование","Продано","Продажи","Чеков","Клиентов","Средняя цена","Скидка","Средняя скидка","Последняя продажа","Доля"],[(x["article"],x["code"],x["name"],x["units"],x["revenue"],x["checks"],x["clients"],x["average_price"],x["discount_amount"],x["average_discount"],x["last_sale"],x["revenue_share"]) for x in product_data]);_sheet(book,"Менеджеры",["Менеджер","Продажи","Продано","Чеков","Клиентов"],[(x["manager"],x["revenue"],x["units"],x["checks"],x["clients"]) for x in manager_data]);_sheet(book,"Подразделения",["Подразделение","Продажи","Продано","Чеков","Клиентов"],[(x["department"],x["revenue"],x["units"],x["checks"],x["clients"]) for x in department_data]);_sheet(book,"Детализация продаж",["Дата","Документ","Клиент","Менеджер","Подразделение","Количество","Сумма","Цена","Скидка"],[(x["sale_date"],x["document_number"],x["client"],x["manager"],x["department"],x["quantity"],x["amount"],x["actual_price"],x["discount"]) for x in details_rows]);output=BytesIO();book.save(output)
+
+ book=Workbook();book.remove(book.active);_sheet(book,"Итоги",["Показатель","Значение"],localized_summary_rows(summary_data));_sheet(book,"Товары",["Артикул","Код","Наименование","Продано","Продажи","Чеков","Клиентов","Средняя цена","Скидка","Средняя скидка","Последняя продажа","Доля"],[(x["article"],x["code"],x["name"],x["units"],x["revenue"],x["checks"],x["clients"],x["average_price"],x["discount_amount"],x["average_discount"],x["last_sale"],x["revenue_share"]) for x in product_data]);_sheet(book,"Менеджеры",["Менеджер","Продажи","Продано","Чеков","Клиентов"],[(x["manager"],x["revenue"],x["units"],x["checks"],x["clients"]) for x in manager_data]);_sheet(book,"Подразделения",["Подразделение","Продажи","Продано","Чеков","Клиентов"],[(x["department"],x["revenue"],x["units"],x["checks"],x["clients"]) for x in department_data]);_sheet(book,"Детализация продаж",["Дата","Документ","Клиент","Менеджер","Подразделение","Количество","Сумма","Цена","Скидка"],[(x["sale_date"],x["document_number"],x["client"],x["manager"],x["department"],x["quantity"],x["amount"],x["actual_price"],x["discount"]) for x in details_rows]);output=BytesIO();book.save(output)
  return Response(output.getvalue(),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":"attachment; filename=product-sales.xlsx"})
