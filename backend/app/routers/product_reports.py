@@ -85,7 +85,7 @@ async def managers(data:ReportRequest,db:AsyncSession=Depends(get_db)):
  if data.manager:return []
  c=await _conditions(data);q=select(Sale.client,func.sum(SaleItem.quantity*SaleItem.actual_price),func.sum(SaleItem.quantity),func.count(distinct(Sale.id))).join(Sale,Sale.id==SaleItem.sale_id).where(*c).group_by(Sale.client);rows=(await db.execute(q)).all()
  try:mapping=await get_client_managers()
- except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ except ClientsVrError:return []  # необязательный аналитический блок не должен блокировать основной отчет
  totals={}
  for client,revenue,units,checks in rows:
   manager=mapping.get(_norm(client),"Нет менеджера");item=totals.setdefault(manager,{"manager":manager,"revenue":0.0,"units":0.0,"checks":0,"clients":0});item["revenue"]+=float(revenue or 0);item["units"]+=float(units or 0);item["checks"]+=checks;item["clients"]+=1

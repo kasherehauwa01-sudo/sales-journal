@@ -74,13 +74,13 @@ async def _cached(key,loader):
  cache[key]=(time.monotonic(),values);return values
 
 async def get_managers():
- managers=await _cached("managers",lambda:_items(_request(["/managers","/clients/managers","/employees?role=manager","/clients"]),("manager","manager_name","manager_full_name","Менеджер","name","full_name")))
+ managers=await _cached("managers",lambda:_items(_request(["/integration/managers","/managers","/clients/managers","/employees?role=manager","/integration/clients","/clients"]),("manager","manager_name","manager_full_name","Менеджер","name","full_name")))
  positions={name:index for index,name in enumerate(MANAGER_ORDER)}
  return sorted(managers,key=lambda name:(positions.get(name,len(positions)),name.lower()))
 
 async def get_manager_clients(manager:str):
  encoded=quote(manager,safe="");params=urlencode({"manager":manager})
- return await _cached(f"clients:{manager}",lambda:_manager_clients(_request([f"/clients?{params}",f"/clients?manager_name={encoded}",f"/managers/{encoded}/clients",f"/clients"]),manager))
+ return await _cached(f"clients:{manager}",lambda:_manager_clients(_request([f"/integration/clients?{params}",f"/integration/clients?manager_name={encoded}",f"/integration/managers/{encoded}/clients",f"/clients?{params}",f"/clients?manager_name={encoded}",f"/managers/{encoded}/clients",f"/integration/clients",f"/clients"]),manager))
 
 async def get_client_manager(client:str|None):
  if not client:return None
@@ -88,7 +88,7 @@ async def get_client_manager(client:str|None):
  return managers.get(client.strip().lower())
 
 async def get_client_managers():
- return await _cached("client-managers",lambda:_client_managers(_request(["/clients"])))
+ return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
 
 async def resolve_manager_filter(filters:dict,loader=None):
  """Заменяет прикладной фильтр менеджера на SQL-фильтр по его клиентам."""
