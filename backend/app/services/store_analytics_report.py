@@ -11,14 +11,21 @@ def comparable_period(date_from: date, date_to: date) -> tuple[date, date]:
     return date_from - timedelta(days=days), date_from - timedelta(days=1)
 
 
-def calculated_store_metrics(revenue: float, checks: int, items: float, discount_sum: float) -> dict[str, float]:
+def calculated_store_metrics(
+    revenue: float,
+    checks: int,
+    items: float,
+    discount_sum: float,
+    discount_count: int,
+) -> dict[str, float]:
     return {
         "revenue": revenue,
         "checks": checks,
         "average_check": revenue / checks if checks else 0,
         "items": items,
         "items_per_check": items / checks if checks else 0,
-        "average_discount": discount_sum / checks if checks else 0,
+        "average_discount": discount_sum / discount_count if discount_count else 0,
+        "discount_count": discount_count,
     }
 
 
