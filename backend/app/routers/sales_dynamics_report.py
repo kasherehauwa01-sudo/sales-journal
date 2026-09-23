@@ -1,13 +1,15 @@
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError, get_buyer_type_clients, get_manager_clients
-from app.services.sales_dynamics_report import calculated_metrics, default_grouping, metric_comparison, previous_period
+from app.services.sales_dynamics_report import calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
 
 router = APIRouter(prefix="/reports/sales-dynamics", tags=["Отчеты"])
 
@@ -90,12 +92,16 @@ async def report(
 ):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
-    previous_from, previous_to = previous_period(date_from, date_to, period_kind)
-    grouping = group_by or default_grouping(date_from, date_to)
+    today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
+    effective_from, effective_to, warning = effective_period(date_from, date_to, period_kind, today)
+    if effective_from > effective_to:
+        raise HTTPException(422, warning or "В выбранном периоде пока нет загруженных данных")
+    previous_from, previous_to = previous_period(effective_from, effective_to, period_kind)
+    grouping = group_by or default_grouping(effective_from, effective_to)
     clients = await _client_filter(manager, buyer_type)
-    current = await _metrics(db, date_from, date_to, department, clients)
+    current = await _metrics(db, effective_from, effective_to, department, clients)
     previous = await _metrics(db, previous_from, previous_to, department, clients)
-    current_points = await _chart(db, date_from, date_to, grouping, department, clients)
+    current_points = await _chart(db, effective_from, effective_to, grouping, department, clients)
     previous_points = await _chart(db, previous_from, previous_to, grouping, department, clients)
     points = []
     for index in range(max(len(current_points), len(previous_points))):
@@ -103,7 +109,9 @@ async def report(
         previous_point = previous_points[index] if index < len(previous_points) else None
         points.append({"index": index + 1, "period": current_point["period"] if current_point else None, "previous_period": previous_point["period"] if previous_point else None, "current": current_point, "previous": previous_point})
     return {
-        "period": {"start": date_from, "end": date_to},
+        "period": {"start": effective_from, "end": effective_to},
+        "requested_period": {"start": date_from, "end": date_to},
+        "warning": warning,
         "previous_period": {"start": previous_from, "end": previous_to},
         "metrics": {key: metric_comparison(current[key], previous[key]) for key in current},
         "chart": {"group_by": grouping, "points": points},

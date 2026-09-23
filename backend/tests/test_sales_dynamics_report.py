@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.sales_dynamics_report import calculated_metrics, default_grouping, metric_comparison, previous_period
+from app.services.sales_dynamics_report import calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
 
 
 def test_custom_previous_period_has_same_duration():
@@ -17,6 +17,18 @@ def test_current_month_uses_same_elapsed_days():
 
 def test_current_month_comparison_is_capped_for_short_previous_month():
     assert previous_period(date(2026,3,1),date(2026,3,31),"current_month")== (date(2026,2,1),date(2026,2,28))
+
+
+def test_current_periods_exclude_today_because_data_arrives_next_day():
+    today=date(2026,9,23)
+    assert effective_period(date(2026,9,1),today,"current_month",today)[:2]==(date(2026,9,1),date(2026,9,22))
+    assert effective_period(date(2026,9,21),today,"current_week",today)[:2]==(date(2026,9,21),date(2026,9,22))
+    assert effective_period(date(2026,9,10),today,"custom",today)[:2]==(date(2026,9,10),date(2026,9,22))
+
+
+def test_past_custom_period_is_not_shortened():
+    result=effective_period(date(2026,8,1),date(2026,8,31),"custom",date(2026,9,23))
+    assert result==(date(2026,8,1),date(2026,8,31),None)
 
 
 def test_metric_change_and_zero_previous_value():

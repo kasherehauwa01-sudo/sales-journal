@@ -1,6 +1,16 @@
 from datetime import date, timedelta
 
 
+def effective_period(date_from: date, date_to: date, period_kind: str, today: date) -> tuple[date, date, str | None]:
+    """Исключает сегодняшний день: данные продаж поступают только на следующий день."""
+    if period_kind in {"current_week", "current_month", "custom"} and date_to >= today:
+        effective_to = today - timedelta(days=1)
+        if effective_to < date_from:
+            return date_from, effective_to, "За сегодняшний день данных нет. В выбранном периоде пока нет загруженных данных."
+        return date_from, effective_to, f"За сегодняшний день данных нет. Отчет построен за период {date_from:%d.%m.%Y} — {effective_to:%d.%m.%Y}."
+    return date_from, date_to, None
+
+
 def previous_period(date_from: date, date_to: date, period_kind: str) -> tuple[date, date]:
     """Возвращает календарный период сравнения для выбранного быстрого периода."""
     if period_kind == "current_week":
