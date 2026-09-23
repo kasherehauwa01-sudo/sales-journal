@@ -47,12 +47,10 @@ def _source(payload,keys):
  return []
 
 def _items(payload,keys):
- source=_source(payload,keys);result=set()
+ source=_source(payload,keys);result=[]
  for item in source:
   value=item if isinstance(item,str) else next((item.get(key) for key in keys if item.get(key)),None) if isinstance(item,dict) else None
-  if value:
-   normalized=str(value).strip()
-   if normalized:result.add(normalized)
+  if value and str(value).strip() not in result:result.append(str(value).strip())
  return sorted(result)
 
 def _manager_clients(payload,manager):
@@ -126,26 +124,11 @@ async def get_buyer_types():
  return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_types","types","values","value","label","buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")))
 
 async def get_buyer_type_clients(buyer_type:str):
- encoded=quote(buyer_type,safe="")
- params=urlencode({"buyer_type":buyer_type})
-
- # Используем облегчённый endpoint Clients VR, который возвращает
- # только уникальные имена клиентов без полных карточек.
- paths=[
-  f"/integration/buyer-types/{encoded}/client-names",
-  f"/integration/buyer-types/{encoded}/clients",
-  f"/integration/clients?{params}",
-  f"/buyer-types/{encoded}/clients",
-  f"/clients?{params}",
- ]
-
- return await _cached(
-  f"buyer-type:{buyer_type.strip().casefold()}",
-  lambda:_items(
-   _request(paths),
-   ("client","name","client_name","full_name","Клиент"),
-  ),
- )
+ encoded=quote(buyer_type,safe="");params=urlencode({"buyer_type":buyer_type})
+ # Сначала используем пакетный endpoint по виду покупателя. Полный список
+ # клиентов намеренно не запрашивается: на большой базе это приводило к timeout.
+ paths=[f"/integration/buyer-types/{encoded}/clients",f"/integration/clients?{params}",f"/buyer-types/{encoded}/clients",f"/clients?{params}"]
+ return await _cached(f"buyer-type:{buyer_type.strip().casefold()}",lambda:_buyer_type_clients(_request(paths),buyer_type))
 
 async def resolve_manager_filter(filters:dict,loader=None):
  """Заменяет прикладной фильтр менеджера на SQL-фильтр по его клиентам."""
