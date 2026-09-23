@@ -29,6 +29,15 @@ def test_missing_catalog_product_remains_visible():
     assert item["category"]=="Не заполнено"
 
 
+def test_catalog_card_fields_are_forwarded():
+    catalog={"article:карточка":{"image_url":"https://example.test/image.jpg","properties":[{"name":"Цвет","value":"Белый"}],"stocks":[{"warehouse":"Основной","quantity":7}],"prices":[{"name":"Розница","value":1000}]}}
+    item=merge_periods([row("карточка",100,1,1)],[],catalog)[0]
+    assert item["image_url"].endswith("image.jpg")
+    assert item["properties"][0]["value"]=="Белый"
+    assert item["stocks"][0]["quantity"]==7
+    assert item["prices"][0]["value"]==1000
+
+
 def test_products_are_grouped_by_brand_and_category():
     catalog={"article:а":{"brand":"Бренд","category":"Категория"},"article:б":{"brand":"Бренд","category":"Категория"}}
     items=merge_periods([row("а",100,1,1),row("б",200,2,1)],[],catalog)
