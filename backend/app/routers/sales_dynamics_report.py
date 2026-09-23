@@ -8,16 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.clients_vr import ClientsVrError, get_buyer_type_clients, get_manager_clients
+from app.services.clients_vr import ClientsVrError, get_manager_clients
+from app.services.sales_client_filters import get_sales_buyer_type_clients
 from app.services.sales_dynamics_report import align_chart_points, calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
 
 router = APIRouter(prefix="/reports/sales-dynamics", tags=["Отчеты"])
 
 
-async def _client_filter(manager: str | None, buyer_type: str | None) -> list[str] | None:
+async def _client_filter(db: AsyncSession, manager: str | None, buyer_type: str | None) -> list[str] | None:
     try:
         manager_clients = await get_manager_clients(manager) if manager else None
-        buyer_clients = await get_buyer_type_clients(buyer_type) if buyer_type else None
+        buyer_clients = await get_sales_buyer_type_clients(db, buyer_type) if buyer_type else None
     except ClientsVrError as exc:
         raise HTTPException(502, str(exc)) from exc
     if manager_clients is None:
@@ -98,7 +99,7 @@ async def report(
         raise HTTPException(422, warning or "В выбранном периоде пока нет загруженных данных")
     previous_from, previous_to = previous_period(effective_from, effective_to, period_kind)
     grouping = group_by or default_grouping(effective_from, effective_to)
-    clients = await _client_filter(manager, buyer_type)
+    clients = await _client_filter(db, manager, buyer_type)
     current = await _metrics(db, effective_from, effective_to, department, clients)
     previous = await _metrics(db, previous_from, previous_to, department, clients)
     current_points = await _chart(db, effective_from, effective_to, grouping, department, clients)
