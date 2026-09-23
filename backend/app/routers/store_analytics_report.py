@@ -37,11 +37,22 @@ def _conditions(start: date, end: date, stores: list[str], clients: list[str] | 
 
 
 def _sales(start: date, end: date, stores: list[str], clients: list[str] | None):
-    item_totals = select(SaleItem.sale_id, func.coalesce(func.sum(SaleItem.quantity), 0).label("items")).group_by(SaleItem.sale_id).subquery()
+    # Сначала ограничиваем продажи периодом и фильтрами. Это важно для большой
+    # таблицы sale_items: PostgreSQL агрегирует позиции только нужных чеков, а
+    # не строит сумму по всей истории перед применением периода.
+    filtered_sales = select(
+        Sale.id, Sale.sale_date, Sale.document_number, Sale.client,
+        func.coalesce(Sale.department, "Без подразделения").label("store"),
+        Sale.total_amount, func.coalesce(Sale.discount_percent, 0).label("discount"),
+    ).where(*_conditions(start, end, stores, clients)).cte("filtered_store_sales")
+    item_totals = select(
+        SaleItem.sale_id, func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
+    ).join(filtered_sales, filtered_sales.c.id == SaleItem.sale_id).group_by(SaleItem.sale_id).subquery()
     return select(
-        Sale.id, Sale.sale_date, Sale.document_number, Sale.client, Sale.department.label("store"), Sale.total_amount,
-        func.coalesce(Sale.discount_percent, 0).label("discount"), func.coalesce(item_totals.c.items, 0).label("items"),
-    ).outerjoin(item_totals, item_totals.c.sale_id == Sale.id).where(*_conditions(start, end, stores, clients)).subquery()
+        filtered_sales.c.id, filtered_sales.c.sale_date, filtered_sales.c.document_number,
+        filtered_sales.c.client, filtered_sales.c.store, filtered_sales.c.total_amount,
+        filtered_sales.c.discount, func.coalesce(item_totals.c.items, 0).label("items"),
+    ).outerjoin(item_totals, item_totals.c.sale_id == filtered_sales.c.id).subquery()
 
 
 async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str], clients: list[str] | None):

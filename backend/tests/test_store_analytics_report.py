@@ -31,6 +31,13 @@ def test_stores_from_both_periods_are_kept():
     assert result[1]["metrics"]["revenue"]["previous"] == 50
 
 
+def test_store_without_name_does_not_break_report():
+    current = [{"store": None, **calculated_store_metrics(100, 1, 1, 0)}]
+    result = merge_store_rows(current, [])
+    assert result[0]["store"] == "Без подразделения"
+    assert result[0]["metrics"]["revenue"]["current"] == 100
+
+
 def test_manager_and_buyer_type_clients_are_intersected(monkeypatch):
     async def managers(_value): return ["Клиент 1", "Клиент 2"]
     async def buyers(_value): return [" клиент 2 ", "Клиент 3"]

@@ -27,8 +27,8 @@ def compare_metrics(current: dict[str, float], previous: dict[str, float]) -> di
 
 
 def merge_store_rows(current: list[dict], previous: list[dict]) -> list[dict]:
-    current_by = {row["store"]: row for row in current}
-    previous_by = {row["store"]: row for row in previous}
+    current_by = {(row.get("store") or "Без подразделения"): row for row in current}
+    previous_by = {(row.get("store") or "Без подразделения"): row for row in previous}
     return [
         {"store": store, "metrics": compare_metrics(current_by.get(store, {}), previous_by.get(store, {}))}
         for store in sorted(current_by.keys() | previous_by.keys())
