@@ -83,7 +83,8 @@ def _buyer_type(item):
  return next((item.get(key) for key in ("buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя") if item.get(key)),None) if isinstance(item,dict) else None
 
 def _buyer_type_clients(payload,buyer_type):
- return _items([item for item in _source(payload,("clients",)) if str(_buyer_type(item) or "").strip().lower()==buyer_type.strip().lower()],("client","name","client_name","full_name","Клиент"))
+ no_type=buyer_type.strip().lower()=="нет"
+ return _items([item for item in _source(payload,("clients",)) if (isinstance(item,dict) and not _buyer_type(item) if no_type else str(_buyer_type(item) or "").strip().lower()==buyer_type.strip().lower())],("client","name","client_name","full_name","Клиент"))
 
 async def _cached(key,loader):
  saved=cache.get(key)
@@ -116,6 +117,8 @@ async def get_buyer_types():
  return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_types","types","values","value","label","buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")))
 
 async def get_buyer_type_clients(buyer_type:str):
+ if buyer_type.strip().lower()=="нет":
+  return await _cached("buyer-type:none",lambda:_buyer_type_clients(_request(["/integration/clients","/clients"]),buyer_type))
  encoded=quote(buyer_type,safe="");params=urlencode({"buyer_type":buyer_type})
  return await _cached(f"buyer-type:{buyer_type}",lambda:_buyer_type_clients(_request([f"/integration/clients?{params}",f"/integration/buyer-types/{encoded}/clients",f"/clients?{params}",f"/buyer-types/{encoded}/clients","/integration/clients","/clients"]),buyer_type))
 

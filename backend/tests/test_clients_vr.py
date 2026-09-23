@@ -138,6 +138,20 @@ def test_buyer_type_returns_only_matching_clients_and_uses_cache(monkeypatch):
     assert calls == 1
 
 
+def test_buyer_type_none_returns_clients_without_value(monkeypatch):
+    monkeypatch.setattr(
+        clients_vr,
+        "_request",
+        lambda paths: [
+            {"client": "Без вида", "buyer_type": None},
+            {"client": "Пустой вид", "buyer_type": ""},
+            {"client": "Розничный", "buyer_type": "Розница"},
+        ],
+    )
+
+    assert asyncio.run(clients_vr.get_buyer_type_clients("Нет")) == ["Без вида", "Пустой вид"]
+
+
 def test_public_fallback_is_used_after_unauthorized_when_token_is_not_configured(monkeypatch):
     calls = []
     settings = types.SimpleNamespace(
