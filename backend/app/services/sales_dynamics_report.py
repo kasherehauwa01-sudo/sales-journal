@@ -3,10 +3,17 @@ from datetime import date, timedelta
 
 def previous_period(date_from: date, date_to: date, period_kind: str) -> tuple[date, date]:
     """Возвращает календарный период сравнения для выбранного быстрого периода."""
-    if period_kind in {"current_week", "previous_week"}:
+    if period_kind == "current_week":
+        return date_from - timedelta(days=7), date_to - timedelta(days=7)
+    if period_kind == "previous_week":
         start = date_from - timedelta(days=7)
         return start, start + timedelta(days=6)
-    if period_kind in {"current_month", "previous_month"}:
+    if period_kind == "current_month":
+        previous_end = date_from - timedelta(days=1)
+        previous_start = previous_end.replace(day=1)
+        comparison_end = previous_start.replace(day=min(date_to.day, previous_end.day))
+        return previous_start, comparison_end
+    if period_kind == "previous_month":
         first = date_from.replace(day=1)
         previous_end = first - timedelta(days=1)
         return previous_end.replace(day=1), previous_end

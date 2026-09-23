@@ -7,12 +7,16 @@ def test_custom_previous_period_has_same_duration():
     assert previous_period(date(2026,9,1),date(2026,9,30),"custom")== (date(2026,8,2),date(2026,8,31))
 
 
-def test_calendar_week_uses_previous_full_week():
-    assert previous_period(date(2026,9,21),date(2026,9,23),"current_week")== (date(2026,9,14),date(2026,9,20))
+def test_current_week_uses_same_elapsed_weekdays():
+    assert previous_period(date(2026,9,21),date(2026,9,24),"current_week")== (date(2026,9,14),date(2026,9,17))
 
 
-def test_calendar_month_uses_previous_full_month():
-    assert previous_period(date(2026,9,1),date(2026,9,23),"current_month")== (date(2026,8,1),date(2026,8,31))
+def test_current_month_uses_same_elapsed_days():
+    assert previous_period(date(2026,9,1),date(2026,9,23),"current_month")== (date(2026,8,1),date(2026,8,23))
+
+
+def test_current_month_comparison_is_capped_for_short_previous_month():
+    assert previous_period(date(2026,3,1),date(2026,3,31),"current_month")== (date(2026,2,1),date(2026,2,28))
 
 
 def test_metric_change_and_zero_previous_value():
