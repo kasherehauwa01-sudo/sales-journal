@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine
-from app.routers import analytics,ftp,horeca_reports,imports,integrations,meta,product_reports,sales,sales_dynamics_report,store_analytics_report,settings as settings_router
+from app.routers import analytics,ftp,horeca_reports,imports,integrations,meta,product_analytics,product_reports,sales,sales_dynamics_report,store_analytics_report,settings as settings_router
 from app.services.ftp_autoload import scheduler
 from app.services.scenarios import scheduler as scenario_scheduler
 logging.basicConfig(level=settings.log_level,format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -26,6 +26,6 @@ async def lifespan(app):
  await engine.dispose()
 app=FastAPI(title=settings.app_name,root_path=settings.base_path,docs_url="/api/docs",openapi_url="/api/openapi.json",lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=settings.origins,allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
-for router in (sales.router,imports.router,analytics.router,meta.router,ftp.router,integrations.router,product_reports.router,sales_dynamics_report.router,store_analytics_report.router,horeca_reports.router,settings_router.router):app.include_router(router,prefix="/api")
+for router in (sales.router,imports.router,analytics.router,meta.router,ftp.router,integrations.router,product_reports.router,product_analytics.router,sales_dynamics_report.router,store_analytics_report.router,horeca_reports.router,settings_router.router):app.include_router(router,prefix="/api")
 @app.get("/api/health")
 async def health():return {"status":"ok"}

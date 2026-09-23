@@ -43,7 +43,7 @@ def _sales(start: date, end: date, stores: list[str], clients: list[str] | None)
     filtered_sales = select(
         Sale.id, Sale.sale_date, Sale.document_number, Sale.client,
         func.coalesce(Sale.department, "Без подразделения").label("store"),
-        Sale.total_amount, Sale.discount_percent.label("discount"),
+        Sale.total_amount, func.coalesce(Sale.discount_percent, 0).label("discount"),
     ).where(*_conditions(start, end, stores, clients)).cte("filtered_store_sales")
     item_totals = select(
         SaleItem.sale_id, func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
@@ -51,7 +51,7 @@ def _sales(start: date, end: date, stores: list[str], clients: list[str] | None)
     return select(
         filtered_sales.c.id, filtered_sales.c.sale_date, filtered_sales.c.document_number,
         filtered_sales.c.client, filtered_sales.c.store, filtered_sales.c.total_amount,
-        filtered_sales.c.discount, func.coalesce(item_totals.c["items"], 0).label("items"),
+        filtered_sales.c.discount, func.coalesce(item_totals.c.items, 0).label("items"),
     ).outerjoin(item_totals, item_totals.c.sale_id == filtered_sales.c.id).subquery()
 
 
@@ -59,32 +59,14 @@ async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str
     sales = _sales(start, end, stores, clients)
     rows = (await db.execute(select(
         sales.c.store, func.coalesce(func.sum(sales.c.total_amount), 0).label("revenue"),
-        func.count(sales.c.id).label("checks"), func.coalesce(func.sum(sales.c["items"]), 0).label("items"),
-        func.coalesce(func.sum(func.abs(sales.c.discount)), 0).label("discount_sum"),
-        func.count(sales.c.discount).label("discount_count"),
+        func.count(sales.c.id).label("checks"), func.coalesce(func.sum(sales.c.items), 0).label("items"),
+        func.coalesce(func.sum(sales.c.discount), 0).label("discount_sum"),
     ).group_by(sales.c.store))).all()
-    return [{
-        "store": row.store,
-        **calculated_store_metrics(
-            float(row.revenue),
-            int(row.checks),
-            float(row.items),
-            float(row.discount_sum),
-            int(row.discount_count),
-        ),
-    } for row in rows]
+    return [{"store": row.store, **calculated_store_metrics(float(row.revenue), int(row.checks), float(row.items), float(row.discount_sum))} for row in rows]
 
 
 def _total(rows: list[dict]):
-    discount_count = sum(x.get("discount_count", 0) for x in rows)
-    discount_sum = sum(x["average_discount"] * x.get("discount_count", 0) for x in rows)
-    return calculated_store_metrics(
-        sum(x["revenue"] for x in rows),
-        sum(x["checks"] for x in rows),
-        sum(x["items"] for x in rows),
-        discount_sum,
-        discount_count,
-    )
+    return calculated_store_metrics(sum(x["revenue"] for x in rows), sum(x["checks"] for x in rows), sum(x["items"] for x in rows), sum(x["average_discount"] * x["checks"] for x in rows))
 
 
 async def _scope(date_from: date, date_to: date, period_kind: str, stores: list[str], manager: str | None, buyer_type: str | None, db: AsyncSession):

@@ -10,21 +10,21 @@ def test_comparable_period_has_same_length():
 
 
 def test_store_metrics_use_aggregated_source_values():
-    metrics = calculated_store_metrics(1200, 3, 9, 45, 2)
-    assert metrics == {"revenue": 1200, "checks": 3, "average_check": 400, "items": 9, "items_per_check": 3, "average_discount": 22.5, "discount_count": 2}
+    metrics = calculated_store_metrics(1200, 3, 9, 45)
+    assert metrics == {"revenue": 1200, "checks": 3, "average_check": 400, "items": 9, "items_per_check": 3, "average_discount": 15}
 
 
 def test_comparison_handles_zero_previous_value():
-    current = calculated_store_metrics(100, 1, 2, 10, 1)
-    previous = calculated_store_metrics(0, 0, 0, 0, 0)
+    current = calculated_store_metrics(100, 1, 2, 10)
+    previous = calculated_store_metrics(0, 0, 0, 0)
     compared = compare_metrics(current, previous)
     assert compared["revenue"]["difference"] == 100
     assert compared["revenue"]["change_percent"] is None
 
 
 def test_stores_from_both_periods_are_kept():
-    current = [{"store": "А", **calculated_store_metrics(100, 1, 2, 5, 1)}]
-    previous = [{"store": "Б", **calculated_store_metrics(50, 1, 1, 3, 1)}]
+    current = [{"store": "А", **calculated_store_metrics(100, 1, 2, 5)}]
+    previous = [{"store": "Б", **calculated_store_metrics(50, 1, 1, 3)}]
     result = merge_store_rows(current, previous)
     assert [row["store"] for row in result] == ["А", "Б"]
     assert result[0]["metrics"]["revenue"]["current"] == 100
@@ -32,7 +32,7 @@ def test_stores_from_both_periods_are_kept():
 
 
 def test_store_without_name_does_not_break_report():
-    current = [{"store": None, **calculated_store_metrics(100, 1, 1, 0, 0)}]
+    current = [{"store": None, **calculated_store_metrics(100, 1, 1, 0)}]
     result = merge_store_rows(current, [])
     assert result[0]["store"] == "Без подразделения"
     assert result[0]["metrics"]["revenue"]["current"] == 100
