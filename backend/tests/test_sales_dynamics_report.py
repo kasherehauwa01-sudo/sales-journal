@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.sales_dynamics_report import calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
+from app.services.sales_dynamics_report import align_chart_points, calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
 
 
 def test_custom_previous_period_has_same_duration():
@@ -29,6 +29,14 @@ def test_current_periods_exclude_today_because_data_arrives_next_day():
 def test_past_custom_period_is_not_shortened():
     result=effective_period(date(2026,8,1),date(2026,8,31),"custom",date(2026,9,23))
     assert result==(date(2026,8,1),date(2026,8,31),None)
+
+
+def test_chart_does_not_add_trailing_previous_points():
+    current=[{"period":date(2026,9,21)},{"period":date(2026,9,22)}]
+    previous=[{"period":date(2026,9,14)},{"period":date(2026,9,15)},{"period":date(2026,9,16)}]
+    points=align_chart_points(current,previous)
+    assert [point["period"] for point in points]==[date(2026,9,21),date(2026,9,22)]
+    assert [point["previous_period"] for point in points]==[date(2026,9,14),date(2026,9,15)]
 
 
 def test_metric_change_and_zero_previous_value():

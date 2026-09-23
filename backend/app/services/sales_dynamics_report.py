@@ -54,3 +54,18 @@ def calculated_metrics(revenue: float, sales_count: int, items_count: float) -> 
         "average_check": revenue / sales_count if sales_count else 0,
         "average_items_per_sale": items_count / sales_count if sales_count else 0,
     }
+
+
+def align_chart_points(current_points: list[dict], previous_points: list[dict]) -> list[dict]:
+    """Сопоставляет предыдущие точки только с фактическими точками текущего периода."""
+    result = []
+    for index, current in enumerate(current_points):
+        previous = previous_points[index] if index < len(previous_points) else None
+        result.append({
+            "index": index + 1,
+            "period": current["period"],
+            "previous_period": previous["period"] if previous else None,
+            "current": current,
+            "previous": previous,
+        })
+    return result

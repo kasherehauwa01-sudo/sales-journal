@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError, get_buyer_type_clients, get_manager_clients
-from app.services.sales_dynamics_report import calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
+from app.services.sales_dynamics_report import align_chart_points, calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
 
 router = APIRouter(prefix="/reports/sales-dynamics", tags=["Отчеты"])
 
@@ -103,11 +103,7 @@ async def report(
     previous = await _metrics(db, previous_from, previous_to, department, clients)
     current_points = await _chart(db, effective_from, effective_to, grouping, department, clients)
     previous_points = await _chart(db, previous_from, previous_to, grouping, department, clients)
-    points = []
-    for index in range(max(len(current_points), len(previous_points))):
-        current_point = current_points[index] if index < len(current_points) else None
-        previous_point = previous_points[index] if index < len(previous_points) else None
-        points.append({"index": index + 1, "period": current_point["period"] if current_point else None, "previous_period": previous_point["period"] if previous_point else None, "current": current_point, "previous": previous_point})
+    points = align_chart_points(current_points, previous_points)
     return {
         "period": {"start": effective_from, "end": effective_to},
         "requested_period": {"start": date_from, "end": date_to},
