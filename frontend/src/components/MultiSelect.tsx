@@ -8,6 +8,6 @@ export function MultiSelect({options,value,onChange,placeholder='Все'}:{optio
   function toggle(option:string){onChange(value.includes(option)?value.filter(x=>x!==option):[...value,option])}
   return <div className="multi-select" ref={root}>
     <button type="button" className="multi-trigger" onClick={()=>setOpen(!open)}><span>{value.length?`Выбрано: ${value.length}`:placeholder}</span><ChevronDown size={16}/></button>
-    {open&&<div className="multi-menu">{value.length>0&&<button type="button" className="multi-clear" onClick={()=>onChange([])}><X size={14}/>Очистить</button>}{options.map(option=><label key={option}><input type="checkbox" checked={value.includes(option)} onChange={()=>toggle(option)}/><span>{option}</span></label>)}</div>}
+    {open&&<div className="multi-menu">{value.length>0&&<button type="button" className="multi-clear" onClick={()=>onChange([])}><X size={14}/>Очистить</button>}{options.length?options.map(option=><label key={option}><input type="checkbox" checked={value.includes(option)} onChange={()=>toggle(option)}/><span>{option}</span></label>):<span className="multi-empty">Подразделения не найдены</span>}</div>}
   </div>
 }
