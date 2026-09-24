@@ -1,8 +1,9 @@
-import hashlib, re
+import base64, hashlib, quopri, re
 from email import policy
 from email.parser import BytesParser
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
@@ -157,18 +158,8 @@ class _HtmlTables(HTMLParser):
   if self.table is not None:
    if self.table:self.tables.append(self.table)
    self.table=None
-def _decode_html(data:bytes)->list[str]:
- """Декодирует обычный HTML и MHTML, которым 1С иногда маскирует выгрузку .html."""
- # MHTML содержит HTML как MIME-часть, часто в quoted-printable/base64.
- if re.search(br"(?im)^content-type:\s*multipart/",data[:8192]):
-  message=BytesParser(policy=policy.default).parsebytes(data);documents=[]
-  for part in message.walk():
-   if part.get_content_type()!="text/html":continue
-   payload=part.get_payload(decode=True) or b"";charset=part.get_content_charset()
-   for encoding in filter(None,(charset,"utf-8","windows-1251")):
-    try:documents.append(payload.decode(encoding));break
-    except (LookupError,UnicodeDecodeError):continue
-  if documents:return documents
+def _decode_bytes(data:bytes,charset:str|None=None)->str:
+ """Декодирует текст выгрузки, включая UTF без BOM и типичную кодировку 1С."""
  # Определяем UTF-32/UTF-16 без BOM по распределению NUL-байтов.
  if data.startswith((b"\xff\xfe\x00\x00",b"\x00\x00\xfe\xff")):encodings=["utf-32"]
  elif data.startswith((b"\xff\xfe",b"\xfe\xff")):encodings=["utf-16"]
@@ -177,17 +168,58 @@ def _decode_html(data:bytes)->list[str]:
  else:encodings=[]
  head=data[:4096].decode("ascii",errors="ignore")
  match=re.search(r"(?:charset|encoding)\s*=\s*['\"]?([\w-]+)",head,re.I)
+ if charset:encodings.insert(0,charset)
  if match:encodings.append(match.group(1))
  encodings.extend(["utf-8-sig","windows-1251"])
  for encoding in encodings:
-  try:return [data.decode(encoding)]
+  try:return data.decode(encoding)
   except (LookupError,UnicodeDecodeError):continue
- return [data.decode("utf-8",errors="replace")]
+ return data.decode("utf-8",errors="replace")
+
+def _decode_html(data:bytes)->list[str]:
+ """Декодирует HTML/MHTML, даже если MIME-часть имеет ошибочный служебный тип."""
+ plain=_decode_bytes(data)
+ # Некоторые генераторы сохраняют MIME-заголовки в UTF-16. После первичного
+ # декодирования переводим их в ASCII-совместимый вид для стандартного парсера.
+ mime_data=data
+ if re.search(r"(?im)^(?:mime-version|content-type):",plain[:8192]):
+  mime_data=plain.encode("utf-8") if "\x00" in plain or data.startswith((b"\xff\xfe",b"\xfe\xff")) else data
+  message=BytesParser(policy=policy.default).parsebytes(mime_data);documents=[]
+  for part in message.walk():
+   if part.is_multipart():continue
+   payload=part.get_payload(decode=True)
+   if payload is None:
+    raw=part.get_payload()
+    payload=raw.encode("utf-8") if isinstance(raw,str) else b""
+   text=_decode_bytes(payload,part.get_content_charset())
+   # В реальных выгрузках 1С HTML иногда ошибочно обозначен как
+   # application/octet-stream, поэтому ориентируемся также на содержимое.
+   if part.get_content_type()=="text/html" or re.search(r"<(?:\w+:)?(?:html|table|workbook)\b",text,re.I):
+    documents.append(text)
+  if documents:return documents
+ documents=[plain]
+ # Резерв для повреждённых MHTML без корректных MIME-заголовков.
+ for decoded in (quopri.decodestring(data),):
+  text=_decode_bytes(decoded)
+  if text!=plain and re.search(r"<(?:\w+:)?table\b",text,re.I):documents.append(text)
+ compact_data=re.sub(br"\s+",b"",data)
+ try:
+  decoded=base64.b64decode(compact_data,validate=True);text=_decode_bytes(decoded)
+  if re.search(r"<(?:\w+:)?table\b",text,re.I):documents.append(text)
+ except (ValueError,base64.binascii.Error):pass
+ return documents
 def _html_rows(path:Path)->list[list[list[str]]]:
  data=path.read_bytes()
  tables=[]
  for text in _decode_html(data):
-  parser=_HtmlTables();parser.feed(text);parser.close();parser.finish();tables.extend(parser.tables)
+  candidates=[text]
+  # Бывают выгрузки, где весь документ HTML экранирован, либо таблица помещена
+  # внутрь HTML-комментария. Браузер их показывает, но HTMLParser таблиц не видит.
+  decoded=unescape(text)
+  if decoded!=text:candidates.append(decoded)
+  candidates.extend(comment for comment in re.findall(r"<!--(.*?)-->",text,re.S) if re.search(r"<table\b",comment,re.I))
+  for candidate in candidates:
+   parser=_HtmlTables();parser.feed(candidate);parser.close();parser.finish();tables.extend(parser.tables)
  return tables
 def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
  with path.open("rb") as source:signature=source.read(8)

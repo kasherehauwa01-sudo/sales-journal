@@ -140,6 +140,21 @@ Content-Transfer-Encoding: quoted-printable\r
  assert rows[0][1]["document_number"]=="РН-5"
  assert rows[0][1]["department"]=="Авиаторов"
 
+def test_mhtml_imports_html_marked_as_binary_attachment(tmp_path):
+ path=tmp_path/"binary-part.html"
+ html='<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-7</td><td>Авиаторов</td><td>700</td></tr></table>'
+ import base64
+ payload=base64.b64encode(html.encode("windows-1251")).decode("ascii")
+ path.write_text(f'''MIME-Version: 1.0\nContent-Type: multipart/related; boundary="report"\n\n--report\nContent-Type: application/octet-stream; charset=windows-1251\nContent-Transfer-Encoding: base64\n\n{payload}\n--report--\n''',encoding="ascii")
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-7"
+
+def test_escaped_html_document_is_supported(tmp_path):
+ path=tmp_path/"escaped.html"
+ path.write_text('&lt;table&gt;&lt;tr&gt;&lt;td&gt;Дата&lt;/td&gt;&lt;td&gt;№ Док.&lt;/td&gt;&lt;td&gt;Подразделение&lt;/td&gt;&lt;td&gt;Сумма&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;23.09.2026&lt;/td&gt;&lt;td&gt;РН-8&lt;/td&gt;&lt;td&gt;Авиаторов&lt;/td&gt;&lt;td&gt;800&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;',encoding="utf-8")
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-8"
+
 def test_truncated_html_table_is_still_imported(tmp_path):
  path=tmp_path/"sales.html"
  path.write_text('<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-6</td><td>Авиаторов</td><td>600</td>',encoding="utf-8")
