@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import SessionLocal
 from app.models import AutoImportLog, FtpConfig, ImportBatch
+from app.services.ftp_file_utils import importable_ftp_files
 from app.services.imports import process_import
 
 log=logging.getLogger(__name__);run_lock=asyncio.Lock()
@@ -43,7 +44,7 @@ async def run_autoload():
    try:
     def list_files():
      client=_connect(config)
-     try:return [Path(name).name for name in client.nlst() if Path(name).suffix.lower() in {".xls",".xlsx",".html",".htm"} and not Path(name).name.upper().startswith("EROOR")]
+     try:return importable_ftp_files(client.nlst())
      finally:
       try:client.quit()
       except Exception:client.close()
@@ -73,7 +74,7 @@ async def _process_file(config:FtpConfig,filename:str):
     client=_connect(config)
     try:
      if success:client.delete(filename)
-     else:client.rename(filename,f"EROOR_{filename}")
+     elif not filename.upper().startswith("EROOR_"):client.rename(filename,f"EROOR_{filename}")
     finally:
      try:client.quit()
      except Exception:client.close()
@@ -84,7 +85,8 @@ async def _process_file(config:FtpConfig,filename:str):
    try:
     def mark_error():
      client=_connect(config)
-     try:client.rename(filename,f"EROOR_{filename}")
+     try:
+      if not filename.upper().startswith("EROOR_"):client.rename(filename,f"EROOR_{filename}")
      finally:
       try:client.quit()
       except Exception:client.close()
