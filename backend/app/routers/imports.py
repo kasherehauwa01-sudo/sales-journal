@@ -15,7 +15,7 @@ async def upload(background:BackgroundTasks,files:list[UploadFile]=File(...),db:
  settings.upload_dir.mkdir(parents=True,exist_ok=True);result=[]
  for f in files:
   ext=Path(f.filename or "").suffix.lower()
-  if ext not in {".xls",".xlsx"}:raise HTTPException(415,"Поддерживаются только XLS/XLSX")
+  if ext not in {".xls",".xlsx",".html",".htm"}:raise HTTPException(415,"Поддерживаются только XLS/XLSX/HTML")
   safe=re.sub(r"[^\w. -]","_",Path(f.filename or "sales").name);path=settings.upload_dir/f"{uuid.uuid4().hex}_{safe}";content=await f.read();path.write_bytes(content)
   batch=ImportBatch(filename=safe,stored_path=str(path),file_size=len(content),status="queued");db.add(batch);await db.flush();await db.refresh(batch);result.append(batch);background.add_task(process_import,batch.id)
  await db.commit();return result
