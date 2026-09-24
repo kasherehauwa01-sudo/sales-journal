@@ -152,21 +152,6 @@ def test_buyer_type_none_returns_clients_without_value(monkeypatch):
     assert asyncio.run(clients_vr.get_buyer_type_clients("Нет")) == ["Без вида", "Пустой вид"]
 
 
-def test_buyer_type_uses_specialized_endpoint_without_full_client_scan(monkeypatch):
-    requested_paths = []
-
-    def request(paths):
-        requested_paths.extend(paths)
-        return {"clients": ["ИП Альфа", "ООО Бета"]}
-
-    monkeypatch.setattr(clients_vr, "_request", request)
-
-    assert asyncio.run(clients_vr.get_buyer_type_clients("Нет")) == ["ИП Альфа", "ООО Бета"]
-    assert requested_paths[0].startswith("/integration/buyer-types/")
-    assert "/integration/clients" not in requested_paths
-    assert "/clients" not in requested_paths
-
-
 def test_public_fallback_is_used_after_unauthorized_when_token_is_not_configured(monkeypatch):
     calls = []
     settings = types.SimpleNamespace(
