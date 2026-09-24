@@ -155,6 +155,18 @@ def test_escaped_html_document_is_supported(tmp_path):
  _,rows=read_sales(path)
  assert rows[0][1]["document_number"]=="РН-8"
 
+def test_html_rows_are_recovered_without_table_container(tmp_path):
+ path=tmp_path/"broken-report.html"
+ path.write_text('<TR><TD>Дата</TD><TD>№ Док.</TD><TD>Подразделение</TD><TD>Сумма</TD></TR><TR><TD>23.09.2026</TD><TD>РН-9</TD><TD>Авиаторов</TD><TD>900</TD></TR>',encoding="utf-8")
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-9"
+
+def test_tab_separated_report_disguised_as_html_is_supported(tmp_path):
+ path=tmp_path/"text-report.html"
+ path.write_text('Дата\t№ Док.\tПодразделение\tСумма\n23.09.2026\tРН-10\tАвиаторов\t1000\n',encoding="utf-8")
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-10"
+
 def test_truncated_html_table_is_still_imported(tmp_path):
  path=tmp_path/"sales.html"
  path.write_text('<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-6</td><td>Авиаторов</td><td>600</td>',encoding="utf-8")

@@ -208,6 +208,29 @@ def _decode_html(data:bytes)->list[str]:
   if re.search(r"<(?:\w+:)?table\b",text,re.I):documents.append(text)
  except (ValueError,base64.binascii.Error):pass
  return documents
+
+def _markup_text(value:str)->str:
+ """Преобразует содержимое HTML-ячейки в обычный текст без потери переносов."""
+ value=re.sub(r"<br\s*/?>", "\n",value,flags=re.I)
+ value=re.sub(r"<[^>]+>","",value)
+ return re.sub(r"[ \t\r\f\v]+"," ",unescape(value).replace("\xa0"," ")).strip()
+
+def _fallback_html_rows(text:str)->list[list[str]]:
+ """Извлекает строки из повреждённого HTML, который HTMLParser не собрал в таблицу."""
+ rows=[]
+ # Экспорты 1С встречаются без открывающего TABLE или с незакрытыми служебными
+ # тегами. Для них достаточно восстановить пары TR/TD (либо Row/Cell из XML).
+ for row_match in re.finditer(r"<(?:\w+:)?(?:tr|row)\b[^>]*>(.*?)(?=</(?:\w+:)?(?:tr|row)\s*>|<(?:\w+:)?(?:tr|row)\b|\Z)",text,re.I|re.S):
+  body=row_match.group(1)
+  cells=[_markup_text(match.group(1)) for match in re.finditer(r"<(?:\w+:)?(?:td|th|cell)\b[^>]*>(.*?)(?=</(?:\w+:)?(?:td|th|cell)\s*>|<(?:\w+:)?(?:td|th|cell)\b|\Z)",body,re.I|re.S)]
+  if cells:rows.append(cells)
+ if rows:return rows
+ # Последний безопасный вариант — текстовая табличная выгрузка внутри PRE или
+ # HTML-файл с неверным содержимым. Разделитель-табуляция не конфликтует с товарами.
+ plain=re.sub(r"<br\s*/?>","\n",text,flags=re.I)
+ plain=unescape(re.sub(r"<[^>]+>","",plain)).replace("\xa0"," ")
+ return [[cell.strip() for cell in line.split("\t")] for line in plain.splitlines() if line.count("\t")>=3]
+
 def _html_rows(path:Path)->list[list[list[str]]]:
  data=path.read_bytes()
  tables=[]
@@ -220,6 +243,9 @@ def _html_rows(path:Path)->list[list[list[str]]]:
   candidates.extend(comment for comment in re.findall(r"<!--(.*?)-->",text,re.S) if re.search(r"<table\b",comment,re.I))
   for candidate in candidates:
    parser=_HtmlTables();parser.feed(candidate);parser.close();parser.finish();tables.extend(parser.tables)
+   if not parser.tables:
+    recovered=_fallback_html_rows(candidate)
+    if recovered:tables.append(recovered)
  return tables
 def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
  with path.open("rb") as source:signature=source.read(8)
