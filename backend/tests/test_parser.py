@@ -117,6 +117,35 @@ def test_utf16_html_export_is_supported(tmp_path):
  _,rows=read_sales(path)
  assert rows[0][1]["document_number"]=="РН-2"
 
+def test_utf16_big_endian_html_without_bom_is_supported(tmp_path):
+ path=tmp_path/"sales.html"
+ html='<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-4</td><td>Авиаторов</td><td>400</td></tr></table>'
+ path.write_bytes(html.encode("utf-16-be"))
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-4"
+
+def test_mhtml_export_with_quoted_printable_html_is_supported(tmp_path):
+ path=tmp_path/"EROOR_РеестрРН_Авиаторов_23.09.2026.html"
+ path.write_bytes('''MIME-Version: 1.0\r
+Content-Type: multipart/related; boundary="report-boundary"\r
+\r
+--report-boundary\r
+Content-Type: text/html; charset=windows-1251\r
+Content-Transfer-Encoding: quoted-printable\r
+\r
+<html><table><tr><td>=C4=E0=F2=E0</td><td>=B9 =C4=EE=EA.</td><td>=CF=EE=E4=F0=E0=E7=E4=E5=EB=E5=ED=E8=E5</td><td>=D1=F3=EC=EC=E0</td></tr><tr><td>23.09.2026</td><td>=D0=CD-5</td><td>=C0=E2=E8=E0=F2=EE=F0=EE=E2</td><td>500</td></tr></table></html>\r
+--report-boundary--\r
+'''.encode("ascii"))
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-5"
+ assert rows[0][1]["department"]=="Авиаторов"
+
+def test_truncated_html_table_is_still_imported(tmp_path):
+ path=tmp_path/"sales.html"
+ path.write_text('<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-6</td><td>Авиаторов</td><td>600</td>',encoding="utf-8")
+ _,rows=read_sales(path)
+ assert rows[0][1]["document_number"]=="РН-6"
+
 def test_spreadsheet_xml_tags_inside_html_are_supported(tmp_path):
  path=tmp_path/"sales.html"
  path.write_text('''<?xml version="1.0"?><Workbook xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet><Table>

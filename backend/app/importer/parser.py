@@ -1,4 +1,6 @@
 import hashlib, re
+from email import policy
+from email.parser import BytesParser
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
@@ -145,23 +147,48 @@ class _HtmlTables(HTMLParser):
   elif tag=="table" and self.table is not None:
    if self.table:self.tables.append(self.table)
    self.table=None
-def _html_rows(path:Path)->list[list[list[str]]]:
- data=path.read_bytes()
- # Выгрузки 1С встречаются не только в UTF-8/Windows-1251, но и в UTF-16LE.
- # UTF-16 без BOM формально декодируется как UTF-8 с NUL-байтами и раньше
- # приводил к пустому списку таблиц, поэтому определяем его до чтения charset.
- if data.startswith((b"\xff\xfe",b"\xfe\xff")):encodings=["utf-16"]
- elif data[:200].count(b"\x00")>20:encodings=["utf-16-le"]
+ def finish(self):
+  """Сохраняет последнюю таблицу даже у обрезанного HTML без закрывающих тегов."""
+  if self.cell is not None and self.row is not None:
+   self.row.append("".join(self.cell).strip());self.cell=None
+  if self.row is not None and self.table is not None:
+   if self.row:self.table.append(self.row)
+   self.row=None
+  if self.table is not None:
+   if self.table:self.tables.append(self.table)
+   self.table=None
+def _decode_html(data:bytes)->list[str]:
+ """Декодирует обычный HTML и MHTML, которым 1С иногда маскирует выгрузку .html."""
+ # MHTML содержит HTML как MIME-часть, часто в quoted-printable/base64.
+ if re.search(br"(?im)^content-type:\s*multipart/",data[:8192]):
+  message=BytesParser(policy=policy.default).parsebytes(data);documents=[]
+  for part in message.walk():
+   if part.get_content_type()!="text/html":continue
+   payload=part.get_payload(decode=True) or b"";charset=part.get_content_charset()
+   for encoding in filter(None,(charset,"utf-8","windows-1251")):
+    try:documents.append(payload.decode(encoding));break
+    except (LookupError,UnicodeDecodeError):continue
+  if documents:return documents
+ # Определяем UTF-32/UTF-16 без BOM по распределению NUL-байтов.
+ if data.startswith((b"\xff\xfe\x00\x00",b"\x00\x00\xfe\xff")):encodings=["utf-32"]
+ elif data.startswith((b"\xff\xfe",b"\xfe\xff")):encodings=["utf-16"]
+ elif len(data)>=16 and data[1:400:2].count(0)>40:encodings=["utf-16-le"]
+ elif len(data)>=16 and data[0:400:2].count(0)>40:encodings=["utf-16-be"]
  else:encodings=[]
  head=data[:4096].decode("ascii",errors="ignore")
- match=re.search(r"charset\s*=\s*['\"]?([\w-]+)",head,re.I)
+ match=re.search(r"(?:charset|encoding)\s*=\s*['\"]?([\w-]+)",head,re.I)
  if match:encodings.append(match.group(1))
  encodings.extend(["utf-8-sig","windows-1251"])
  for encoding in encodings:
-  try:text=data.decode(encoding);break
+  try:return [data.decode(encoding)]
   except (LookupError,UnicodeDecodeError):continue
- else:text=data.decode("utf-8",errors="replace")
- parser=_HtmlTables();parser.feed(text);return parser.tables
+ return [data.decode("utf-8",errors="replace")]
+def _html_rows(path:Path)->list[list[list[str]]]:
+ data=path.read_bytes()
+ tables=[]
+ for text in _decode_html(data):
+  parser=_HtmlTables();parser.feed(text);parser.close();parser.finish();tables.extend(parser.tables)
+ return tables
 def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
  with path.open("rb") as source:signature=source.read(8)
  if path.suffix.lower()==".xlsx" or signature.startswith(b"PK\x03\x04"):
