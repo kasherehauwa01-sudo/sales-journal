@@ -19,9 +19,9 @@ from app.services.store_analytics_report import METRIC_KEYS, calculated_store_me
 router = APIRouter(prefix="/reports/store-analytics", tags=["Отчеты"])
 
 
-async def _clients(manager: str | None, buyer_type: str | None):
+async def _clients(db: AsyncSession, manager: str | None, buyer_type: str | None):
     try:
-        return await get_sales_filter_clients(manager, buyer_type)
+        return await get_sales_filter_clients(db, manager, buyer_type)
     except ClientsVrError as exc:
         raise HTTPException(502, str(exc)) from exc
 
@@ -77,7 +77,7 @@ async def _scope(date_from: date, date_to: date, period_kind: str, stores: list[
     if current_from > current_to:
         raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
     previous_from, previous_to = comparable_period(current_from, current_to)
-    clients = await _clients(manager, buyer_type)
+    clients = await _clients(db, manager, buyer_type)
     current = await _aggregates(db, current_from, current_to, stores, clients)
     previous = await _aggregates(db, previous_from, previous_to, stores, clients)
     return current_from, current_to, previous_from, previous_to, warning, clients, current, previous
@@ -91,14 +91,14 @@ async def report(date_from: date, date_to: date, period_kind: str = "custom", st
 
 @router.get("/stores/{store}/dynamics")
 async def dynamics(store: str, date_from: date, date_to: date, group_by: str | None = Query(None, pattern="^(day|week|month)$"), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
-    clients = await _clients(manager, buyer_type); grouping = group_by or default_grouping(date_from, date_to); sales = _sales(date_from, date_to, [store], clients); bucket = func.date_trunc(grouping, sales.c.sale_date).label("period")
+    clients = await _clients(db, manager, buyer_type); grouping = group_by or default_grouping(date_from, date_to); sales = _sales(date_from, date_to, [store], clients); bucket = func.date_trunc(grouping, sales.c.sale_date).label("period")
     rows = (await db.execute(select(bucket, func.sum(sales.c.total_amount).label("revenue"), func.count(sales.c.id).label("checks")).group_by(bucket).order_by(bucket))).all()
     return {"group_by": grouping, "points": [{"period": x.period.date(), "revenue": float(x.revenue or 0), "checks": x.checks, "average_check": float(x.revenue or 0) / x.checks if x.checks else 0} for x in rows]}
 
 
 @router.get("/stores/{store}/sales")
 async def store_sales(store: str, date_from: date, date_to: date, manager: str | None = None, buyer_type: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db)):
-    clients = await _clients(manager, buyer_type); sales = _sales(date_from, date_to, [store], clients); total = await db.scalar(select(func.count()).select_from(sales)) or 0
+    clients = await _clients(db, manager, buyer_type); sales = _sales(date_from, date_to, [store], clients); total = await db.scalar(select(func.count()).select_from(sales)) or 0
     rows = (await db.execute(select(sales).order_by(sales.c.sale_date.desc(), sales.c.id.desc()).offset((page - 1) * page_size).limit(page_size))).all()
     return {"items": [{**dict(x._mapping), "total_amount": float(x.total_amount), "items": float(x.items), "discount": float(x.discount)} for x in rows], "total": total, "page": page, "pages": max(1, (total + page_size - 1) // page_size)}
 

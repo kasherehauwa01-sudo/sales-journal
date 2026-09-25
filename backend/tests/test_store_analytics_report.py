@@ -39,14 +39,26 @@ def test_store_without_name_does_not_break_report():
 
 
 def test_manager_and_buyer_type_clients_are_intersected(monkeypatch):
+    db = object()
+
     async def managers(_value): return ["Клиент 1", "Клиент 2"]
-    async def buyers(_value): return [" клиент 2 ", "Клиент 3"]
+    async def buyers(_db, _value): return [" клиент 2 ", "Клиент 3"]
+
     monkeypatch.setattr(sales_client_filters, "get_manager_clients", managers)
     monkeypatch.setattr(sales_client_filters, "get_sales_buyer_type_clients", buyers)
-    assert asyncio.run(sales_client_filters.get_sales_filter_clients("Менеджер", "Розница")) == ["Клиент 2"]
+
+    assert asyncio.run(
+        sales_client_filters.get_sales_filter_clients(db, "Менеджер", "Розница")
+    ) == ["Клиент 2"]
 
 
 def test_single_client_filter_is_returned_without_intersection(monkeypatch):
-    async def buyers(_value): return ["Клиент 1"]
+    db = object()
+
+    async def buyers(_db, _value): return ["Клиент 1"]
+
     monkeypatch.setattr(sales_client_filters, "get_sales_buyer_type_clients", buyers)
-    assert asyncio.run(sales_client_filters.get_sales_filter_clients(None, "Нет")) == ["Клиент 1"]
+
+    assert asyncio.run(
+        sales_client_filters.get_sales_filter_clients(db, None, "Нет")
+    ) == ["Клиент 1"]

@@ -31,8 +31,8 @@ def _sale_conditions(start: date, end: date, stores: list[str], clients: list[st
     return result
 
 
-async def _clients(manager: str | None, buyer_type: str | None):
-    try: return await get_sales_filter_clients(manager, buyer_type)
+async def _clients(db: AsyncSession, manager: str | None, buyer_type: str | None):
+    try: return await get_sales_filter_clients(db, manager, buyer_type)
     except ClientsVrError as exc: raise HTTPException(502, str(exc)) from exc
 
 
@@ -112,7 +112,7 @@ async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, c
     start, end, warning = effective_period(date_from, date_to, period_kind, today)
     if start > end: raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
     previous_start, previous_end = comparable_period(start, end)
-    clients = await _clients(manager, buyer_type)
+    clients = await _clients(db, manager, buyer_type)
     products = await _product_keys(db, start, end, previous_start, previous_end, stores, clients)
     mapping, catalog = await _catalog_map(products)
     category_map = await _mapping_table(db, mapping)

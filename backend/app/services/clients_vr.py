@@ -47,10 +47,10 @@ def _source(payload,keys):
  return []
 
 def _items(payload,keys):
- source=_source(payload,keys);result=[]
+ source=_source(payload,keys);result=set()
  for item in source:
   value=item if isinstance(item,str) else next((item.get(key) for key in keys if item.get(key)),None) if isinstance(item,dict) else None
-  if value and str(value).strip() not in result:result.append(str(value).strip())
+  if value and str(value).strip():result.add(str(value).strip())
  return sorted(result)
 
 def _manager_clients(payload,manager):
@@ -127,7 +127,7 @@ async def get_buyer_type_clients(buyer_type:str):
  encoded=quote(buyer_type,safe="");params=urlencode({"buyer_type":buyer_type})
  # Сначала используем пакетный endpoint по виду покупателя. Полный список
  # клиентов намеренно не запрашивается: на большой базе это приводило к timeout.
- paths=[f"/integration/buyer-types/{encoded}/clients",f"/integration/clients?{params}",f"/buyer-types/{encoded}/clients",f"/clients?{params}"]
+ paths=[f"/integration/buyer-types/{encoded}/client-names",f"/integration/buyer-types/{encoded}/clients",f"/integration/clients?{params}",f"/buyer-types/{encoded}/clients",f"/clients?{params}"]
  return await _cached(f"buyer-type:{buyer_type.strip().casefold()}",lambda:_buyer_type_clients(_request(paths),buyer_type))
 
 async def resolve_manager_filter(filters:dict,loader=None):
