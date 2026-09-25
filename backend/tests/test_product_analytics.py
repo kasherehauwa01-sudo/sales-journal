@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.product_analytics import classify, group_rows, merge_periods, percent_change, previous_period, product_key, summary
+from app.services.product_analytics import catalog_property, classify, group_rows, merge_periods, percent_change, previous_period, product_key, summary
 
 
 def row(article, revenue, units, checks, **extra):
@@ -59,3 +59,8 @@ def test_comparison_period_may_be_set_separately():
 
 def test_stable_key_does_not_use_name_when_article_exists():
     assert product_key(" 123 ",None,"Старое имя")==product_key("123",None,"Новое имя")
+
+
+def test_category_supports_catalog_name_and_nested_group():
+    assert catalog_property({"category_name": "Посуда"}, "category") == "Посуда"
+    assert catalog_property({"group": {"name": "Хранение"}}, "category") == "Хранение"

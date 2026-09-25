@@ -69,12 +69,11 @@ def report_summary(rows: list[dict], current_checks: int, previous_checks: int) 
 
 
 def chart_structure(rows: list[dict], limit: int = 10) -> list[dict]:
-    active = [row for row in rows if row["current_revenue"] > 0]
+    # «Без категории» остаётся в таблице для контроля сопоставления, но не
+    # является категорией CatalogVR и потому не показывается сектором диаграммы.
+    active = [row for row in rows if row["current_revenue"] > 0 and row["category"] != UNCATEGORIZED]
     visible = active[:limit]
     others = active[limit:]
-    uncategorized = next((row for row in others if row["category"] == UNCATEGORIZED), None)
-    if uncategorized:
-        visible.append(uncategorized); others.remove(uncategorized)
     if others:
         visible.append({"category": "Прочие", "current_revenue": sum(row["current_revenue"] for row in others), "current_share": sum(row["current_share"] for row in others)})
     return [{"category": row["category"], "revenue": row["current_revenue"], "share": row["current_share"]} for row in visible]

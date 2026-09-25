@@ -107,6 +107,8 @@ async def get_catalog_batch_info(products:list[dict]):
  result={}
  for item in _source(response):
   if not isinstance(item,dict):continue
+  nested=next((item.get(key) for key in ("product","catalog_product","catalogProduct","item") if isinstance(item.get(key),dict)),None)
+  if nested:item={**item,**nested}
   for key in (_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):
    if key:result[key]=item
  return result

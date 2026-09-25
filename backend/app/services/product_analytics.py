@@ -3,7 +3,7 @@ from datetime import date, timedelta
 GROUP_FIELDS = {"product", "brand", "manufacturer", "category", "subcategory", "material"}
 PROPERTY_ALIASES = {
     "brand": ("brand", "Бренд"), "manufacturer": ("manufacturer", "Производитель"),
-    "category": ("category", "Категория"), "subcategory": ("subcategory", "Подкатегория"),
+    "category": ("category", "category_name", "categoryName", "product_category", "group", "group_name", "Категория", "Группа"), "subcategory": ("subcategory", "Подкатегория"),
     "material": ("material", "Материал"),
 }
 
@@ -26,11 +26,17 @@ def percent_change(current: float, previous: float):
 def catalog_property(product: dict, field: str) -> str:
     aliases = PROPERTY_ALIASES.get(field, (field,))
     for key in aliases:
-        if product.get(key): return str(product[key]).strip()
+        if product.get(key):
+            value = product[key]
+            if isinstance(value, dict): value = value.get("name") or value.get("title") or value.get("value") or value.get("Название")
+            if value: return str(value).strip()
     properties = product.get("properties") or product.get("attributes") or {}
     if isinstance(properties, dict):
         for key in aliases:
-            if properties.get(key): return str(properties[key]).strip()
+            if properties.get(key):
+                value = properties[key]
+                if isinstance(value, dict): value = value.get("name") or value.get("title") or value.get("value") or value.get("Название")
+                if value: return str(value).strip()
     if isinstance(properties, list):
         for item in properties:
             if not isinstance(item, dict): continue

@@ -52,8 +52,8 @@ def test_zero_previous_value_and_zero_total_change_are_safe():
     assert all(row["contribution_percent"] is None for row in rows)
 
 
-def test_structure_keeps_uncategorized_outside_other():
+def test_structure_does_not_show_uncategorized_as_catalog_category():
     current = [item(f"Категория {index}", 100-index, 1, [index]) for index in range(11)] + [item(None, 1, 1, [20])]
     structure = chart_structure(aggregate_categories(current, []), limit=10)
-    assert any(row["category"] == UNCATEGORIZED for row in structure)
+    assert all(row["category"] != UNCATEGORIZED for row in structure)
     assert any(row["category"] == "Прочие" for row in structure)

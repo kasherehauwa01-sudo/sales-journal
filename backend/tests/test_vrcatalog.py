@@ -103,6 +103,13 @@ def test_catalog_batch_info_is_one_request_and_maps_code_and_article(monkeypatch
  assert result["article:art-1"]["horeca"] is False
  assert calls==[{"products":[{"code":"A-1","article":"ART-1"}]}]
 
+def test_catalog_batch_info_unwraps_product_payload(monkeypatch):
+ def batch(_payload):
+  return {"items":[{"matched":True,"product":{"code":"A-2","article":"ART-2","category_name":"Посуда"}}]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":"A-2","article":"ART-2"}]))
+ assert result["code:a-2"]["category_name"]=="Посуда"
+
 def test_catalog_batch_info_rejects_more_than_5000_products():
  with pytest.raises(VrCatalogError,match="5000"):
   asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(5001)]))
