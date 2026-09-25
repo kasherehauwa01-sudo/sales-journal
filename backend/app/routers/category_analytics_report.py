@@ -1,11 +1,12 @@
 from datetime import date, datetime
 from io import BytesIO
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from sqlalchemy import String, and_, column, false, func, or_, select, values
+from sqlalchemy import String, and_, column, false, func, or_, select, table, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -67,21 +68,29 @@ async def _catalog_map(products: list[dict]):
     return mapped, catalog
 
 
-def _mapping_cte(mapping: list[tuple[str | None, str | None, str]]):
-    # VALUES передаёт в PostgreSQL только карту уникальных SKU, а не строки продаж.
-    return values(column("code", String), column("article", String), column("category", String), name="catalog_categories").data(mapping or [(None, None, UNCATEGORIZED)]).alias("catalog_categories")
+async def _mapping_table(db: AsyncSession, mapping: list[tuple[str | None, str | None, str]]):
+    """Загружает компактную карту CatalogVR во временную таблицу без огромного VALUES."""
+    name = f"category_map_{uuid4().hex}"
+    await db.execute(text(f"CREATE TEMP TABLE {name} (code text, article text, category text NOT NULL) ON COMMIT DROP"))
+    rows = [{"code": code, "article": article, "category": category} for code, article, category in mapping]
+    if rows:
+        # Список параметров включает executemany: размер одного SQL-запроса не
+        # растёт вместе с ассортиментом и не упирается в лимит параметров asyncpg.
+        await db.execute(text(f"INSERT INTO {name} (code, article, category) VALUES (:code, :article, :category)"), rows)
+        await db.execute(text(f"CREATE INDEX ON {name} (code)")); await db.execute(text(f"CREATE INDEX ON {name} (article)"))
+        await db.execute(text(f"ANALYZE {name}"))
+    return table(name, column("code", String), column("article", String), column("category", String))
 
 
-def _mapped_items(mapping):
-    category_map = _mapping_cte(mapping)
+def _mapped_items(category_map):
     code = func.lower(func.trim(SaleItem.code)); article = func.lower(func.trim(SaleItem.article))
     join = or_(and_(category_map.c.code.is_not(None), code == category_map.c.code), and_(or_(SaleItem.code.is_(None), func.trim(SaleItem.code) == ""), category_map.c.code.is_(None), article == category_map.c.article))
     category = func.coalesce(category_map.c.category, UNCATEGORIZED).label("category")
     return category_map, join, category
 
 
-async def _category_rows(db, start, end, stores, clients, mapping):
-    category_map, join, category = _mapped_items(mapping)
+async def _category_rows(db, start, end, stores, clients, category_map):
+    category_map, join, category = _mapped_items(category_map)
     query = select(category, func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0).label("revenue"), func.coalesce(func.sum(SaleItem.quantity), 0).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients)).group_by(category)
     rows = (await db.execute(query)).all()
     return [{"category": row.category, "revenue": float(row.revenue), "units": float(row.units), "checks": int(row.checks)} for row in rows]
@@ -100,8 +109,9 @@ async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, c
     clients = await _clients(manager, buyer_type)
     products = await _product_keys(db, start, end, previous_start, previous_end, stores, clients)
     mapping, catalog = await _catalog_map(products)
-    current = await _category_rows(db, start, end, stores, clients, mapping)
-    previous = await _category_rows(db, previous_start, previous_end, stores, clients, mapping)
+    category_map = await _mapping_table(db, mapping)
+    current = await _category_rows(db, start, end, stores, clients, category_map)
+    previous = await _category_rows(db, previous_start, previous_end, stores, clients, category_map)
     rows = aggregate_categories(current, previous)
     if category_filter: rows = [row for row in rows if row["category"].casefold() == category_filter.strip().casefold()]
     if category_filter:
@@ -110,7 +120,7 @@ async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, c
     else:
         current_checks = await _global_checks(db, start, end, stores, clients)
         previous_checks = await _global_checks(db, previous_start, previous_end, stores, clients)
-    return start, end, previous_start, previous_end, warning, clients, mapping, catalog, rows, current_checks, previous_checks
+    return start, end, previous_start, previous_end, warning, clients, category_map, catalog, rows, current_checks, previous_checks
 
 
 @router.get("")
@@ -124,8 +134,8 @@ async def report(date_from: date, date_to: date, period_kind: str = "custom", st
     return {"period": {"start": start, "end": end}, "previous_period": {"start": old_start, "end": old_end}, "warning": warning, "metrics": report_summary(rows, checks, old_checks), "categories": public_rows, "category_options": options, "structure": chart_structure(rows), "growth_drivers": sorted((row for row in public_rows if row["revenue_change"] > 0), key=lambda row: row["revenue_change"], reverse=True)[:5], "decline_drivers": sorted((row for row in public_rows if row["revenue_change"] < 0), key=lambda row: row["revenue_change"])[:5]}
 
 
-async def _product_details(db, start, end, old_start, old_end, stores, clients, mapping, category_name):
-    category_map, join, category = _mapped_items(mapping)
+async def _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name):
+    category_map, join, category = _mapped_items(category_map)
     async def period_rows(period_start, period_end):
         conditions = _sale_conditions(period_start, period_end, stores, clients)
         if category_name: conditions.append(category == category_name)
@@ -142,10 +152,10 @@ async def _product_details(db, start, end, old_start, old_end, stores, clients, 
 
 @router.get("/{category_name}/details")
 async def details(category_name: str, date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, group_by: str | None = Query(None, pattern="^(day|week|month)$"), db: AsyncSession = Depends(get_db)):
-    start, end, old_start, old_end, _, clients, mapping, _, rows, _, _ = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category_name, db)
+    start, end, old_start, old_end, _, clients, category_map, _, rows, _, _ = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category_name, db)
     if not rows: raise HTTPException(404, "Категория не найдена")
-    products = await _product_details(db, start, end, old_start, old_end, stores, clients, mapping, category_name)
-    category_map, join, category = _mapped_items(mapping); grouping = group_by or default_grouping(start, end); bucket = func.date_trunc(grouping, Sale.sale_date).label("period")
+    products = await _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name)
+    category_map, join, category = _mapped_items(category_map); grouping = group_by or default_grouping(start, end); bucket = func.date_trunc(grouping, Sale.sale_date).label("period")
     points = (await db.execute(select(bucket, func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"), func.sum(SaleItem.quantity).label("units")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients), category == category_name).group_by(bucket).order_by(bucket))).all()
     return {"category": {key: value for key, value in rows[0].items() if key != "products"}, "products": products, "group_by": grouping, "points": [{"period": row.period.date(), "revenue": float(row.revenue or 0), "units": float(row.units or 0)} for row in points]}
 
@@ -159,8 +169,8 @@ def _sheet(book, title, headers, rows):
 
 @router.get("/export/xlsx")
 async def export(date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, category: str | None = None, db: AsyncSession = Depends(get_db)):
-    start, end, old_start, old_end, _, clients, mapping, _, rows, checks, old_checks = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category, db)
-    metrics = report_summary(rows, checks, old_checks); products = await _product_details(db, start, end, old_start, old_end, stores, clients, mapping, None)
+    start, end, old_start, old_end, _, clients, category_map, _, rows, checks, old_checks = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category, db)
+    metrics = report_summary(rows, checks, old_checks); products = await _product_details(db, start, end, old_start, old_end, stores, clients, category_map, None)
     book = Workbook(); book.remove(book.active)
     _sheet(book, "Итоги", ["Показатель", "Текущий", "Предыдущий", "Изменение", "Изменение, %"], [[name, value["current"], value["previous"], value["difference"], value["change_percent"]] for name, value in metrics.items()] + [["Период", str(start), str(end), str(old_start), str(old_end)]])
     headers = ["Категория", "Выручка", "Доля, %", "Продано", "Чеков", "Средний чек", "Прошлая выручка", "Изменение", "Изменение, %", "Изменение доли, п.п.", "Вклад, %"]
