@@ -5,13 +5,6 @@ from urllib.request import Request,urlopen
 
 cache:tuple[float,set[str]]|None=None
 image_cache:tuple[float,dict[str,str]]|None=None
-
-# Кеш информации о товарах CatalogVR.
-# Нужен для аналитических отчетов, чтобы повторно не запрашивать
-# десятки тысяч уже известных товаров через batch-info.
-catalog_info_cache: dict[str, tuple[float, dict | None]] = {}
-CATALOG_INFO_CACHE_TTL = 1800
-
 class VrCatalogError(RuntimeError):pass
 
 def _source(payload):
@@ -106,70 +99,18 @@ async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,se
 def _catalog_key(prefix:str,value):return f"{prefix}:{str(value).strip().lower()}" if value and str(value).strip() else None
 
 async def get_catalog_batch_info(products:list[dict]):
- global catalog_info_cache
-
  unique={(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):(item.get("code"),item.get("article")) for item in products if item.get("code") or item.get("article")}
  if len(unique)>5000:raise VrCatalogError("Нельзя проверить более 5000 товаров за один запрос")
-
- now=time.monotonic()
+ payload={"products":[{"code":code,"article":article} for code,article in unique.values()]}
+ try:response=await asyncio.to_thread(_integration_batch,payload)
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
  result={}
- missing=[]
-
- for (code_key,article_key),(code,article) in unique.items():
-  cached=None
-
-  for key in (code_key,article_key):
-   if not key:continue
-   entry=catalog_info_cache.get(key)
-   if entry and now-entry[0]<CATALOG_INFO_CACHE_TTL:
-    cached=entry[1]
-    break
-
-  cached_entry_found=any(
-   key and (entry:=catalog_info_cache.get(key)) and now-entry[0]<CATALOG_INFO_CACHE_TTL
-   for key in (code_key,article_key)
-  )
-
-  if cached_entry_found:
-   if cached is not None:
-    if code_key:result[code_key]=cached
-    if article_key:result[article_key]=cached
-  else:
-   missing.append({"code":code,"article":article})
-
- if missing:
-  payload={"products":missing}
-  try:response=await asyncio.to_thread(_integration_batch,payload)
-  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
-  source_items=_source(response)
-  returned_keys=set()
-
-  for item in source_items:
-   if not isinstance(item,dict):continue
-   nested=next((item.get(key) for key in ("product","catalog_product","catalogProduct","item") if isinstance(item.get(key),dict)),None)
-   if nested:item={**item,**nested}
-
-   keys=(
-    _catalog_key("code",item.get("code")),
-    _catalog_key("article",item.get("article")),
-   )
-
-   for key in keys:
-    if key:
-     returned_keys.add(key)
-     result[key]=item
-     catalog_info_cache[key]=(now,item)
-
-  # Запоминаем также товары, которых CatalogVR не нашел.
-  for requested in missing:
-   code_key=_catalog_key("code",requested.get("code"))
-   article_key=_catalog_key("article",requested.get("article"))
-
-   if not any(key in returned_keys for key in (code_key,article_key) if key):
-    if code_key:catalog_info_cache[code_key]=(now,None)
-    if article_key:catalog_info_cache[article_key]=(now,None)
-
+ for item in _source(response):
+  if not isinstance(item,dict):continue
+  nested=next((item.get(key) for key in ("product","catalog_product","catalogProduct","item") if isinstance(item.get(key),dict)),None)
+  if nested:item={**item,**nested}
+  for key in (_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):
+   if key:result[key]=item
  return result
 
 def _pagination(payload):

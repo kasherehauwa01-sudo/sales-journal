@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.category_analytics import UNCATEGORIZED, aggregate_categories, chart_structure, comparable_period, report_summary
+from app.services.category_analytics import UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, report_summary
 from app.services.clients_vr import ClientsVrError
 from app.services.product_analytics import catalog_property
 from app.services.sales_client_filters import get_sales_filter_clients
@@ -31,8 +31,8 @@ def _sale_conditions(start: date, end: date, stores: list[str], clients: list[st
     return result
 
 
-async def _clients(db: AsyncSession, manager: str | None, buyer_type: str | None):
-    try: return await get_sales_filter_clients(db, manager, buyer_type)
+async def _clients(manager: str | None, buyer_type: str | None):
+    try: return await get_sales_filter_clients(manager, buyer_type)
     except ClientsVrError as exc: raise HTTPException(502, str(exc)) from exc
 
 
@@ -89,6 +89,10 @@ def _mapped_items(category_map):
     return category_map, join, category
 
 
+def _reportable_category(category):
+    return func.lower(func.trim(category)).notin_(("без категории", "без категорий"))
+
+
 async def _category_rows(db, start, end, stores, clients, category_map):
     category_map, join, category = _mapped_items(category_map)
     query = select(category, func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0).label("revenue"), func.coalesce(func.sum(SaleItem.quantity), 0).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients)).group_by(category)
@@ -96,8 +100,10 @@ async def _category_rows(db, start, end, stores, clients, category_map):
     return [{"category": row.category, "revenue": float(row.revenue), "units": float(row.units), "checks": int(row.checks)} for row in rows]
 
 
-async def _global_checks(db, start, end, stores, clients):
-    return int(await db.scalar(select(func.count(func.distinct(Sale.id))).join(SaleItem).where(*_sale_conditions(start, end, stores, clients))) or 0)
+async def _categorized_checks(db, start, end, stores, clients, category_map):
+    category_map, join, category = _mapped_items(category_map)
+    query = select(func.count(func.distinct(Sale.id))).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients), _reportable_category(category))
+    return int(await db.scalar(query) or 0)
 
 
 async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category_filter, db):
@@ -106,20 +112,20 @@ async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, c
     start, end, warning = effective_period(date_from, date_to, period_kind, today)
     if start > end: raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
     previous_start, previous_end = comparable_period(start, end)
-    clients = await _clients(db, manager, buyer_type)
+    clients = await _clients(manager, buyer_type)
     products = await _product_keys(db, start, end, previous_start, previous_end, stores, clients)
     mapping, catalog = await _catalog_map(products)
     category_map = await _mapping_table(db, mapping)
     current = await _category_rows(db, start, end, stores, clients, category_map)
     previous = await _category_rows(db, previous_start, previous_end, stores, clients, category_map)
-    rows = aggregate_categories(current, previous)
+    rows = categorized_only(aggregate_categories(current, previous))
     if category_filter: rows = [row for row in rows if row["category"].casefold() == category_filter.strip().casefold()]
     if category_filter:
         current_checks = next((row["checks"] for row in current if row["category"].casefold() == category_filter.strip().casefold()), 0)
         previous_checks = next((row["checks"] for row in previous if row["category"].casefold() == category_filter.strip().casefold()), 0)
     else:
-        current_checks = await _global_checks(db, start, end, stores, clients)
-        previous_checks = await _global_checks(db, previous_start, previous_end, stores, clients)
+        current_checks = await _categorized_checks(db, start, end, stores, clients, category_map)
+        previous_checks = await _categorized_checks(db, previous_start, previous_end, stores, clients, category_map)
     return start, end, previous_start, previous_end, warning, clients, category_map, catalog, rows, current_checks, previous_checks
 
 
@@ -138,6 +144,7 @@ async def _product_details(db, start, end, old_start, old_end, stores, clients, 
     category_map, join, category = _mapped_items(category_map)
     async def period_rows(period_start, period_end):
         conditions = _sale_conditions(period_start, period_end, stores, clients)
+        conditions.append(_reportable_category(category))
         if category_name: conditions.append(category == category_name)
         rows = (await db.execute(select(category, SaleItem.article, SaleItem.code, func.max(SaleItem.name).label("name"), func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"), func.sum(SaleItem.quantity).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*conditions).group_by(category, SaleItem.article, SaleItem.code))).all()
         return {(row.category, row.code or row.article or row.name): row for row in rows}

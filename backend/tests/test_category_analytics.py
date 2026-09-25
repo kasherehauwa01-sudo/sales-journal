@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.category_analytics import UNCATEGORIZED, aggregate_categories, chart_structure, comparable_period, percent_change, report_summary
+from app.services.category_analytics import UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, percent_change, report_summary
 
 
 def item(category, revenue, units, checks):
@@ -57,3 +57,8 @@ def test_structure_does_not_show_uncategorized_as_catalog_category():
     structure = chart_structure(aggregate_categories(current, []), limit=10)
     assert all(row["category"] != UNCATEGORIZED for row in structure)
     assert any(row["category"] == "Прочие" for row in structure)
+
+
+def test_uncategorized_rows_are_excluded_from_report_data():
+    rows = [{"category": "Посуда"}, {"category": "Без категории"}, {"category": "Без категорий"}]
+    assert categorized_only(rows) == [{"category": "Посуда"}]

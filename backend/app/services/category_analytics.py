@@ -5,6 +5,12 @@ from app.services.sales_dynamics_report import metric_comparison
 UNCATEGORIZED = "Без категории"
 
 
+def categorized_only(rows: list[dict]) -> list[dict]:
+    """Исключает техническую группу несопоставленных товаров из отчёта."""
+    excluded = {"без категории", "без категорий"}
+    return [row for row in rows if str(row.get("category") or "").strip().casefold() not in excluded]
+
+
 def comparable_period(start: date, end: date) -> tuple[date, date]:
     days = (end - start).days + 1
     return start - timedelta(days=days), start - timedelta(days=1)
@@ -71,7 +77,7 @@ def report_summary(rows: list[dict], current_checks: int, previous_checks: int) 
 def chart_structure(rows: list[dict], limit: int = 10) -> list[dict]:
     # «Без категории» остаётся в таблице для контроля сопоставления, но не
     # является категорией CatalogVR и потому не показывается сектором диаграммы.
-    active = [row for row in rows if row["current_revenue"] > 0 and row["category"] != UNCATEGORIZED]
+    active = [row for row in categorized_only(rows) if row["current_revenue"] > 0]
     visible = active[:limit]
     others = active[limit:]
     if others:
