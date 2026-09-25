@@ -9,7 +9,8 @@ from app.database import get_db
 from app.models import Sale, SaleItem
 from app.repositories.sales import filtered_sales
 from app.schemas import ItemOut, SaleOut, SalePage
-from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_manager,resolve_manager_filter
+from app.services.clients_vr import ClientsVrError,get_client_manager,resolve_manager_filter
+from app.services.sales_client_filters import get_sales_buyer_type_clients
 router=APIRouter(prefix="/sales",tags=["Продажи"])
 class SaleFilters(BaseModel):
  search:str|None=None;date_from:date|None=None;date_to:date|None=None;departments:list[str]|None=None;manager:str|None=None;buyer_type:str|None=None;client:str|None=None;author:str|None=None;price_type:str|None=None;promotion:str|None=None;social:bool|None=None;discount_card_percent:Decimal|None=None;min_amount:Decimal|None=None;max_amount:Decimal|None=None;min_discount:Decimal|None=None;max_discount:Decimal|None=None
@@ -21,7 +22,7 @@ async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),
  try:kw=await resolve_manager_filter(kw)
  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  if buyer_type:
-  try:buyer_clients=await get_buyer_type_clients(buyer_type)
+  try:buyer_clients=await get_sales_buyer_type_clients(db,buyer_type)
   except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
   if kw.get("clients") is not None:
    allowed={value.strip().lower() for value in buyer_clients};kw["clients"]=[value for value in kw["clients"] if value.strip().lower() in allowed]
@@ -38,7 +39,7 @@ async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
   except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
   buyer_type=filters.pop("buyer_type",None)
   if buyer_type:
-   try:buyer_clients=await get_buyer_type_clients(buyer_type)
+   try:buyer_clients=await get_sales_buyer_type_clients(db,buyer_type)
    except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
    if filters.get("clients") is not None:
     allowed={value.strip().lower() for value in buyer_clients};filters["clients"]=[value for value in filters["clients"] if value.strip().lower() in allowed]
