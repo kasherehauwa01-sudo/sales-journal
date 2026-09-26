@@ -37,22 +37,29 @@ def _conditions(start: date, end: date, stores: list[str], clients: list[str] | 
 
 
 def _sales(start: date, end: date, stores: list[str], clients: list[str] | None):
-    # Сначала ограничиваем продажи периодом и фильтрами. Это важно для большой
-    # таблицы sale_items: PostgreSQL агрегирует позиции только нужных чеков, а
-    # не строит сумму по всей истории перед применением периода.
-    filtered_sales = select(
+    """Формирует по одной строке на чек после применения фильтров отчёта.
+
+    Прямая группировка устраняет вложенный CTE из прежней реализации: такой
+    запрос одинаково используется сводкой, динамикой, детализацией и экспортом.
+    """
+    return select(
         Sale.id, Sale.sale_date, Sale.document_number, Sale.client,
         func.coalesce(Sale.department, "Без подразделения").label("store"),
         Sale.total_amount, func.coalesce(Sale.discount_percent, 0).label("discount"),
-    ).where(*_conditions(start, end, stores, clients)).cte("filtered_store_sales")
-    item_totals = select(
-        SaleItem.sale_id, func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
-    ).join(filtered_sales, filtered_sales.c.id == SaleItem.sale_id).group_by(SaleItem.sale_id).subquery()
-    return select(
-        filtered_sales.c.id, filtered_sales.c.sale_date, filtered_sales.c.document_number,
-        filtered_sales.c.client, filtered_sales.c.store, filtered_sales.c.total_amount,
-        filtered_sales.c.discount, func.coalesce(item_totals.c.items, 0).label("items"),
-    ).outerjoin(item_totals, item_totals.c.sale_id == filtered_sales.c.id).subquery()
+        func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
+    ).outerjoin(
+        SaleItem, SaleItem.sale_id == Sale.id,
+    ).where(
+        *_conditions(start, end, stores, clients),
+    ).group_by(
+        Sale.id,
+        Sale.sale_date,
+        Sale.document_number,
+        Sale.client,
+        Sale.department,
+        Sale.total_amount,
+        Sale.discount_percent,
+    ).subquery()
 
 
 async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str], clients: list[str] | None):
