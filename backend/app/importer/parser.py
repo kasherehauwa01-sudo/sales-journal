@@ -7,6 +7,7 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
+from app.services.client_identity import normalize_phone
 ALIASES = {
  "row_number":["№ п/п","n п/п","номер п/п"], "sale_date":["дата","дата продажи","дата документа"],
  "document_number":["№ док.","№ док","№док.","№док","n док.","№ документа","номер документа","документ"],
@@ -89,8 +90,7 @@ def parse_date(v:Any)->date:
  raise ValueError(f"Некорректная дата: {v}")
 def parse_bool(v:Any)->bool:return norm(v) in {"да","true","1","есть","социальная"}
 def parse_phone(v:Any)->str|None:
- if v in (None,""):return None
- digits=re.sub(r"\D","",str(v).split(".")[0]); return ("+7"+digits[-10:]) if len(digits)>=10 else digits or None
+ return normalize_phone(v)
 
 def parse_items(text:Any)->list[dict]:
  raw=str(text or "").strip()
