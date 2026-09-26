@@ -63,13 +63,36 @@ def _sales(start: date, end: date, stores: list[str], clients: list[str] | None)
 
 
 async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str], clients: list[str] | None):
-    sales = _sales(start, end, stores, clients)
-    rows = (await db.execute(select(
-        sales.c.store, func.coalesce(func.sum(sales.c.total_amount), 0).label("revenue"),
-        func.count(sales.c.id).label("checks"), func.coalesce(func.sum(sales.c.items), 0).label("items"),
-        func.coalesce(func.sum(sales.c.discount), 0).label("discount_sum"),
-    ).group_by(sales.c.store))).all()
-    return [{"store": row.store, **calculated_store_metrics(float(row.revenue), int(row.checks), float(row.items), float(row.discount_sum))} for row in rows]
+    """Считает продажи и товары независимыми простыми агрегатами.
+
+    Так сумма чека не размножается на число его позиций, а PostgreSQL не
+    приходится выполнять вложенную агрегацию сгруппированного подзапроса.
+    """
+    store = func.coalesce(Sale.department, "Без подразделения").label("store")
+    conditions = _conditions(start, end, stores, clients)
+    sales_rows = (await db.execute(select(
+        store,
+        func.coalesce(func.sum(Sale.total_amount), 0).label("revenue"),
+        func.count(Sale.id).label("checks"),
+        func.coalesce(func.sum(Sale.discount_percent), 0).label("discount_sum"),
+    ).where(*conditions).group_by(store))).all()
+    item_rows = (await db.execute(select(
+        store,
+        func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
+    ).select_from(SaleItem).join(Sale).where(*conditions).group_by(store))).all()
+    items_by_store = {row.store: float(row.items) for row in item_rows}
+    return [
+        {
+            "store": row.store,
+            **calculated_store_metrics(
+                float(row.revenue),
+                int(row.checks),
+                items_by_store.get(row.store, 0),
+                float(row.discount_sum),
+            ),
+        }
+        for row in sales_rows
+    ]
 
 
 def _total(rows: list[dict]):
