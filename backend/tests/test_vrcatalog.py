@@ -3,7 +3,9 @@ import pytest
 from app.services import vrcatalog
 from app.services.vrcatalog import VrCatalogError,horeca_keys,is_horeca
 
-def setup_function():vrcatalog.cache=None;vrcatalog.image_cache=None
+def setup_function():
+ vrcatalog.cache=None;vrcatalog.image_cache=None
+ vrcatalog.catalog_info_cache.clear();vrcatalog.catalog_category_cache.clear();vrcatalog.catalog_category_negative_cache.clear()
 
 def test_horeca_products_are_detected_by_article_and_code():
  payload={"items":[{"article":" A-1 ","code":"001","properties":{"HoReCa":"HoReCa"}},{"article":"A-2","properties":{"HoReCa":"Нет"}}]}
@@ -113,3 +115,42 @@ def test_catalog_batch_info_unwraps_product_payload(monkeypatch):
 def test_catalog_batch_info_rejects_more_than_5000_products():
  with pytest.raises(VrCatalogError,match="5000"):
   asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(5001)]))
+
+def test_catalog_category_map_uses_lightweight_endpoint_and_normalized_keys(monkeypatch):
+ calls=[]
+ def category_map(payload):
+  calls.append(payload);return {"items":[{"code":" 123 ","article":" AbC ","category":"Посуда"}]}
+ monkeypatch.setattr(vrcatalog,"_integration_category_map",category_map)
+ result=asyncio.run(vrcatalog.get_catalog_category_map([{"code":"123","article":"ABC"}]))
+ assert result["code:123"]["category"]=="Посуда"
+ assert result["article:abc"]["category"]=="Посуда"
+ assert calls==[{"products":[{"code":"123","article":"ABC"}]}]
+
+def test_catalog_category_map_caches_category_null_as_positive(monkeypatch):
+ calls=0
+ def category_map(_payload):
+  nonlocal calls;calls+=1;return {"items":[{"code":"1","category":None}]}
+ monkeypatch.setattr(vrcatalog,"_integration_category_map",category_map)
+ first=asyncio.run(vrcatalog.get_catalog_category_map([{"code":" 1 "}]))
+ second=asyncio.run(vrcatalog.get_catalog_category_map([{"code":"1"}]))
+ assert "code:1" in first and first["code:1"]["category"] is None
+ assert "code:1" in second and calls==1
+
+def test_catalog_category_map_negative_cache_avoids_repeated_request(monkeypatch):
+ calls=0
+ def category_map(_payload):
+  nonlocal calls;calls+=1;return {"items":[]}
+ monkeypatch.setattr(vrcatalog,"_integration_category_map",category_map)
+ assert asyncio.run(vrcatalog.get_catalog_category_map([{"code":"missing","article":"NONE"}]))=={}
+ assert asyncio.run(vrcatalog.get_catalog_category_map([{"code":" MISSING ","article":"none"}]))=={}
+ assert calls==1
+
+def test_catalog_category_map_does_not_hide_timeout(monkeypatch):
+ monkeypatch.setattr(vrcatalog,"_integration_category_map",lambda _payload:(_ for _ in ()).throw(TimeoutError("timed out")))
+ with pytest.raises(VrCatalogError,match="vrcatalog недоступен"):
+  asyncio.run(vrcatalog.get_catalog_category_map([{"code":"1"}]))
+
+def test_catalog_category_map_rejects_incomplete_response_shape(monkeypatch):
+ monkeypatch.setattr(vrcatalog,"_integration_category_map",lambda _payload:{"data":[]})
+ with pytest.raises(VrCatalogError,match="некорректную карту"):
+  asyncio.run(vrcatalog.get_catalog_category_map([{"code":"1"}]))
