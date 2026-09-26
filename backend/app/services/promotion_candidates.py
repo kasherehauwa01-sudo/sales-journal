@@ -3,6 +3,7 @@ from datetime import date
 
 UNCATEGORIZED = "Без категории"
 NOT_FOUND = "Не найдено в CatalogVR"
+TABLE_ROW_LIMIT = 300
 
 
 def percent_change(current: float, previous: float) -> float | None:
@@ -13,6 +14,11 @@ def stock_months(stock: float | None, monthly_units: float) -> float | None:
     if stock is None or monthly_units <= 0:
         return None
     return stock / monthly_units
+
+
+def table_rows(rows: list[dict]) -> list[dict]:
+    """Ограничивает только таблицу; KPI и Excel продолжают учитывать весь набор."""
+    return rows[:TABLE_ROW_LIMIT]
 
 
 def classify_candidate(row: dict, settings: dict, analysis_end: date) -> dict:

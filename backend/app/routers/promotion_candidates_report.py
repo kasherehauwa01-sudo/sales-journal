@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError
 from app.services.product_analytics import catalog_property, product_key
-from app.services.promotion_candidates import NOT_FOUND, UNCATEGORIZED, classify_candidate, percent_change
+from app.services.promotion_candidates import NOT_FOUND, TABLE_ROW_LIMIT, UNCATEGORIZED, classify_candidate, percent_change, table_rows
 from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info
 
@@ -78,7 +78,7 @@ async def _dataset(data,db):
 
 @router.post("")
 async def report(data:Request,db:AsyncSession=Depends(get_db)):
- rows,available=await _dataset(data,db);return {"items":rows,"summary":{"candidates":sum(x["status"]=="Кандидат" for x in rows),"stale":sum("Давно не продавался" in x["reasons"] for x in rows),"excess":sum("Избыточный запас" in x["reasons"] for x in rows),"decline":sum("Продажи падают" in x["reasons"] for x in rows)},"catalog_available":available,"limitations":["Историческое поле «Вид товара» не хранится в Sale/SaleItem; эффективность прошлых акций недоступна без изменения импорта." ]}
+ rows,available=await _dataset(data,db);return {"items":table_rows(rows),"total":len(rows),"table_limit":TABLE_ROW_LIMIT,"summary":{"candidates":sum(x["status"]=="Кандидат" for x in rows),"stale":sum("Давно не продавался" in x["reasons"] for x in rows),"excess":sum("Избыточный запас" in x["reasons"] for x in rows),"decline":sum("Продажи падают" in x["reasons"] for x in rows)},"catalog_available":available,"limitations":["Историческое поле «Вид товара» не хранится в Sale/SaleItem; эффективность прошлых акций недоступна без изменения импорта." ]}
 
 @router.post("/history")
 async def history(_data:Request):return {"items":[],"available":False,"message":"История недоступна: «Вид товара» не сохраняется в строках продаж. Текущее свойство CatalogVR не позволяет восстановить исторические периоды акции."}

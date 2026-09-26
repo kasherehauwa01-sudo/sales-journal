@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.promotion_candidates import classify_candidate, percent_change, stock_months
+from app.services.promotion_candidates import TABLE_ROW_LIMIT, classify_candidate, percent_change, stock_months, table_rows
 
 SETTINGS={"decline_percent":-30,"min_previous_units":5,"stale_days":30,"low_sales_units":2,"excess_stock_months":6,"min_stock":1}
 
@@ -33,3 +33,8 @@ def test_missing_catalog_and_no_stock_do_not_remove_sales():
  no_stock=classify_candidate(row(stock=0),SETTINGS,date(2026,9,30))
  assert missing["category"]=="Не найдено в CatalogVR"
  assert "Нет в наличии" in no_stock["stop_factors"]
+
+def test_table_contains_no_more_than_300_rows():
+ rows=[{"key":index} for index in range(450)]
+ assert len(table_rows(rows))==TABLE_ROW_LIMIT==300
+ assert table_rows(rows)[-1]["key"]==299
