@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.category_analytics import UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, percent_change, report_summary
+from app.services.category_analytics import NOT_FOUND, UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, percent_change, report_summary
 
 
 def item(category, revenue, units, checks):
@@ -52,13 +52,18 @@ def test_zero_previous_value_and_zero_total_change_are_safe():
     assert all(row["contribution_percent"] is None for row in rows)
 
 
-def test_structure_does_not_show_uncategorized_as_catalog_category():
+def test_structure_keeps_uncategorized_revenue_in_full_share():
     current = [item(f"Категория {index}", 100-index, 1, [index]) for index in range(11)] + [item(None, 1, 1, [20])]
     structure = chart_structure(aggregate_categories(current, []), limit=10)
-    assert all(row["category"] != UNCATEGORIZED for row in structure)
+    assert sum(row["share"] for row in structure) == 100
     assert any(row["category"] == "Прочие" for row in structure)
 
 
-def test_uncategorized_rows_are_excluded_from_report_data():
-    rows = [{"category": "Посуда"}, {"category": "Без категории"}, {"category": "Без категорий"}]
-    assert categorized_only(rows) == [{"category": "Посуда"}]
+def test_uncategorized_and_not_found_rows_are_kept_in_report_data():
+    rows = [{"category": "Посуда"}, {"category": UNCATEGORIZED}, {"category": NOT_FOUND}]
+    assert categorized_only(rows) == rows
+
+def test_all_category_revenue_and_shares_are_preserved():
+    rows = aggregate_categories([item("Посуда", 700, 2, [1]), item(UNCATEGORIZED, 200, 1, [2]), item(NOT_FOUND, 100, 1, [3])], [])
+    assert sum(row["current_revenue"] for row in rows) == 1000
+    assert sum(row["current_share"] for row in rows) == 100

@@ -12,12 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.category_analytics import UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, report_summary
+from app.services.category_analytics import NOT_FOUND, UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, report_summary
 from app.services.clients_vr import ClientsVrError
-from app.services.product_analytics import catalog_property
 from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import default_grouping, effective_period
-from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info
+from app.services.vrcatalog import CATALOG_CATEGORY_MAP_LIMIT, VrCatalogError, get_catalog_category_map
 
 router = APIRouter(prefix="/reports/category-analytics", tags=["Отчеты"])
 
@@ -50,9 +49,11 @@ async def _product_keys(db: AsyncSession, start: date, end: date, previous_start
 async def _catalog_map(products: list[dict]):
     catalog = {}
     try:
-        for offset in range(0, len(products), 5000): catalog.update(await get_catalog_batch_info(products[offset:offset + 5000]))
-    except VrCatalogError:
-        pass  # Недоступность CatalogVR не должна скрывать продажи из «Без категории».
+        # Последовательные пакеты не создают пиковую нагрузку на CatalogVR.
+        for offset in range(0, len(products), CATALOG_CATEGORY_MAP_LIMIT):
+            catalog.update(await get_catalog_category_map(products[offset:offset + CATALOG_CATEGORY_MAP_LIMIT]))
+    except VrCatalogError as exc:
+        raise HTTPException(502, "Не удалось получить категории товаров из CatalogVR. Попробуйте повторить позже.") from exc
     mapped = []; seen = set()
     for product in products:
         code = str(product.get("code") or "").strip().casefold() or None
@@ -60,10 +61,11 @@ async def _catalog_map(products: list[dict]):
         stable_key = ("code", code) if code else ("article", article) if article else None
         if stable_key and stable_key in seen: continue
         if stable_key: seen.add(stable_key)
-        info = catalog.get(f"code:{code}") if code else None
-        if not info and article: info = catalog.get(f"article:{article}")
-        category = catalog_property(info or {}, "category")
-        if category == "Не заполнено": category = UNCATEGORIZED
+        code_key = f"code:{code}" if code else None; article_key = f"article:{article}" if article else None
+        info = catalog.get(code_key) if code_key else None
+        if info is None and article_key: info = catalog.get(article_key)
+        if info is None: category = NOT_FOUND
+        else: category = str(info.get("category") or "").strip() or UNCATEGORIZED
         mapped.append((code, article, category))
     return mapped, catalog
 
@@ -89,10 +91,6 @@ def _mapped_items(category_map):
     return category_map, join, category
 
 
-def _reportable_category(category):
-    return func.lower(func.trim(category)).notin_(("без категории", "без категорий"))
-
-
 async def _category_rows(db, start, end, stores, clients, category_map):
     category_map, join, category = _mapped_items(category_map)
     query = select(category, func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0).label("revenue"), func.coalesce(func.sum(SaleItem.quantity), 0).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients)).group_by(category)
@@ -100,9 +98,8 @@ async def _category_rows(db, start, end, stores, clients, category_map):
     return [{"category": row.category, "revenue": float(row.revenue), "units": float(row.units), "checks": int(row.checks)} for row in rows]
 
 
-async def _categorized_checks(db, start, end, stores, clients, category_map):
-    category_map, join, category = _mapped_items(category_map)
-    query = select(func.count(func.distinct(Sale.id))).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients), _reportable_category(category))
+async def _scope_checks(db, start, end, stores, clients):
+    query = select(func.count(func.distinct(Sale.id))).select_from(SaleItem).join(Sale).where(*_sale_conditions(start, end, stores, clients))
     return int(await db.scalar(query) or 0)
 
 
@@ -124,8 +121,8 @@ async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, c
         current_checks = next((row["checks"] for row in current if row["category"].casefold() == category_filter.strip().casefold()), 0)
         previous_checks = next((row["checks"] for row in previous if row["category"].casefold() == category_filter.strip().casefold()), 0)
     else:
-        current_checks = await _categorized_checks(db, start, end, stores, clients, category_map)
-        previous_checks = await _categorized_checks(db, previous_start, previous_end, stores, clients, category_map)
+        current_checks = await _scope_checks(db, start, end, stores, clients)
+        previous_checks = await _scope_checks(db, previous_start, previous_end, stores, clients)
     return start, end, previous_start, previous_end, warning, clients, category_map, catalog, rows, current_checks, previous_checks
 
 
@@ -144,7 +141,6 @@ async def _product_details(db, start, end, old_start, old_end, stores, clients, 
     category_map, join, category = _mapped_items(category_map)
     async def period_rows(period_start, period_end):
         conditions = _sale_conditions(period_start, period_end, stores, clients)
-        conditions.append(_reportable_category(category))
         if category_name: conditions.append(category == category_name)
         rows = (await db.execute(select(category, SaleItem.article, SaleItem.code, func.max(SaleItem.name).label("name"), func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"), func.sum(SaleItem.quantity).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*conditions).group_by(category, SaleItem.article, SaleItem.code))).all()
         return {(row.category, row.code or row.article or row.name): row for row in rows}
