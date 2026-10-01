@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
 from app.config import settings
+from app.repositories import sales as sales_repository
 from app.routers.calltrack_integration import require_calltrack_token, sale_detail
 from app.schemas import ItemOut, SaleOut
 from app.schemas.calltrack import CALLTRACK_BATCH_LIMIT, CalltrackClientRef, CalltrackSalesRequest
@@ -112,6 +113,40 @@ def test_no_sales_is_successful_empty_result(monkeypatch):
     payload=request([CalltrackClientRef(key="c1",name="Неизвестный клиент")])
     result,calls=run_batch(monkeypatch,payload,[])
     assert result==[] and len(calls)==1
+
+
+def test_find_client_sales_disables_sale_items_loading(monkeypatch):
+    marker=object()
+    captured={}
+
+    class Query:
+        def options(self,*options):
+            captured["options"]=options;return self
+        def where(self,*_conditions):return self
+        def order_by(self,*_columns):return self
+
+    class Result:
+        def all(self):return []
+
+    class Db:
+        async def scalars(self,query):
+            captured["query"]=query;return Result()
+
+    query=Query()
+    monkeypatch.setattr(sales_repository,"select",lambda model: query)
+    monkeypatch.setattr(
+        sales_repository,
+        "noload",
+        lambda relationship: marker if relationship is sales_repository.Sale.items else None,
+    )
+
+    result=asyncio.run(sales_repository.find_client_sales(
+        Db(),phones={"+79991234567"},names=set(),
+        date_from=date(2026,9,1),date_to=date(2026,9,30),
+    ))
+
+    assert result==[]
+    assert captured=={"options":(marker,),"query":query}
 
 
 def test_ambiguous_identifiers_are_rejected(monkeypatch):
