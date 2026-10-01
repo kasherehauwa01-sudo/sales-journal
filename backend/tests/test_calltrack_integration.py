@@ -31,9 +31,8 @@ def run_batch(monkeypatch, payload, sales):
     calls=[]
     async def find(_db, **kwargs):
         calls.append(kwargs);return sales
-    async def managers():return {"ооо ромашка":"Менеджер"}
     monkeypatch.setattr(calltrack_integration,"find_client_sales",find)
-    monkeypatch.setattr(calltrack_integration,"get_client_managers",managers)
+    monkeypatch.setattr(calltrack_integration,"get_cached_client_managers",lambda:{"ооо ромашка":"Менеджер"})
     result=asyncio.run(calltrack_integration.find_sales_for_calltrack(object(),payload))
     return result,calls
 
@@ -69,9 +68,8 @@ def test_period_is_inclusive_and_excludes_outside_sales(monkeypatch):
     async def find(_db,**kwargs):
         calls.append(kwargs)
         return [row for row in candidates if kwargs["date_from"]<=row.sale_date<=kwargs["date_to"]]
-    async def managers():return {}
     monkeypatch.setattr(calltrack_integration,"find_client_sales",find)
-    monkeypatch.setattr(calltrack_integration,"get_client_managers",managers)
+    monkeypatch.setattr(calltrack_integration,"get_cached_client_managers",lambda:{})
     result=asyncio.run(calltrack_integration.find_sales_for_calltrack(object(),payload))
     assert [row.sale_id for row in result]==[1,2]
     assert len(calls)==1
@@ -83,6 +81,25 @@ def test_sale_is_deduplicated_when_phone_and_name_match(monkeypatch):
     result,_=run_batch(monkeypatch,payload,[same,same])
     assert [row.sale_id for row in result]==[100]
     assert result[0].matched_by=="phone"
+
+
+def test_empty_manager_cache_returns_sale_with_null_manager(monkeypatch):
+    payload=request([CalltrackClientRef(key="c1",phone="79991234567")])
+    async def find(_db,**_kwargs):return [sale(100)]
+    monkeypatch.setattr(calltrack_integration,"find_client_sales",find)
+    monkeypatch.setattr(calltrack_integration,"get_cached_client_managers",lambda:{})
+
+    result=asyncio.run(calltrack_integration.find_sales_for_calltrack(object(),payload))
+
+    assert result[0].manager is None
+    assert result[0].model_dump()["manager"] is None
+
+
+def test_fresh_manager_cache_enriches_sale(monkeypatch):
+    payload=request([CalltrackClientRef(key="c1",name="  ооо РОМАШКА ")])
+    result,_=run_batch(monkeypatch,payload,[sale(100,phone=None)])
+    assert result[0].matched_by=="name"
+    assert result[0].manager=="Менеджер"
 
 
 def test_similar_names_do_not_match(monkeypatch):
