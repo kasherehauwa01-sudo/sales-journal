@@ -84,6 +84,9 @@ def test_excel_fraction_is_converted_to_percent():
 def test_aviators_file_only_includes_aviators_department():
  assert include_for_filename("Продажи Авиаторов.xlsx",{"department":" АВИАТОРОВ "})
  assert not include_for_filename("Продажи Авиаторов.xlsx",{"department":"Центр"})
+ assert include_for_filename("ReestrRN_Aviatorov_30.09.2026.html",{"department":"Авиаторов"})
+ assert not include_for_filename("ReestrRN_Aviatorov_30.09.2026.html",{"department":"Центр"})
+ assert not include_for_filename("REESTR_AVIATOROV.HTML",{"department":"Центр"})
  assert include_for_filename("Общие продажи.xlsx",{"department":"Центр"})
 
 def test_return_and_internal_document_prefixes_are_skipped():

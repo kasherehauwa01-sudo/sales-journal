@@ -7,6 +7,7 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
+from app.services.client_identity import normalize_phone
 ALIASES = {
  "row_number":["№ п/п","n п/п","номер п/п"], "sale_date":["дата","дата продажи","дата документа"],
  "document_number":["№ док.","№ док","№док.","№док","n док.","№ документа","номер документа","документ"],
@@ -20,8 +21,9 @@ LEGACY_COLUMNS=("row_number","sale_date","document_number","client","department"
 def norm(v:Any)->str:
  return re.sub(r"\s+"," ",str(v or "").replace("\xa0"," ").strip().lower().replace("ё","е"))
 def include_for_filename(filename:str,raw:dict)->bool:
- """Файлы «Авиаторов» содержат свою выборку: из них берём только одноимённое подразделение."""
- return "авиаторов" not in norm(filename) or norm(raw.get("department"))=="авиаторов"
+ """Файлы «Авиаторов»/Aviatorov содержат только одноимённое подразделение."""
+ normalized=norm(filename);aviators_file="авиаторов" in normalized or "aviatorov" in normalized
+ return not aviators_file or norm(raw.get("department"))=="авиаторов"
 EXCLUDED_DOCUMENT_PREFIXES=("взв-","рнв-","врм-")
 def include_document(raw:dict)->bool:
  """Исключает возвратные и внутренние документы до создания продажи."""
@@ -89,8 +91,7 @@ def parse_date(v:Any)->date:
  raise ValueError(f"Некорректная дата: {v}")
 def parse_bool(v:Any)->bool:return norm(v) in {"да","true","1","есть","социальная"}
 def parse_phone(v:Any)->str|None:
- if v in (None,""):return None
- digits=re.sub(r"\D","",str(v).split(".")[0]); return ("+7"+digits[-10:]) if len(digits)>=10 else digits or None
+ return normalize_phone(v)
 
 def parse_items(text:Any)->list[dict]:
  raw=str(text or "").strip()

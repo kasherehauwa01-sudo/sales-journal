@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     autoload_timezone: str = "Europe/Moscow"
     clients_vr_api_url: str = "https://kvasmix.ru/vr/clients/api"
     clients_vr_api_token: str = ""
+    calltrack_integration_token: str = ""
     vrcatalog_api_url: str = "https://kvasmix.ru/vr/catalog/api"
     vrcatalog_api_token: str = ""
     public_url: str = "https://kvasmix.ru/vr/sales"

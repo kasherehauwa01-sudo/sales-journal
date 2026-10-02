@@ -1,6 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
-from app.services.manager_analytics import aggregate_buyer_type_dynamics,aggregate_manager_sales
+from app.services.manager_analytics import aggregate_buyer_type_dynamics,aggregate_manager_sales,aggregate_total_dynamics
 
 def test_sales_are_aggregated_by_normalized_client_manager():
  rows=[(" Клиент А ",1000,2),("КЛИЕНТ Б",500,1),("Неизвестный",200,1)]
@@ -20,3 +20,9 @@ def test_dynamics_are_grouped_by_buyer_type():
  result=aggregate_buyer_type_dynamics(rows,{"клиент а":"Розница","клиент б":"HoReCa"})
  assert result["sections"]==[{"key":"buyer_0","label":"HoReCa"},{"key":"buyer_1","label":"Не указан"},{"key":"buyer_2","label":"Розница"}]
  assert result["items"]==[{"period":period.date(),"revenue":175.0,"sales_count":4,"buyer_2":100.0,"buyer_2_checks":2,"buyer_0":50.0,"buyer_0_checks":1,"buyer_1":25.0,"buyer_1_checks":1}]
+
+def test_dynamics_fallback_does_not_require_clients_vr():
+ period=datetime(2026,9,22)
+ rows=[SimpleNamespace(period=period,client="А",revenue=100,checks=2),SimpleNamespace(period=period,client="Б",revenue=50,checks=1)]
+ result=aggregate_total_dynamics(rows)
+ assert result=={"sections":[{"key":"all","label":"Все продажи"}],"items":[{"period":period.date(),"revenue":150.0,"sales_count":3,"all":150.0,"all_checks":3}]}

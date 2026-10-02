@@ -3,12 +3,12 @@ from datetime import date, timedelta
 from app.services.sales_dynamics_report import metric_comparison
 
 UNCATEGORIZED = "Без категории"
+NOT_FOUND = "Не найдено в CatalogVR"
 
 
 def categorized_only(rows: list[dict]) -> list[dict]:
-    """Исключает техническую группу несопоставленных товаров из отчёта."""
-    excluded = {"без категории", "без категорий"}
-    return [row for row in rows if str(row.get("category") or "").strip().casefold() not in excluded]
+    """Сохраняет все группы; имя оставлено для совместимости с вызывающим кодом."""
+    return rows
 
 
 def comparable_period(start: date, end: date) -> tuple[date, date]:
@@ -75,8 +75,6 @@ def report_summary(rows: list[dict], current_checks: int, previous_checks: int) 
 
 
 def chart_structure(rows: list[dict], limit: int = 10) -> list[dict]:
-    # «Без категории» остаётся в таблице для контроля сопоставления, но не
-    # является категорией CatalogVR и потому не показывается сектором диаграммы.
     active = [row for row in categorized_only(rows) if row["current_revenue"] > 0]
     visible = active[:limit]
     others = active[limit:]

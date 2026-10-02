@@ -12,6 +12,13 @@ image_cache:tuple[float,dict[str,str]]|None=None
 catalog_info_cache: dict[str, tuple[float, dict | None]] = {}
 CATALOG_INFO_CACHE_TTL = 1800
 
+# Карта категорий хранится отдельно от тяжёлой информации о товаре. Отдельное
+# множество позволяет отличить отрицательный результат от category=null.
+catalog_category_cache: dict[str, tuple[float, dict]] = {}
+catalog_category_negative_cache: dict[str, float] = {}
+CATALOG_CATEGORY_CACHE_TTL = 1800
+CATALOG_CATEGORY_MAP_LIMIT = 5000
+
 class VrCatalogError(RuntimeError):pass
 
 def _source(payload):
@@ -78,6 +85,13 @@ def _integration_batch(payload):
  headers={"Accept":"application/json","Content-Type":"application/json"}
  if settings.vrcatalog_api_token:headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
  request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/integration/products/batch-info",data=json.dumps(payload).encode(),headers=headers,method="POST")
+ with urlopen(request,timeout=30) as response:return json.load(response)
+
+def _integration_category_map(payload):
+ from app.config import settings
+ headers={"Accept":"application/json","Content-Type":"application/json"}
+ if settings.vrcatalog_api_token:headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
+ request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/integration/products/category-map",data=json.dumps(payload).encode(),headers=headers,method="POST")
  with urlopen(request,timeout=30) as response:return json.load(response)
 
 def _integration_get(path:str,params:dict|None=None):
@@ -170,6 +184,46 @@ async def get_catalog_batch_info(products:list[dict]):
     if code_key:catalog_info_cache[code_key]=(now,None)
     if article_key:catalog_info_cache[article_key]=(now,None)
 
+ return result
+
+async def get_catalog_category_map(products:list[dict]):
+ """Возвращает найденные товары, включая товары с пустой категорией.
+
+ Отсутствие ключа в результате означает, что товар не найден. Такой результат
+ также кешируется, поэтому повторный отчёт не обращается к CatalogVR.
+ """
+ unique={(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):(item.get("code"),item.get("article")) for item in products if item.get("code") or item.get("article")}
+ if len(unique)>CATALOG_CATEGORY_MAP_LIMIT:raise VrCatalogError(f"Нельзя проверить более {CATALOG_CATEGORY_MAP_LIMIT} товаров за один запрос")
+
+ now=time.monotonic();result={};missing=[]
+ for (code_key,article_key),(code,article) in unique.items():
+  keys=tuple(key for key in (code_key,article_key) if key)
+  cached=next((catalog_category_cache[key][1] for key in keys if key in catalog_category_cache and now-catalog_category_cache[key][0]<CATALOG_CATEGORY_CACHE_TTL),None)
+  known_missing=all(key in catalog_category_negative_cache and now-catalog_category_negative_cache[key]<CATALOG_CATEGORY_CACHE_TTL for key in keys)
+  if cached is not None:
+   for key in keys:result[key]=cached
+  elif known_missing:
+   continue
+  else:missing.append({"code":code,"article":article})
+
+ if not missing:return result
+ try:response=await asyncio.to_thread(_integration_category_map,{"products":missing})
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ if not isinstance(response,dict) or not isinstance(response.get("items"),list):
+  raise VrCatalogError("vrcatalog вернул некорректную карту категорий")
+
+ returned_keys=set()
+ for item in response["items"]:
+  if not isinstance(item,dict):continue
+  keys=tuple(key for key in (_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))) if key)
+  for key in keys:
+   returned_keys.add(key);result[key]=item;catalog_category_cache[key]=(now,item)
+   catalog_category_negative_cache.pop(key,None)
+
+ for requested in missing:
+  keys=tuple(key for key in (_catalog_key("code",requested.get("code")),_catalog_key("article",requested.get("article"))) if key)
+  if not any(key in returned_keys for key in keys):
+   for key in keys:catalog_category_negative_cache[key]=now
  return result
 
 def _pagination(payload):

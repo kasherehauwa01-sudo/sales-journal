@@ -120,6 +120,11 @@ async def get_client_managers():
 async def get_client_buyer_types():
  return await _cached("client-buyer-types",lambda:_client_buyer_types(_request(["/integration/clients","/clients"])))
 
+def cached_client_buyer_types():
+ """Возвращает только актуальный кеш, не задерживая аналитику сетевым запросом."""
+ saved=cache.get("client-buyer-types")
+ return saved[1] if saved and time.monotonic()-saved[0]<300 else None
+
 async def get_buyer_types():
  return await _cached("buyer-types",lambda:_items(_request(["/integration/buyer-types","/buyer-types","/integration/clients","/clients"]),("buyer_types","types","values","value","label","buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")))
 

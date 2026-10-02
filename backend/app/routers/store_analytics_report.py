@@ -37,32 +37,62 @@ def _conditions(start: date, end: date, stores: list[str], clients: list[str] | 
 
 
 def _sales(start: date, end: date, stores: list[str], clients: list[str] | None):
-    # Сначала ограничиваем продажи периодом и фильтрами. Это важно для большой
-    # таблицы sale_items: PostgreSQL агрегирует позиции только нужных чеков, а
-    # не строит сумму по всей истории перед применением периода.
-    filtered_sales = select(
+    """Формирует по одной строке на чек после применения фильтров отчёта.
+
+    Прямая группировка устраняет вложенный CTE из прежней реализации: такой
+    запрос одинаково используется сводкой, динамикой, детализацией и экспортом.
+    """
+    return select(
         Sale.id, Sale.sale_date, Sale.document_number, Sale.client,
         func.coalesce(Sale.department, "Без подразделения").label("store"),
         Sale.total_amount, func.coalesce(Sale.discount_percent, 0).label("discount"),
-    ).where(*_conditions(start, end, stores, clients)).cte("filtered_store_sales")
-    item_totals = select(
-        SaleItem.sale_id, func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
-    ).join(filtered_sales, filtered_sales.c.id == SaleItem.sale_id).group_by(SaleItem.sale_id).subquery()
-    return select(
-        filtered_sales.c.id, filtered_sales.c.sale_date, filtered_sales.c.document_number,
-        filtered_sales.c.client, filtered_sales.c.store, filtered_sales.c.total_amount,
-        filtered_sales.c.discount, func.coalesce(item_totals.c.items, 0).label("items"),
-    ).outerjoin(item_totals, item_totals.c.sale_id == filtered_sales.c.id).subquery()
+        func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
+    ).outerjoin(
+        SaleItem, SaleItem.sale_id == Sale.id,
+    ).where(
+        *_conditions(start, end, stores, clients),
+    ).group_by(
+        Sale.id,
+        Sale.sale_date,
+        Sale.document_number,
+        Sale.client,
+        Sale.department,
+        Sale.total_amount,
+        Sale.discount_percent,
+    ).subquery()
 
 
 async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str], clients: list[str] | None):
-    sales = _sales(start, end, stores, clients)
-    rows = (await db.execute(select(
-        sales.c.store, func.coalesce(func.sum(sales.c.total_amount), 0).label("revenue"),
-        func.count(sales.c.id).label("checks"), func.coalesce(func.sum(sales.c.items), 0).label("items"),
-        func.coalesce(func.sum(sales.c.discount), 0).label("discount_sum"),
-    ).group_by(sales.c.store))).all()
-    return [{"store": row.store, **calculated_store_metrics(float(row.revenue), int(row.checks), float(row.items), float(row.discount_sum))} for row in rows]
+    """Считает продажи и товары независимыми простыми агрегатами.
+
+    Так сумма чека не размножается на число его позиций, а PostgreSQL не
+    приходится выполнять вложенную агрегацию сгруппированного подзапроса.
+    """
+    store = func.coalesce(Sale.department, "Без подразделения").label("store")
+    conditions = _conditions(start, end, stores, clients)
+    sales_rows = (await db.execute(select(
+        store,
+        func.coalesce(func.sum(Sale.total_amount), 0).label("revenue"),
+        func.count(Sale.id).label("checks"),
+        func.coalesce(func.sum(Sale.discount_percent), 0).label("discount_sum"),
+    ).where(*conditions).group_by(store))).all()
+    item_rows = (await db.execute(select(
+        store,
+        func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
+    ).select_from(SaleItem).join(Sale).where(*conditions).group_by(store))).all()
+    items_by_store = {row.store: float(row.items) for row in item_rows}
+    return [
+        {
+            "store": row.store,
+            **calculated_store_metrics(
+                float(row.revenue),
+                int(row.checks),
+                items_by_store.get(row.store, 0),
+                float(row.discount_sum),
+            ),
+        }
+        for row in sales_rows
+    ]
 
 
 def _total(rows: list[dict]):
