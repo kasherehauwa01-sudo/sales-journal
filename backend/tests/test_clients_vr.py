@@ -2,6 +2,7 @@ import asyncio
 import io
 import sys
 import types
+import time
 from urllib.error import HTTPError
 
 import pytest
@@ -78,6 +79,27 @@ def test_client_manager_is_resolved_with_normalized_client_name(monkeypatch):
     )
 
     assert asyncio.run(clients_vr.get_client_manager("КОМПАНИЯ РОМАШКА")) == "Пашута М.С."
+
+
+def test_cached_client_managers_returns_fresh_value_without_request(monkeypatch):
+    clients_vr.cache["client-managers"]=(time.monotonic(),{"клиент":"Менеджер"})
+    monkeypatch.setattr(clients_vr,"_request",lambda _paths: pytest.fail("network request"))
+
+    assert clients_vr.get_cached_client_managers()=={"клиент":"Менеджер"}
+
+
+def test_cached_client_managers_missing_cache_does_not_request(monkeypatch):
+    monkeypatch.setattr(clients_vr,"_request",lambda _paths: pytest.fail("network request"))
+
+    assert clients_vr.get_cached_client_managers()=={}
+
+
+def test_cached_client_managers_expired_cache_does_not_request(monkeypatch):
+    expired=time.monotonic()-clients_vr.CACHE_TTL_SECONDS
+    clients_vr.cache["client-managers"]=(expired,{"клиент":"Менеджер"})
+    monkeypatch.setattr(clients_vr,"_request",lambda _paths: pytest.fail("network request"))
+
+    assert clients_vr.get_cached_client_managers()=={}
 
 
 def test_client_buyer_types_are_mapped_by_normalized_name(monkeypatch):

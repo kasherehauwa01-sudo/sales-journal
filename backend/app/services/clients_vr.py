@@ -17,6 +17,7 @@ MANAGER_ORDER=(
  "СОТРУДНИК АРБУЗ",
 )
 cache:dict[str,tuple[float,object]]={}
+CACHE_TTL_SECONDS=300
 BUYER_TYPE_KEYS=("buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")
 class ClientsVrError(RuntimeError):pass
 
@@ -95,7 +96,7 @@ def _buyer_type_clients(payload,buyer_type):
 
 async def _cached(key,loader):
  saved=cache.get(key)
- if saved and time.monotonic()-saved[0]<300:return saved[1]
+ if saved and time.monotonic()-saved[0]<CACHE_TTL_SECONDS:return saved[1]
  try:values=await asyncio.to_thread(loader)
  except Exception as exc:raise ClientsVrError(f"clients_vr недоступен: {exc}") from exc
  cache[key]=(time.monotonic(),values);return values
@@ -116,6 +117,13 @@ async def get_client_manager(client:str|None):
 
 async def get_client_managers():
  return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
+
+def get_cached_client_managers() -> dict[str,str]:
+ """Возвращает только свежий локальный кеш, никогда не обращаясь в ClientsVR."""
+ saved=cache.get("client-managers")
+ if not saved or time.monotonic()-saved[0]>=CACHE_TTL_SECONDS:return {}
+ managers=saved[1]
+ return dict(managers) if isinstance(managers,dict) else {}
 
 async def get_client_buyer_types():
  return await _cached("client-buyer-types",lambda:_client_buyer_types(_request(["/integration/clients","/clients"])))
