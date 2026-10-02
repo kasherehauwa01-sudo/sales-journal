@@ -21,8 +21,9 @@ LEGACY_COLUMNS=("row_number","sale_date","document_number","client","department"
 def norm(v:Any)->str:
  return re.sub(r"\s+"," ",str(v or "").replace("\xa0"," ").strip().lower().replace("ё","е"))
 def include_for_filename(filename:str,raw:dict)->bool:
- """Файлы «Авиаторов» содержат свою выборку: из них берём только одноимённое подразделение."""
- return "авиаторов" not in norm(filename) or norm(raw.get("department"))=="авиаторов"
+ """Файлы «Авиаторов»/Aviatorov содержат только одноимённое подразделение."""
+ normalized=norm(filename);aviators_file="авиаторов" in normalized or "aviatorov" in normalized
+ return not aviators_file or norm(raw.get("department"))=="авиаторов"
 EXCLUDED_DOCUMENT_PREFIXES=("взв-","рнв-","врм-")
 def include_document(raw:dict)->bool:
  """Исключает возвратные и внутренние документы до создания продажи."""

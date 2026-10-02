@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from sqlalchemy import Select, exists, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import noload, selectinload
+from sqlalchemy.orm import selectinload
 from app.models import Sale, SaleItem
 def filtered_sales(q:Select, *,search=None,date_from:date|None=None,date_to:date|None=None,departments=None,clients=None,client=None,author=None,price_type=None,promotion=None,social=None,discount_card_percent:Decimal|None=None,min_amount:Decimal|None=None,max_amount:Decimal|None=None,min_discount:Decimal|None=None,max_discount:Decimal|None=None):
  conditions=[]
@@ -34,5 +34,5 @@ async def find_client_sales(db: AsyncSession, *, phones: set[str], names: set[st
  if phones:identities.append(Sale.phone.in_(phones))
  if names:identities.append(func.lower(func.trim(Sale.client)).in_(names))
  if not identities:return []
- query=select(Sale).options(noload(Sale.items)).where(Sale.sale_date>=date_from,Sale.sale_date<=date_to,or_(*identities)).order_by(Sale.sale_date,Sale.id)
+ query=select(Sale).where(Sale.sale_date>=date_from,Sale.sale_date<=date_to,or_(*identities)).order_by(Sale.sale_date,Sale.id)
  return list((await db.scalars(query)).all())

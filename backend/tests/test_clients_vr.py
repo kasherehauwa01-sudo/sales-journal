@@ -118,6 +118,13 @@ def test_client_buyer_types_are_mapped_by_normalized_name(monkeypatch):
     }
 
 
+def test_cached_client_buyer_types_never_makes_network_request(monkeypatch):
+    monkeypatch.setattr(clients_vr, "_request", lambda _paths: (_ for _ in ()).throw(AssertionError("network")))
+    assert clients_vr.cached_client_buyer_types() is None
+    clients_vr.cache["client-buyer-types"] = (clients_vr.time.monotonic(), {"клиент": "Розница"})
+    assert clients_vr.cached_client_buyer_types() == {"клиент": "Розница"}
+
+
 def test_buyer_types_are_unique_and_sorted(monkeypatch):
     monkeypatch.setattr(
         clients_vr,

@@ -1,15 +1,9 @@
-import logging
-import time
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.sales import find_client_sales
 from app.schemas.calltrack import CalltrackSalesRequest, CalltrackSaleSummary
 from app.services.client_identity import normalize_client_name, normalize_phone
-from app.services.clients_vr import get_cached_client_managers
-
-
-log = logging.getLogger(__name__)
+from app.services.clients_vr import ClientsVrError, get_client_managers
 
 
 class AmbiguousClientReference(ValueError):
@@ -40,7 +34,6 @@ async def find_sales_for_calltrack(
 ) -> list[CalltrackSaleSummary]:
     """Сопоставляет batch одним SQL-запросом и дедуплицирует по Sale.id."""
     phone_keys, name_keys = _client_maps(payload)
-    sql_started = time.monotonic()
     sales = await find_client_sales(
         db,
         phones=set(phone_keys),
@@ -48,9 +41,10 @@ async def find_sales_for_calltrack(
         date_from=payload.date_from,
         date_to=payload.date_to,
     )
-    sql_duration_ms = round((time.monotonic() - sql_started) * 1000)
-    enrichment_started = time.monotonic()
-    managers = get_cached_client_managers()
+    try:
+        managers = await get_client_managers()
+    except ClientsVrError:
+        managers = {}
 
     result: list[CalltrackSaleSummary] = []
     seen: set[int] = set()
@@ -78,10 +72,4 @@ async def find_sales_for_calltrack(
             department=sale.department,
             total_amount=sale.total_amount,
         ))
-    log.debug(
-        "Calltrack sales timing: sql_duration_ms=%s manager_enrichment_duration_ms=%s manager_cache_hit=%s",
-        sql_duration_ms,
-        round((time.monotonic() - enrichment_started) * 1000),
-        bool(managers),
-    )
     return result
