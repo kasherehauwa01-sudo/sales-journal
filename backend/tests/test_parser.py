@@ -219,3 +219,25 @@ def test_xlsx_rows_are_consumed_lazily(monkeypatch,tmp_path):
  next(rows)
  assert len(consumed)==1002
  rows.close()
+
+def test_large_html_does_not_repeat_header_buffer(tmp_path):
+ """HTML-список продолжает чтение после буфера, а не начинается заново."""
+ sales_count=1100
+ body="".join(
+  f"<tr><td>23.09.2026</td><td>РН-{index:04d}</td><td>Европа</td><td>{index}</td></tr>"
+  for index in range(sales_count)
+ )
+ path=tmp_path/"large-sales.html"
+ path.write_text(
+  "<table><tr><th>Дата</th><th>№ Док.</th><th>Подразделение</th><th>Сумма</th></tr>"
+  f"{body}</table>",encoding="utf-8"
+ )
+
+ _,row_iterator=read_sales(path)
+ rows=list(row_iterator)
+ document_numbers=[raw["document_number"] for _,raw in rows]
+
+ assert len(rows)==sales_count
+ assert len(set(document_numbers))==sales_count
+ assert document_numbers[:2]==["РН-0000","РН-0001"]
+ assert document_numbers[1000:1002]==["РН-1000","РН-1001"]

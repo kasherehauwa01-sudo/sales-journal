@@ -286,6 +286,9 @@ def read_sales(path:Path)->tuple[str,Iterator[tuple[int,dict[str,Any]]]]:
  diagnostics=[]
  sheets=workbook_rows(path)
  for sheet,row_iterator in sheets:
+  # HTML возвращает список строк, а XLS/XLSX — генератор. Приводим оба варианта
+  # к одному однопроходному итератору, чтобы буфер не читался повторно.
+  row_iterator=iter(row_iterator)
   buffered=list(itertools.islice(row_iterator,1001))
   result=find_header(buffered)
   if result is None:diagnostics.append(f"{sheet}: распознано 0 колонок");continue
