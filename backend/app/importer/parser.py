@@ -1,4 +1,4 @@
-import base64, hashlib, quopri, re
+import base64, hashlib, itertools, quopri, re
 from email import policy
 from email.parser import BytesParser
 from datetime import date, datetime
@@ -234,13 +234,18 @@ def _fallback_html_rows(text:str)->list[list[str]]:
 
 def _html_rows(path:Path)->list[list[list[str]]]:
  data=path.read_bytes()
+ documents=_decode_html(data)
+ # После декодирования bytes-копия больше не нужна; одновременно держим только
+ # текст документа и распознанные строки. Полный streaming HTML оставлен на
+ # будущее из-за обязательных fallback для повреждённых MHTML.
+ del data
  tables=[]
- for text in _decode_html(data):
+ for text in documents:
   candidates=[text]
   # Бывают выгрузки, где весь документ HTML экранирован, либо таблица помещена
   # внутрь HTML-комментария. Браузер их показывает, но HTMLParser таблиц не видит.
-  decoded=unescape(text)
-  if decoded!=text:candidates.append(decoded)
+  if re.search(r"&lt;(?:\w+:)?(?:table|workbook)\b",text,re.I):
+   candidates.append(unescape(text))
   candidates.extend(comment for comment in re.findall(r"<!--(.*?)-->",text,re.S) if re.search(r"<table\b",comment,re.I))
   for candidate in candidates:
    parser=_HtmlTables();parser.feed(candidate);parser.close();parser.finish();tables.extend(parser.tables)
@@ -248,38 +253,59 @@ def _html_rows(path:Path)->list[list[list[str]]]:
     recovered=_fallback_html_rows(candidate)
     if recovered:tables.append(recovered)
  return tables
-def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
+def workbook_rows(path:Path)->Iterator[tuple[str,Iterator[list[Any]]]]:
+ """Отдаёт листы как однопроходные итераторы, не материализуя книгу в памяти."""
  with path.open("rb") as source:signature=source.read(8)
  if path.suffix.lower()==".xlsx" or signature.startswith(b"PK\x03\x04"):
   import openpyxl
   # Передаём поток: так XLSX корректно читается даже при ошибочном расширении .html.
   source=path.open("rb");wb=openpyxl.load_workbook(source,read_only=True,data_only=True)
   try:
-   for ws in wb.worksheets:yield ws.title,[list(r) for r in ws.iter_rows(values_only=True)]
+   for ws in wb.worksheets:
+    yield ws.title,(list(row) for row in ws.iter_rows(values_only=True))
   finally:wb.close();source.close()
  elif path.suffix.lower()==".xls" or signature.startswith(b"\xd0\xcf\x11\xe0"):
   import xlrd
   wb=xlrd.open_workbook(path,on_demand=True)
-  for ws in wb.sheets():yield ws.name,[ws.row_values(i) for i in range(ws.nrows)]
+  try:
+   for ws in wb.sheets():
+    # xlrd сам хранит структуру XLS, но второй список всех строк больше не создаётся.
+    yield ws.name,(ws.row_values(index) for index in range(ws.nrows))
+  finally:
+   wb.release_resources()
  elif path.suffix.lower() in {".html",".htm"}:
   for index,rows in enumerate(_html_rows(path),1):yield f"Таблица {index}",rows
  else:
   raise ValueError(f"Неподдерживаемый формат файла: {path.suffix or 'без расширения'}")
-def read_sales(path:Path):
+def read_sales(path:Path)->tuple[str,Iterator[tuple[int,dict[str,Any]]]]:
+ """Находит заголовок и возвращает ленивый поток нормализуемых сырых строк.
+
+ В памяти остаются только первые строки, необходимые для распознавания шапки.
+ Закрытие результирующего итератора также закрывает генератор книги и XLSX-файл.
+ """
  diagnostics=[]
- for sheet,rows in workbook_rows(path):
-  result=find_header(rows)
+ sheets=workbook_rows(path)
+ for sheet,row_iterator in sheets:
+  # HTML возвращает список строк, а XLS/XLSX — генератор. Приводим оба варианта
+  # к одному однопроходному итератору, чтобы буфер не читался повторно.
+  row_iterator=iter(row_iterator)
+  buffered=list(itertools.islice(row_iterator,1001))
+  result=find_header(buffered)
   if result is None:diagnostics.append(f"{sheet}: распознано 0 колонок");continue
   header_idx,mapping,best=result
   if header_idx<0:
    diagnostics.append(f"{sheet}: распознаны {', '.join(sorted(best))}; отсутствуют {', '.join(sorted(REQUIRED-best))}")
    continue
-  output=[]
-  for excel_row,values in enumerate(rows[header_idx+1:],header_idx+2):
-   if not any(v not in (None,"") for v in values):continue
-   raw={key:(values[i] if i<len(values) else None) for key,i in mapping.items()}
-   output.append((excel_row,raw))
-  return sheet,output
+  def mapped_rows():
+   try:
+    values_stream=itertools.chain(buffered[header_idx+1:],row_iterator)
+    for excel_row,values in enumerate(values_stream,header_idx+2):
+     if not any(v not in (None,"") for v in values):continue
+     yield excel_row,{key:(values[i] if i<len(values) else None) for key,i in mapping.items()}
+   finally:
+    close=getattr(sheets,"close",None)
+    if close:close()
+  return sheet,mapped_rows()
  details="; ".join(diagnostics) or "в книге нет доступных листов"
  raise ValueError(f"Не найдена строка заголовков с обязательными колонками. Проверены первые 1000 строк каждого листа. {details}")
 def normalize_sale(raw:dict)->dict:
