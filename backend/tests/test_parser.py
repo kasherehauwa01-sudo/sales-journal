@@ -241,3 +241,39 @@ def test_large_html_does_not_repeat_header_buffer(tmp_path):
  assert len(set(document_numbers))==sales_count
  assert document_numbers[:2]==["РН-0000","РН-0001"]
  assert document_numbers[1000:1002]==["РН-1000","РН-1001"]
+
+def test_1c_html_without_closing_td_is_split_into_columns(tmp_path):
+ path=tmp_path/"1c-report.html"
+ path.write_bytes("""<HTML><HEAD><META HTTP-EQUIV="Content-Type" CONTENT="text/html; CHARSET=windows-1251"></HEAD>
+ <TABLE><TR><TD>№ п/п<TD>Дата<TD>№ Док.<TD>Клиент<TD>Подразделение<TD>Сумма</TR>
+ <TR><TD>1<TD>01.06.25<TD>Р-00000001<TD>ООО Клиент<TD>Авиаторов<TD>100.00</TR></TABLE>""".encode("windows-1251"))
+
+ _,row_iterator=read_sales(path)
+ rows=list(row_iterator)
+
+ assert len(rows)==1
+ assert rows[0][1]=={
+  "row_number":"1","sale_date":"01.06.25","document_number":"Р-00000001",
+  "client":"ООО Клиент","department":"Авиаторов","total_amount":"100.00",
+ }
+
+def test_streaming_html_reads_large_report_without_materialized_fallback(monkeypatch,tmp_path):
+ from app.importer import parser as parser_module
+ sales_count=10_000
+ path=tmp_path/"large-streaming-report.html"
+ with path.open("w",encoding="utf-8") as target:
+  target.write("<table><tr><th>Дата</th><th>№ Док.</th><th>Подразделение</th><th>Сумма</th></tr>")
+  for index in range(sales_count):
+   target.write(f"<tr><td>01.06.2025</td><td>Р-{index:08d}</td><td>Европа</td><td>{index}</td></tr>")
+  target.write("</table>")
+ monkeypatch.setattr(parser_module,"_html_rows",lambda _path: (_ for _ in ()).throw(AssertionError("fallback не нужен")))
+
+ sheet,row_iterator=read_sales(path)
+ rows=list(row_iterator)
+ documents=[raw["document_number"] for _,raw in rows]
+
+ assert sheet=="Таблица 1"
+ assert len(rows)==sales_count
+ assert len(set(documents))==sales_count
+ assert documents[0]=="Р-00000000"
+ assert documents[-1]=="Р-00009999"
