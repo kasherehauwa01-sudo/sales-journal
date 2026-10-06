@@ -11,22 +11,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.clients_vr import ClientsVrError, get_cached_client_managers, cached_client_buyer_types
+from app.services.clients_vr import (ClientsVrError, cached_client_buyer_types,
+    get_buyer_type_clients, get_cached_client_managers, get_client_metadata,
+    get_manager_clients)
 from app.services.rfm import SEGMENTS, SegmentSettings, enrich
-from app.services.sales_client_filters import get_sales_filter_clients
 
 router = APIRouter(prefix="/reports/rfm", tags=["Отчеты"])
 SORTS = {"client", "segment", "recency_days", "frequency", "monetary", "average_check", "last_purchase"}
 
 
-async def _rows(db: AsyncSession, start: date, end: date, department: str | None) -> list[dict]:
+async def _rows(db: AsyncSession, start: date, end: date, departments: list[str] | None) -> list[dict]:
     item_stats = (select(
         SaleItem.sale_id.label("sale_id"), func.coalesce(func.sum(SaleItem.quantity), 0).label("units"),
         func.count(distinct(func.coalesce(SaleItem.code, SaleItem.article, SaleItem.name))).label("products"),
     ).group_by(SaleItem.sale_id).subquery())
     client_key = func.lower(func.trim(Sale.client))
     conditions = [Sale.sale_date.between(start, end), Sale.client.is_not(None), func.length(func.trim(Sale.client)) > 0]
-    if department: conditions.append(Sale.department == department)
+    if departments: conditions.append(Sale.department.in_(departments))
     query = (select(
         client_key.label("client_key"), func.min(Sale.client).label("client"),
         func.min(Sale.sale_date).label("period_first"), func.max(Sale.sale_date).label("last_purchase"),
@@ -59,20 +60,30 @@ async def _rows(db: AsyncSession, start: date, end: date, department: str | None
     return result
 
 
-async def _dataset(db, date_from, date_to, department, manager, buyer_type, new_days, lost_days, sleeping_cycle, lost_cycle):
+async def _dataset(db, date_from, date_to, departments, managers_filter, buyer_types_filter,
+                   new_days, lost_days, sleeping_cycle, lost_cycle):
     if date_from > date_to: raise HTTPException(422, "Дата начала не может быть позже даты окончания")
-    rows = await _rows(db, date_from, date_to, department)
-    if manager or buyer_type:
-        try: allowed = await get_sales_filter_clients(db, manager, buyer_type)
-        except ClientsVrError as exc: raise HTTPException(502, str(exc)) from exc
-        allowed_keys = {v.strip().casefold() for v in (allowed or [])}
-        rows = [row for row in rows if row["client_key"].casefold() in allowed_keys]
+    rows = await _rows(db, date_from, date_to, departments)
+    try:
+        manager_clients = [await get_manager_clients(value) for value in managers_filter]
+        buyer_clients = [await get_buyer_type_clients(value) for value in buyer_types_filter]
+    except ClientsVrError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    allowed_groups = []
+    if manager_clients: allowed_groups.append({name.strip().casefold() for group in manager_clients for name in group})
+    if buyer_clients: allowed_groups.append({name.strip().casefold() for group in buyer_clients for name in group})
+    for allowed in allowed_groups:
+        rows = [row for row in rows if row["client_key"].casefold() in allowed]
     rows, boundaries = enrich(rows, date_to, SegmentSettings(new_days, lost_days, sleeping_cycle, lost_cycle))
     managers, buyer_types = get_cached_client_managers(), cached_client_buyer_types() or {}
+    try:
+        managers, buyer_types = await get_client_metadata(); clients_vr_available = True
+    except ClientsVrError:
+        clients_vr_available = False
     for row in rows:
         row["manager"] = managers.get(row["client_key"]); row["buyer_type"] = buyer_types.get(row["client_key"])
         row.pop("purchase_dates", None)
-    return rows, boundaries
+    return rows, boundaries, clients_vr_available
 
 
 def _filtered(rows, segment, r_score, f_score, m_score, rfm_code, search, min_revenue, min_purchases, min_recency, max_recency):
@@ -85,8 +96,9 @@ def _filtered(rows, segment, r_score, f_score, m_score, rfm_code, search, min_re
 
 
 @router.get("")
-async def report(date_from: date, date_to: date, department: str | None = None, manager: str | None = None,
-                 buyer_type: str | None = None, segment: str | None = None, r_score: int | None = Query(None, ge=1, le=5),
+async def report(date_from: date, date_to: date, department: str | None = None, departments: list[str] | None = Query(None),
+                 manager: str | None = None, managers: list[str] | None = Query(None), buyer_type: str | None = None,
+                 buyer_types: list[str] | None = Query(None), segment: str | None = None, r_score: int | None = Query(None, ge=1, le=5),
                  f_score: int | None = Query(None, ge=1, le=5), m_score: int | None = Query(None, ge=1, le=5),
                  rfm_code: str | None = Query(None, pattern="^[1-5]{3}$"), search: str | None = None,
                  min_revenue: float | None = None, min_purchases: int | None = None, min_recency: int | None = None,
@@ -94,7 +106,11 @@ async def report(date_from: date, date_to: date, department: str | None = None, 
                  sort: str = "monetary", direction: str = Query("desc", pattern="^(asc|desc)$"), new_days: int = Query(30, ge=1),
                  lost_days: int = Query(180, ge=1), sleeping_cycle: float = Query(1.5, ge=1), lost_cycle: float = Query(3, ge=1),
                  db: AsyncSession = Depends(get_db)):
-    rows, boundaries = await _dataset(db, date_from, date_to, department, manager, buyer_type, new_days, lost_days, sleeping_cycle, lost_cycle)
+    department_values = departments or ([department] if department else [])
+    manager_values = managers or ([manager] if manager else [])
+    buyer_type_values = buyer_types or ([buyer_type] if buyer_type else [])
+    rows, boundaries, clients_vr_available = await _dataset(db, date_from, date_to, department_values,
+        manager_values, buyer_type_values, new_days, lost_days, sleeping_cycle, lost_cycle)
     total_revenue = sum(r["monetary"] for r in rows)
     segments = [{"segment": name, "clients": len(part := [r for r in rows if r["segment"] == name]),
                  "client_share": len(part) / len(rows) if rows else 0, "revenue": sum(r["monetary"] for r in part),
@@ -116,7 +132,7 @@ async def report(date_from: date, date_to: date, department: str | None = None, 
                         "page_size": page_size, "pages": ceil(len(selected)/page_size) if selected else 0},
             "settings": {"levels": 5, "new_days": new_days, "lost_days": lost_days, "sleeping_cycle": sleeping_cycle,
                          "lost_cycle": lost_cycle, "boundaries": boundaries},
-            "clients_vr": {"metadata_available": bool(get_cached_client_managers() or cached_client_buyer_types())}}
+            "clients_vr": {"metadata_available": clients_vr_available}}
 
 
 @router.get("/clients/{client_key}/history")
@@ -129,7 +145,7 @@ async def client_history(client_key: str, date_from: date, date_to: date, db: As
 
 @router.get("/export")
 async def export(date_from: date, date_to: date, segment: str | None = None, full: bool = True, db: AsyncSession = Depends(get_db)):
-    rows, boundaries = await _dataset(db, date_from, date_to, None, None, None, 30, 180, 1.5, 3)
+    rows, boundaries, _ = await _dataset(db, date_from, date_to, [], [], [], 30, 180, 1.5, 3)
     if segment: rows = [r for r in rows if r["segment"] == segment]
     wb = Workbook(); ws = wb.active; ws.title = "Клиенты"
     columns = [("Клиент","client"),("Сегмент","segment"),("Теги","tags"),("RFM","rfm_code"),("Последняя покупка","last_purchase"),
