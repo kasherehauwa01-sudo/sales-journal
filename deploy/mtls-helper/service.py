@@ -57,12 +57,23 @@ def apply_crl():
    else:CRL.unlink(missing_ok=True)
    raise
   backup.unlink(missing_ok=True)
+def is_revoked(serial):
+ normalized=re.sub(r"[^A-Fa-f0-9]","",serial).upper()
+ if not normalized or not (ROOT/"index.txt").exists():return False
+ for line in (ROOT/"index.txt").read_text(encoding="utf-8",errors="replace").splitlines():
+  columns=line.split("\t")
+  if len(columns)>3 and columns[0]=="R" and columns[3].lstrip("0").upper()==normalized.lstrip("0"):return True
+ return False
 def revoke(payload):
  serial=re.sub(r"[^A-Fa-f0-9]","",payload.get("serial_number",""));cert=CERTS/f"{serial}.crt"
  if not cert.exists():raise RuntimeError("Публичный сертификат для отзыва не найден")
- try:run(["openssl","ca","-batch","-config",str(CONFIG),"-revoke",str(cert)])
- except RuntimeError as exc:
-  if "already revoked" not in str(exc).lower():raise
+ if not is_revoked(serial):
+  try:run(["openssl","ca","-batch","-config",str(CONFIG),"-revoke",str(cert)])
+  except RuntimeError:
+   # OpenSSL мог успеть записать R в index.txt до ошибки следующего шага.
+   if not is_revoked(serial):raise
+ # CRL и reload повторяются даже для уже отозванного serial. Это позволяет
+ # безопасно продолжить операцию после частичного сбоя предыдущего запроса.
  apply_crl();package,metadata=package_paths(serial);package.unlink(missing_ok=True);metadata.unlink(missing_ok=True);return {"revoked":True}
 def register(payload):
  raw=base64.b64decode(payload.get("certificate",""),validate=True)

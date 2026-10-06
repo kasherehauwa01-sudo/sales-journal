@@ -66,11 +66,12 @@ async def update_device(device_id:int,data:DeviceUpdate,request:Request,db:Async
  audit(db,row.id,"updated",ip(request),{"fields":sorted(changes)});await db.commit();await db.refresh(row);return out(row)
 
 async def revoke(row:AccessDevice,request:Request,db:AsyncSession):
- if row.status=="revoked":return
  try:await helper_call("revoke",serial_number=row.serial_number)
  except MtlsHelperError as exc:raise HTTPException(502,str(exc)) from exc
- row.status="revoked";row.revoked_at=datetime.now(timezone.utc);row.package_available=False
- audit(db,row.id,"revoked",ip(request),{"serial_number":row.serial_number});await db.commit()
+ if row.status!="revoked":
+  row.status="revoked";row.revoked_at=datetime.now(timezone.utc)
+  audit(db,row.id,"revoked",ip(request),{"serial_number":row.serial_number})
+ row.package_available=False;await db.commit()
 
 @router.post("/devices/{device_id}/revoke")
 async def revoke_device(device_id:int,request:Request,db:AsyncSession=Depends(get_db)):

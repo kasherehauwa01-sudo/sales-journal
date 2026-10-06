@@ -6,15 +6,18 @@ After=network.target
 Type=simple
 User=sales-mtls
 Group=sales-backend
+UMask=0027
 EnvironmentFile=/etc/sales-mtls-helper.env
 ExecStart=/usr/bin/python3 /opt/sales-journal/deploy/mtls-helper/service.py
 Restart=on-failure
 RuntimeDirectory=sales-mtls-helper
 RuntimeDirectoryMode=0750
+# Не пересоздавать каталог при restart: Docker bind mount должен видеть новый socket.
+RuntimeDirectoryPreserve=yes
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/nginx/sales-mtls /run/sales-mtls-helper /var/lib/sales-mtls-helper
+ReadWritePaths=/etc/nginx/sales-mtls /run/sales-mtls-helper /var/lib/sales-mtls-helper /run/nginx.pid /var/log/nginx
 
 [Install]
 WantedBy=multi-user.target
