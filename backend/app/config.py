@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     settings_admin_password_hash: str = ""
     settings_admin_session_secret: str = ""
     settings_admin_cookie_secure: bool = True
+    mtls_helper_socket: Path = Path("/run/sales-mtls-helper/helper.sock")
+    mtls_helper_secret: str = ""
+    mtls_proxy_secret: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     @property
     def api_prefix(self) -> str: return f"{self.base_path.rstrip('/')}/api"
