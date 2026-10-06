@@ -6,6 +6,25 @@ PROPERTY_ALIASES = {
     "category": ("category", "category_name", "categoryName", "product_category", "group", "group_name", "Категория", "Группа"), "subcategory": ("subcategory", "Подкатегория"),
     "material": ("material", "Материал"),
 }
+MISSING_MANAGER = "Не заполнено"
+
+
+def clients_for_managers(sales_clients: list[str], mapping: dict[str, str], selected: list[str]) -> list[str]:
+    """Пересекает менеджеров ClientsVR с клиентами журнала без большого SQL IN."""
+    wanted={value.strip().casefold() for value in selected if value and value.strip()}
+    include_missing=bool(wanted & {MISSING_MANAGER.casefold(),"нет менеджера"})
+    result=[]
+    for client in sales_clients:
+        key=(client or "").strip().casefold();manager=mapping.get(key)
+        missing=not manager or manager.strip().casefold() in {"нет менеджера",MISSING_MANAGER.casefold()}
+        if (not missing and manager.casefold() in wanted) or (include_missing and missing):result.append(key)
+    return result
+
+
+def filter_subcategories(rows: list[dict], selected: list[str]) -> list[dict]:
+    if not selected:return rows
+    wanted={value.strip().casefold() for value in selected if value and value.strip()}
+    return [row for row in rows if str(row.get("subcategory") or "Не заполнено").casefold() in wanted]
 
 
 def previous_period(start: date, end: date) -> tuple[date, date]:
