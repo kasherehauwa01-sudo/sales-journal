@@ -2,15 +2,26 @@ import json, logging, time
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
 from app.importer.parser import include_document, include_for_filename, normalize_sale, read_sales
 from app.models import ImportBatch, ImportError, Sale, SaleItem
+from app.services.import_files import with_temporary_source
+
 log=logging.getLogger(__name__)
-async def process_import(import_id:int):
- started=time.monotonic()
+
+
+async def _clear_stored_path(import_id:int,path:Path)->None:
+ """Убирает устаревший путь, не затрагивая метаданные и статистику импорта."""
  async with SessionLocal() as db:
-  batch=await db.get(ImportBatch,import_id); batch.status="processing";batch.started_at=datetime.now(timezone.utc);batch.log_text=f"[{batch.started_at.isoformat()}] Начата обработка файла {batch.filename}\n";await db.commit()
+  batch=await db.get(ImportBatch,import_id)
+  if batch and batch.stored_path==str(path):
+   batch.stored_path=None
+   await db.commit()
+
+
+async def _process_import(import_id:int,started:float)->None:
+ async with SessionLocal() as db:
+  batch=await db.get(ImportBatch,import_id);batch.status="processing";batch.started_at=datetime.now(timezone.utc);batch.log_text=f"[{batch.started_at.isoformat()}] Начата обработка файла {batch.filename}\n";await db.commit()
   try:
    sheet,rows=read_sales(Path(batch.stored_path));batch.log_text+=f"Найден лист «{sheet}». Строки обрабатываются последовательно.\n";await db.commit()
    period_start=None;period_end=None
@@ -38,3 +49,18 @@ async def process_import(import_id:int):
    log.info("Импорт %s завершён: добавлено %s, дублей %s, ошибок %s",import_id,batch.added_rows,batch.duplicate_rows,batch.error_rows)
   except Exception as exc:
    await db.rollback();batch=await db.get(ImportBatch,import_id);batch.status="failed";batch.error_text=str(exc)[:10000];batch.finished_at=datetime.now(timezone.utc);batch.duration_ms=int((time.monotonic()-started)*1000);batch.log_text=(batch.log_text or "")+f"Критическая ошибка: {batch.error_text}\n";await db.commit();log.exception("Ошибка импорта %s",import_id)
+
+
+async def process_import(import_id:int):
+ started=time.monotonic()
+ async with SessionLocal() as db:
+  batch=await db.get(ImportBatch,import_id)
+  if not batch:return
+  path=Path(batch.stored_path)
+ async def operation():await _process_import(import_id,started)
+ try:
+  await with_temporary_source(path,operation)
+ finally:
+  if not path.exists():
+   try:await _clear_stored_path(import_id,path)
+   except Exception:log.exception("Не удалось очистить stored_path импорта %s",import_id)
