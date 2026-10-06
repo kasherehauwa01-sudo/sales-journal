@@ -1,0 +1,1 @@
+sales-mtls ALL=(root) NOPASSWD: /usr/local/sbin/sales-nginx-safe-reload
