@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     vrcatalog_api_url: str = "https://kvasmix.ru/vr/catalog/api"
     vrcatalog_api_token: str = ""
     public_url: str = "https://kvasmix.ru/vr/sales"
+    settings_admin_password_hash: str = ""
+    settings_admin_session_secret: str = ""
+    settings_admin_cookie_secure: bool = True
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     @property
     def api_prefix(self) -> str: return f"{self.base_path.rstrip('/')}/api"
