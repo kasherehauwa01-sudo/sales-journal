@@ -9,7 +9,8 @@ from app.database import get_db
 from app.models import ImportBatch
 from app.schemas import ImportOut
 from app.services.imports import process_import
-router=APIRouter(prefix="/imports",tags=["Импорт"])
+from app.services.settings_auth import require_settings_admin
+router=APIRouter(prefix="/imports",tags=["Импорт"],dependencies=[Depends(require_settings_admin)])
 UPLOAD_CHUNK_SIZE=1024*1024
 
 async def _save_upload(source:UploadFile,path:Path)->int:
