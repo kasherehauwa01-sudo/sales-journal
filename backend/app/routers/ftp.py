@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import AutoImportLog,FtpConfig,ImportBatch
 from app.services.ftp_autoload import run_autoload,test_connection
+from app.services.settings_auth import require_settings_admin
 
-router=APIRouter(prefix="/ftp",tags=["FTP"])
+router=APIRouter(prefix="/ftp",tags=["FTP"],dependencies=[Depends(require_settings_admin)])
 class FtpInput(BaseModel):
  protocol:Literal["FTP","FTPS"]="FTP";host:str;port:int=Field(21,ge=1,le=65535);username:str;password:str="";directory:str="/";retries:int=Field(5,ge=1,le=20);retry_delay:int=Field(3,ge=0,le=300);enabled:bool=True
 class FtpOut(BaseModel):

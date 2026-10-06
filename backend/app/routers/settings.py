@@ -11,23 +11,24 @@ from app.services.scenarios import run_scenario
 from app.services.email_recipients import parse_recipient_emails
 from app.services.scenario_periods import manual_test_period
 from app.config import settings
+from app.services.settings_auth import require_settings_admin
 
 router=APIRouter(tags=["Настройки"])
 class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str
 class TestEmail(BaseModel):email:str=Field(min_length=3,max_length=255)
 class ScenarioIn(BaseModel):name:str;email:str;reply_emails:str="";manager:str="Трошина Лариса";message_text:str="";enabled:bool=True
 def smtp_out(row):return {"host":row.host,"port":row.port,"security":row.security,"username":row.username,"password":"","sender_email":row.sender_email,"sender_name":row.sender_name,"has_password":bool(row.password)}
-@router.get("/smtp/settings")
+@router.get("/smtp/settings",dependencies=[Depends(require_settings_admin)])
 async def get_smtp(db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1);return smtp_out(row) if row else None
-@router.put("/smtp/settings")
+@router.put("/smtp/settings",dependencies=[Depends(require_settings_admin)])
 async def save_smtp(data:SmtpIn,db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1)
  if not row:row=SmtpConfig(id=1,password=data.password);db.add(row)
  for key,value in data.model_dump(exclude={"password"}).items():setattr(row,key,value)
  if data.password:row.password=data.password
  await db.commit();await db.refresh(row);return smtp_out(row)
-@router.post("/smtp/test")
+@router.post("/smtp/test",dependencies=[Depends(require_settings_admin)])
 async def test_smtp(data:TestEmail,db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1)
  if not row:raise HTTPException(400,"SMTP не настроен")
@@ -35,7 +36,7 @@ async def test_smtp(data:TestEmail,db:AsyncSession=Depends(get_db)):
  try:await send_test(row,data.email)
  except Exception as exc:raise HTTPException(502,f"Не удалось отправить письмо: {exc}") from exc
  return {"sent":True}
-@router.get("/smtp/history")
+@router.get("/smtp/history",dependencies=[Depends(require_settings_admin)])
 async def smtp_history(db:AsyncSession=Depends(get_db)):
  rows=(await db.scalars(select(ScenarioRun).order_by(ScenarioRun.created_at.desc()).limit(200))).all()
  return [{"id":row.id,"run_date":row.run_date,"run_type":row.run_type,"period_start":row.period_start,"period_end":row.period_end,"recipients":row.recipients,"status":row.status,"message":row.message} for row in rows]
