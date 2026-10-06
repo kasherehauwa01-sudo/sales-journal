@@ -93,7 +93,9 @@ async def _process_file(config:FtpConfig,filename:str):
     await _with_retries(config,mark_error)
    except Exception as rename_exc:entry.message+=f"; не удалось переименовать: {rename_exc}"
   finally:
-   entry.finished_at=datetime.now(timezone.utc);await db.commit()
+   # process_import удаляет полностью загруженный файл; этот finally также
+   # очищает частичный файл при ошибке скачивания до создания ImportBatch.
+   local.unlink(missing_ok=True);entry.finished_at=datetime.now(timezone.utc);await db.commit()
 
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)

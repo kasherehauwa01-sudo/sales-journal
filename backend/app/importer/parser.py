@@ -1,4 +1,5 @@
-import base64, hashlib, quopri, re
+import base64, codecs, hashlib, itertools, quopri, re
+from collections import deque
 from email import policy
 from email.parser import BytesParser
 from datetime import date, datetime
@@ -159,6 +160,39 @@ class _HtmlTables(HTMLParser):
   if self.table is not None:
    if self.table:self.tables.append(self.table)
    self.table=None
+
+class _StreamingHtmlRows(HTMLParser):
+ """Потоковый HTML-парсер, удерживающий только текущую строку и небольшой буфер."""
+ def __init__(self):
+  super().__init__(convert_charrefs=True);self.rows=deque();self.row=None;self.cell=None
+ def _finish_cell(self):
+  if self.cell is not None and self.row is not None:
+   self.row.append("".join(self.cell).strip());self.cell=None
+ def _finish_row(self):
+  self._finish_cell()
+  if self.row:
+   self.rows.append(self.row)
+  self.row=None
+ def handle_starttag(self,tag,attrs):
+  tag=tag.lower().split(":")[-1]
+  if tag in {"tr","row"}:
+   # Повреждённый HTML может начать новую строку без закрытия предыдущей.
+   if self.row is not None:self._finish_row()
+   self.row=[]
+  elif tag in {"td","th","cell"} and self.row is not None:
+   # Экспорт 1С часто не содержит </TD>: следующий TD закрывает текущую ячейку.
+   self._finish_cell();self.cell=[]
+  elif tag=="data" and self.row is not None and self.cell is None:self.cell=[]
+  elif tag=="br" and self.cell is not None:self.cell.append("\n")
+ def handle_data(self,data):
+  if self.cell is not None:self.cell.append(data)
+ def handle_endtag(self,tag):
+  tag=tag.lower().split(":")[-1]
+  if tag in {"td","th","cell","data"}:self._finish_cell()
+  elif tag in {"tr","row"}:self._finish_row()
+ def finish(self):
+  """Отдаёт последнюю строку даже для обрезанного HTML."""
+  if self.row is not None:self._finish_row()
 def _decode_bytes(data:bytes,charset:str|None=None)->str:
  """Декодирует текст выгрузки, включая UTF без BOM и типичную кодировку 1С."""
  # Определяем UTF-32/UTF-16 без BOM по распределению NUL-байтов.
@@ -234,13 +268,18 @@ def _fallback_html_rows(text:str)->list[list[str]]:
 
 def _html_rows(path:Path)->list[list[list[str]]]:
  data=path.read_bytes()
+ documents=_decode_html(data)
+ # После декодирования bytes-копия больше не нужна; одновременно держим только
+ # текст документа и распознанные строки. Полный streaming HTML оставлен на
+ # будущее из-за обязательных fallback для повреждённых MHTML.
+ del data
  tables=[]
- for text in _decode_html(data):
+ for text in documents:
   candidates=[text]
   # Бывают выгрузки, где весь документ HTML экранирован, либо таблица помещена
   # внутрь HTML-комментария. Браузер их показывает, но HTMLParser таблиц не видит.
-  decoded=unescape(text)
-  if decoded!=text:candidates.append(decoded)
+  if re.search(r"&lt;(?:\w+:)?(?:table|workbook)\b",text,re.I):
+   candidates.append(unescape(text))
   candidates.extend(comment for comment in re.findall(r"<!--(.*?)-->",text,re.S) if re.search(r"<table\b",comment,re.I))
   for candidate in candidates:
    parser=_HtmlTables();parser.feed(candidate);parser.close();parser.finish();tables.extend(parser.tables)
@@ -248,38 +287,93 @@ def _html_rows(path:Path)->list[list[list[str]]]:
     recovered=_fallback_html_rows(candidate)
     if recovered:tables.append(recovered)
  return tables
-def workbook_rows(path:Path)->Iterator[tuple[str,list[list[Any]]]]:
+
+def _html_encoding(head:bytes)->str:
+ """Определяет кодировку обычного HTML по BOM, NUL-байтам и META."""
+ if head.startswith((b"\xff\xfe\x00\x00",b"\x00\x00\xfe\xff")):return "utf-32"
+ if head.startswith((b"\xff\xfe",b"\xfe\xff")):return "utf-16"
+ if len(head)>=16 and head[1::2].count(0)>40:return "utf-16-le"
+ if len(head)>=16 and head[0::2].count(0)>40:return "utf-16-be"
+ declaration=head.decode("ascii",errors="ignore")
+ match=re.search(r"(?:charset|encoding)\s*=\s*['\"]?([\w-]+)",declaration,re.I)
+ if match:return match.group(1)
+ try:head.decode("utf-8-sig");return "utf-8-sig"
+ except UnicodeDecodeError:return "windows-1251"
+
+def iter_html_rows(path:Path,chunk_size:int=64*1024)->Iterator[list[str]]:
+ """Читает обычный HTML чанками; тяжёлый fallback запускается только при необходимости."""
+ with path.open("rb") as source:
+  head=source.read(8192);source.seek(0)
+  probe=head.decode("ascii",errors="ignore")
+  is_mhtml=bool(re.search(r"(?im)^(?:mime-version|content-type\s*:\s*multipart/)",probe))
+  if not is_mhtml:
+   decoder=codecs.getincrementaldecoder(_html_encoding(head))(errors="replace")
+   parser=_StreamingHtmlRows();yielded=False
+   while chunk:=source.read(chunk_size):
+    parser.feed(decoder.decode(chunk))
+    while parser.rows:
+     yielded=True;yield parser.rows.popleft()
+   parser.feed(decoder.decode(b"",final=True));parser.close();parser.finish()
+   while parser.rows:
+    yielded=True;yield parser.rows.popleft()
+   if yielded:return
+ # MIME, escaped HTML, комментарии и табличный текст сохраняют старые fallback.
+ for table in _html_rows(path):
+  yield from table
+
+def workbook_rows(path:Path)->Iterator[tuple[str,Iterator[list[Any]]]]:
+ """Отдаёт листы как однопроходные итераторы, не материализуя книгу в памяти."""
  with path.open("rb") as source:signature=source.read(8)
  if path.suffix.lower()==".xlsx" or signature.startswith(b"PK\x03\x04"):
   import openpyxl
   # Передаём поток: так XLSX корректно читается даже при ошибочном расширении .html.
   source=path.open("rb");wb=openpyxl.load_workbook(source,read_only=True,data_only=True)
   try:
-   for ws in wb.worksheets:yield ws.title,[list(r) for r in ws.iter_rows(values_only=True)]
+   for ws in wb.worksheets:
+    yield ws.title,(list(row) for row in ws.iter_rows(values_only=True))
   finally:wb.close();source.close()
  elif path.suffix.lower()==".xls" or signature.startswith(b"\xd0\xcf\x11\xe0"):
   import xlrd
   wb=xlrd.open_workbook(path,on_demand=True)
-  for ws in wb.sheets():yield ws.name,[ws.row_values(i) for i in range(ws.nrows)]
+  try:
+   for ws in wb.sheets():
+    # xlrd сам хранит структуру XLS, но второй список всех строк больше не создаётся.
+    yield ws.name,(ws.row_values(index) for index in range(ws.nrows))
+  finally:
+   wb.release_resources()
  elif path.suffix.lower() in {".html",".htm"}:
-  for index,rows in enumerate(_html_rows(path),1):yield f"Таблица {index}",rows
+  yield "Таблица 1",iter_html_rows(path)
  else:
   raise ValueError(f"Неподдерживаемый формат файла: {path.suffix or 'без расширения'}")
-def read_sales(path:Path):
+def read_sales(path:Path)->tuple[str,Iterator[tuple[int,dict[str,Any]]]]:
+ """Находит заголовок и возвращает ленивый поток нормализуемых сырых строк.
+
+ В памяти остаются только первые строки, необходимые для распознавания шапки.
+ Закрытие результирующего итератора также закрывает генератор книги и XLSX-файл.
+ """
  diagnostics=[]
- for sheet,rows in workbook_rows(path):
-  result=find_header(rows)
+ sheets=workbook_rows(path)
+ for sheet,row_iterator in sheets:
+  # Защищаемся и от списков из fallback: буфер и остаток всегда читают один
+  # однопроходный итератор и не могут повторно начать HTML с первой строки.
+  row_iterator=iter(row_iterator)
+  buffered=list(itertools.islice(row_iterator,1001))
+  result=find_header(buffered)
   if result is None:diagnostics.append(f"{sheet}: распознано 0 колонок");continue
   header_idx,mapping,best=result
   if header_idx<0:
    diagnostics.append(f"{sheet}: распознаны {', '.join(sorted(best))}; отсутствуют {', '.join(sorted(REQUIRED-best))}")
    continue
-  output=[]
-  for excel_row,values in enumerate(rows[header_idx+1:],header_idx+2):
-   if not any(v not in (None,"") for v in values):continue
-   raw={key:(values[i] if i<len(values) else None) for key,i in mapping.items()}
-   output.append((excel_row,raw))
-  return sheet,output
+  def mapped_rows():
+   try:
+    values_stream=itertools.chain(buffered[header_idx+1:],row_iterator)
+    for excel_row,values in enumerate(values_stream,header_idx+2):
+     if not any(v not in (None,"") for v in values):continue
+     yield excel_row,{key:(values[i] if i<len(values) else None) for key,i in mapping.items()}
+   finally:
+    close=getattr(sheets,"close",None)
+    if close:close()
+  return sheet,mapped_rows()
  details="; ".join(diagnostics) or "в книге нет доступных листов"
  raise ValueError(f"Не найдена строка заголовков с обязательными колонками. Проверены первые 1000 строк каждого листа. {details}")
 def normalize_sale(raw:dict)->dict:

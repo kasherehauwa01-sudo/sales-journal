@@ -100,7 +100,7 @@ def test_html_export_is_read_like_excel(tmp_path):
  <tr><th>№ п/п</th><th>Дата</th><th>№ Док.</th><th>Клиент</th><th>Подразделение</th><th>Сумма</th><th>Товары</th></tr>
  <tr><td>1</td><td>22.09.2026</td><td>РН-42</td><td>ООО Тест</td><td>Авиаторов</td><td>1 245,50</td><td>Артикул: 1<br>Код: A-1</td></tr>
  </table></body></html>""",encoding="utf-8")
- sheet,rows=read_sales(path)
+ sheet,rows=read_sales(path);rows=list(rows)
  assert sheet=="Таблица 1"
  assert rows[0][0]==2
  assert rows[0][1]["document_number"]=="РН-42"
@@ -110,21 +110,21 @@ def test_windows_1251_html_export_is_supported(tmp_path):
  path=tmp_path/"sales.htm"
  html='<meta http-equiv="Content-Type" content="text/html; charset=windows-1251"><table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>22.09.2026</td><td>РН-1</td><td>Европа</td><td>100</td></tr></table>'
  path.write_bytes(html.encode("windows-1251"))
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["department"]=="Европа"
 
 def test_utf16_html_export_is_supported(tmp_path):
  path=tmp_path/"sales.html"
  html='<html><table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>22.09.2026</td><td>РН-2</td><td>Авиаторов</td><td>200</td></tr></table></html>'
  path.write_bytes(html.encode("utf-16"))
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-2"
 
 def test_utf16_big_endian_html_without_bom_is_supported(tmp_path):
  path=tmp_path/"sales.html"
  html='<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-4</td><td>Авиаторов</td><td>400</td></tr></table>'
  path.write_bytes(html.encode("utf-16-be"))
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-4"
 
 def test_mhtml_export_with_quoted_printable_html_is_supported(tmp_path):
@@ -139,7 +139,7 @@ Content-Transfer-Encoding: quoted-printable\r
 <html><table><tr><td>=C4=E0=F2=E0</td><td>=B9 =C4=EE=EA.</td><td>=CF=EE=E4=F0=E0=E7=E4=E5=EB=E5=ED=E8=E5</td><td>=D1=F3=EC=EC=E0</td></tr><tr><td>23.09.2026</td><td>=D0=CD-5</td><td>=C0=E2=E8=E0=F2=EE=F0=EE=E2</td><td>500</td></tr></table></html>\r
 --report-boundary--\r
 '''.encode("ascii"))
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-5"
  assert rows[0][1]["department"]=="Авиаторов"
 
@@ -149,31 +149,31 @@ def test_mhtml_imports_html_marked_as_binary_attachment(tmp_path):
  import base64
  payload=base64.b64encode(html.encode("windows-1251")).decode("ascii")
  path.write_text(f'''MIME-Version: 1.0\nContent-Type: multipart/related; boundary="report"\n\n--report\nContent-Type: application/octet-stream; charset=windows-1251\nContent-Transfer-Encoding: base64\n\n{payload}\n--report--\n''',encoding="ascii")
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-7"
 
 def test_escaped_html_document_is_supported(tmp_path):
  path=tmp_path/"escaped.html"
  path.write_text('&lt;table&gt;&lt;tr&gt;&lt;td&gt;Дата&lt;/td&gt;&lt;td&gt;№ Док.&lt;/td&gt;&lt;td&gt;Подразделение&lt;/td&gt;&lt;td&gt;Сумма&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;23.09.2026&lt;/td&gt;&lt;td&gt;РН-8&lt;/td&gt;&lt;td&gt;Авиаторов&lt;/td&gt;&lt;td&gt;800&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;',encoding="utf-8")
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-8"
 
 def test_html_rows_are_recovered_without_table_container(tmp_path):
  path=tmp_path/"broken-report.html"
  path.write_text('<TR><TD>Дата</TD><TD>№ Док.</TD><TD>Подразделение</TD><TD>Сумма</TD></TR><TR><TD>23.09.2026</TD><TD>РН-9</TD><TD>Авиаторов</TD><TD>900</TD></TR>',encoding="utf-8")
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-9"
 
 def test_tab_separated_report_disguised_as_html_is_supported(tmp_path):
  path=tmp_path/"text-report.html"
  path.write_text('Дата\t№ Док.\tПодразделение\tСумма\n23.09.2026\tРН-10\tАвиаторов\t1000\n',encoding="utf-8")
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-10"
 
 def test_truncated_html_table_is_still_imported(tmp_path):
  path=tmp_path/"sales.html"
  path.write_text('<table><tr><td>Дата</td><td>№ Док.</td><td>Подразделение</td><td>Сумма</td></tr><tr><td>23.09.2026</td><td>РН-6</td><td>Авиаторов</td><td>600</td>',encoding="utf-8")
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-6"
 
 def test_spreadsheet_xml_tags_inside_html_are_supported(tmp_path):
@@ -182,7 +182,7 @@ def test_spreadsheet_xml_tags_inside_html_are_supported(tmp_path):
  <Row><Cell><Data>Дата</Data></Cell><Cell><Data>№ Док.</Data></Cell><Cell><Data>Подразделение</Data></Cell><Cell><Data>Сумма</Data></Cell></Row>
  <Row><Cell><Data>22.09.2026</Data></Cell><Cell><Data>РН-3</Data></Cell><Cell><Data>Авиаторов</Data></Cell><Cell><Data>300</Data></Cell></Row>
  </Table></Worksheet></Workbook>''',encoding="utf-8")
- _,rows=read_sales(path)
+ _,rows=read_sales(path);rows=list(rows)
  assert rows[0][1]["document_number"]=="РН-3"
 
 def test_certificate_is_subtracted_from_total_and_keeps_legacy_fingerprint():
@@ -190,3 +190,90 @@ def test_certificate_is_subtracted_from_total_and_keeps_legacy_fingerprint():
  assert row["total_amount"]==Decimal("1000.00")
  assert row["certificate_amount"]==Decimal("245.50")
  assert row["legacy_fingerprint"]==normalize_sale(BASE)["fingerprint"]
+
+def test_xlsx_rows_are_consumed_lazily(monkeypatch,tmp_path):
+ """До запроса строк импорт читает только ограниченное окно поиска заголовка."""
+ import sys
+ from types import SimpleNamespace
+ consumed=[]
+ header=["Дата","№ Док.","Подразделение","Сумма"]
+ def source_rows(values_only=True):
+  assert values_only is True
+  for index in range(5000):
+   consumed.append(index)
+   yield header if index==0 else ["23.09.2026",f"РН-{index}","Авиаторов",index]
+ class Workbook:
+  worksheets=[SimpleNamespace(title="Продажи",iter_rows=source_rows)]
+  def close(self):pass
+ monkeypatch.setitem(sys.modules,"openpyxl",SimpleNamespace(load_workbook=lambda *args,**kwargs:Workbook()))
+ path=tmp_path/"large.xlsx";path.write_bytes(b"PK\x03\x04fake")
+ sheet,rows=read_sales(path)
+ assert sheet=="Продажи"
+ assert len(consumed)==1001
+ first=next(rows)
+ assert first[0]==2 and first[1]["document_number"]=="РН-1"
+ assert len(consumed)==1001
+ # После исчерпания ограниченного буфера исходный worksheet снова читается по одной строке.
+ for _ in range(999):next(rows)
+ assert len(consumed)==1001
+ next(rows)
+ assert len(consumed)==1002
+ rows.close()
+
+def test_large_html_does_not_repeat_header_buffer(tmp_path):
+ """HTML-список продолжает чтение после буфера, а не начинается заново."""
+ sales_count=1100
+ body="".join(
+  f"<tr><td>23.09.2026</td><td>РН-{index:04d}</td><td>Европа</td><td>{index}</td></tr>"
+  for index in range(sales_count)
+ )
+ path=tmp_path/"large-sales.html"
+ path.write_text(
+  "<table><tr><th>Дата</th><th>№ Док.</th><th>Подразделение</th><th>Сумма</th></tr>"
+  f"{body}</table>",encoding="utf-8"
+ )
+
+ _,row_iterator=read_sales(path)
+ rows=list(row_iterator)
+ document_numbers=[raw["document_number"] for _,raw in rows]
+
+ assert len(rows)==sales_count
+ assert len(set(document_numbers))==sales_count
+ assert document_numbers[:2]==["РН-0000","РН-0001"]
+ assert document_numbers[1000:1002]==["РН-1000","РН-1001"]
+
+def test_1c_html_without_closing_td_is_split_into_columns(tmp_path):
+ path=tmp_path/"1c-report.html"
+ path.write_bytes("""<HTML><HEAD><META HTTP-EQUIV="Content-Type" CONTENT="text/html; CHARSET=windows-1251"></HEAD>
+ <TABLE><TR><TD>№ п/п<TD>Дата<TD>№ Док.<TD>Клиент<TD>Подразделение<TD>Сумма</TR>
+ <TR><TD>1<TD>01.06.25<TD>Р-00000001<TD>ООО Клиент<TD>Авиаторов<TD>100.00</TR></TABLE>""".encode("windows-1251"))
+
+ _,row_iterator=read_sales(path)
+ rows=list(row_iterator)
+
+ assert len(rows)==1
+ assert rows[0][1]=={
+  "row_number":"1","sale_date":"01.06.25","document_number":"Р-00000001",
+  "client":"ООО Клиент","department":"Авиаторов","total_amount":"100.00",
+ }
+
+def test_streaming_html_reads_large_report_without_materialized_fallback(monkeypatch,tmp_path):
+ from app.importer import parser as parser_module
+ sales_count=10_000
+ path=tmp_path/"large-streaming-report.html"
+ with path.open("w",encoding="utf-8") as target:
+  target.write("<table><tr><th>Дата</th><th>№ Док.</th><th>Подразделение</th><th>Сумма</th></tr>")
+  for index in range(sales_count):
+   target.write(f"<tr><td>01.06.2025</td><td>Р-{index:08d}</td><td>Европа</td><td>{index}</td></tr>")
+  target.write("</table>")
+ monkeypatch.setattr(parser_module,"_html_rows",lambda _path: (_ for _ in ()).throw(AssertionError("fallback не нужен")))
+
+ sheet,row_iterator=read_sales(path)
+ rows=list(row_iterator)
+ documents=[raw["document_number"] for _,raw in rows]
+
+ assert sheet=="Таблица 1"
+ assert len(rows)==sales_count
+ assert len(set(documents))==sales_count
+ assert documents[0]=="Р-00000000"
+ assert documents[-1]=="Р-00009999"
