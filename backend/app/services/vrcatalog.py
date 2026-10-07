@@ -59,13 +59,27 @@ def _image_url(item):
 
 def _absolute_image_url(value:str,base_url:str):
  if value.startswith("data:") or urlparse(value).scheme:return value
+ parsed=urlparse(base_url)
+ if value.startswith("/"):
+  # Root-relative ссылки CatalogVR должны оставаться внутри /vr/catalog,
+  # а не уходить в корень kvasmix.ru или разрешаться относительно /vr/sales/.
+  if value.startswith("/vr/"):return f"{parsed.scheme}://{parsed.netloc}{value}"
+  catalog_path=parsed.path.rstrip("/")
+  if catalog_path.endswith("/api"):catalog_path=catalog_path[:-4]
+  return f"{parsed.scheme}://{parsed.netloc}{catalog_path}{value}"
  return urljoin(f"{base_url.rstrip('/')}/",value)
+
+def catalog_item_image_url(item:dict,base_url:str=""):
+ """Извлекает фото из поддерживаемых полей CatalogVR и нормализует URL."""
+ value=_image_url(item)
+ if not value:return None
+ return _absolute_image_url(value,base_url) if base_url else value
 
 def catalog_product_images(payload,base_url:str=""):
  result={}
  for item in _source(payload):
   if not isinstance(item,dict):continue
-  image=_image_url(item)
+  image=catalog_item_image_url(item)
   if not image:continue
   if base_url:image=_absolute_image_url(image,base_url)
   for prefix,names in (("article",("article","sku","article_number","Артикул")),("code",("code","product_code","Код"))):
@@ -163,6 +177,12 @@ async def get_catalog_batch_info(products:list[dict]):
    if not isinstance(item,dict):continue
    nested=next((item.get(key) for key in ("product","catalog_product","catalogProduct","item") if isinstance(item.get(key),dict)),None)
    if nested:item={**item,**nested}
+   image=catalog_item_image_url(item)
+   if image:
+    if not image.startswith("data:") and not urlparse(image).scheme:
+     from app.config import settings
+     image=_absolute_image_url(image,settings.vrcatalog_api_url)
+    item={**item,"image_url":image}
 
    keys=(
     _catalog_key("code",item.get("code")),

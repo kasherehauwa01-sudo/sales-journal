@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.product_analytics import catalog_property, classify, group_rows, merge_periods, percent_change, previous_period, product_key, summary
+from app.services.product_analytics import catalog_property, classify, clients_for_managers, filter_subcategories, group_rows, merge_periods, percent_change, previous_period, product_key, summary
 
 
 def row(article, revenue, units, checks, **extra):
@@ -64,3 +64,20 @@ def test_stable_key_does_not_use_name_when_article_exists():
 def test_category_supports_catalog_name_and_nested_group():
     assert catalog_property({"category_name": "Посуда"}, "category") == "Посуда"
     assert catalog_property({"group": {"name": "Хранение"}}, "category") == "Хранение"
+
+
+def test_multiple_managers_are_combined_without_duplicate_clients():
+    clients=["клиент а","клиент б","клиент в"]
+    mapping={"клиент а":"Иванов","клиент б":"Петров","клиент в":"Сидоров"}
+    assert clients_for_managers(clients,mapping,["Иванов","Петров"])==["клиент а","клиент б"]
+
+
+def test_missing_manager_includes_empty_client_and_unmapped_client():
+    clients=["","известный","без менеджера","явно без менеджера"]
+    mapping={"известный":"Иванов","явно без менеджера":"Нет менеджера"}
+    assert clients_for_managers(clients,mapping,["Не заполнено"])==["","без менеджера","явно без менеджера"]
+
+
+def test_multiple_subcategories_are_combined():
+    rows=[{"subcategory":"Чай"},{"subcategory":"Кофе"},{"subcategory":"Посуда"}]
+    assert filter_subcategories(rows,["Чай","Кофе"])==rows[:2]
