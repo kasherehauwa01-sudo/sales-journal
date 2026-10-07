@@ -81,6 +81,12 @@ def catalog_item_image_url(item:dict,base_url:str=""):
  if not value:return None
  return _absolute_image_url(value,base_url) if base_url else value
 
+def catalog_item_image_url(item:dict,base_url:str=""):
+ """Извлекает фото из поддерживаемых полей CatalogVR и нормализует URL."""
+ value=_image_url(item)
+ if not value:return None
+ return _absolute_image_url(value,base_url) if base_url else value
+
 def catalog_product_images(payload,base_url:str=""):
  result={}
  for item in _source(payload):

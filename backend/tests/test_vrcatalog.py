@@ -73,6 +73,10 @@ def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales(
  item={"photos":[{"path":"media/products/1.jpg"}]}
  assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/products/1.jpg"
 
+def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales():
+ item={"photos":[{"path":"media/products/1.jpg"}]}
+ assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/api/media/products/1.jpg"
+
 def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
  assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/vr/catalog/media/1.jpg"}
 
