@@ -1,6 +1,12 @@
+import asyncio
 from datetime import date
 
+import pytest
+from fastapi import HTTPException
+
+from app.routers import product_analytics as product_analytics_router
 from app.services.product_analytics import catalog_property, classify, group_rows, merge_periods, percent_change, previous_period, product_key, summary
+from app.services.vrcatalog import VrCatalogError
 
 
 def row(article, revenue, units, checks, **extra):
@@ -64,3 +70,59 @@ def test_stable_key_does_not_use_name_when_article_exists():
 def test_category_supports_catalog_name_and_nested_group():
     assert catalog_property({"category_name": "Посуда"}, "category") == "Посуда"
     assert catalog_property({"group": {"name": "Хранение"}}, "category") == "Хранение"
+
+
+def test_catalog_tree_endpoint_proxies_recursive_tree(monkeypatch):
+    tree=[{"id":"root","code":"root","name":"Корень","parent_id":None,"children":[{"id":"child","code":"child","name":"Раздел","parent_id":"root","children":[]}]}]
+    async def loader():return tree
+    monkeypatch.setattr(product_analytics_router,"get_catalog_tree",loader)
+    assert asyncio.run(product_analytics_router.catalog_tree())==tree
+
+
+def test_catalog_tree_endpoint_returns_bad_gateway(monkeypatch):
+    async def loader():raise VrCatalogError("vrcatalog недоступен")
+    monkeypatch.setattr(product_analytics_router,"get_catalog_tree",loader)
+    with pytest.raises(HTTPException) as caught:asyncio.run(product_analytics_router.catalog_tree())
+    assert caught.value.status_code==502
+
+
+def test_brand_options_endpoint_proxies_search_and_pagination(monkeypatch):
+    calls=[]
+    async def loader(**kwargs):calls.append(kwargs);return {"items":[{"value":"Pasabahce","label":"Pasabahce"}],"page":2,"page_size":50,"total":1,"pages":1}
+    monkeypatch.setattr(product_analytics_router,"get_brands",loader)
+    response=asyncio.run(product_analytics_router.brand_options(search="pasa",page=2,page_size=50))
+    assert response["items"][0]["value"]=="Pasabahce"
+    assert calls==[{"search":"pasa","page":2,"page_size":50}]
+
+
+def test_dataset_applies_multiple_brands_and_sections_together(monkeypatch):
+    calls=[]
+    data=product_analytics_router.AnalyticsRequest(
+        date_from=date(2026,9,1),date_to=date(2026,9,30),
+        brands=["Pasabahce","Regent"],subcategories=["Посуда","Семена"],
+    )
+    async def period_rows(_data,_db,_start,_end):
+        return [row("keep",100,1,1),row("drop",50,1,1)]
+    async def filter_keys(**kwargs):calls.append(kwargs);return {"article:keep"}
+    async def catalog(_rows):return {}
+    monkeypatch.setattr(product_analytics_router,"_period_rows",period_rows)
+    monkeypatch.setattr(product_analytics_router,"get_catalog_filter_keys",filter_keys)
+    monkeypatch.setattr(product_analytics_router,"_catalog",catalog)
+
+    result,_,_=asyncio.run(product_analytics_router._dataset(data,object()))
+
+    assert [item["key"] for item in result]==["article:keep"]
+    assert calls==[{"brands":["Pasabahce","Regent"],"sections":["Посуда","Семена"]}]
+
+
+def test_dataset_with_empty_brand_and_section_filters_keeps_all_rows(monkeypatch):
+    data=product_analytics_router.AnalyticsRequest(date_from=date(2026,9,1),date_to=date(2026,9,30))
+    async def period_rows(_data,_db,_start,_end):return [row("first",100,1,1),row("second",50,1,1)]
+    async def filter_keys(**kwargs):
+        assert kwargs=={"brands":[],"sections":[]};return None
+    async def catalog(_rows):return {}
+    monkeypatch.setattr(product_analytics_router,"_period_rows",period_rows)
+    monkeypatch.setattr(product_analytics_router,"get_catalog_filter_keys",filter_keys)
+    monkeypatch.setattr(product_analytics_router,"_catalog",catalog)
+    result,_,_=asyncio.run(product_analytics_router._dataset(data,object()))
+    assert {item["key"] for item in result}=={"article:first","article:second"}
