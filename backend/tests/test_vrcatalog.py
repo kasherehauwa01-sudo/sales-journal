@@ -69,8 +69,18 @@ def test_catalog_images_support_common_image_shapes():
  payload={"items":[{"code":"1","image_url":"https://img/1.jpg"},{"article":"A2","images":[{"url":"https://img/2.jpg"}]},{"code":"3","photos":[{"path":"media/3.jpg"}]}]}
  assert vrcatalog.catalog_product_images(payload,"https://catalog.example/api")=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg","code:3":"https://catalog.example/api/media/3.jpg"}
 
+def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales():
+ item={"photos":[{"path":"media/products/1.jpg"}]}
+ assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/api/media/products/1.jpg"
+
 def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
- assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/media/1.jpg"}
+ assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/vr/catalog/media/1.jpg"}
+
+def test_catalog_image_supports_path_fields_from_batch_info():
+ assert vrcatalog.catalog_item_image_url({"preview_url":"/media/preview.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/preview.jpg"
+
+def test_catalog_image_with_full_vr_path_is_not_prefixed_twice():
+ assert vrcatalog.catalog_item_image_url({"image":"/vr/catalog/media/1.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/1.jpg"
 
 def test_catalog_images_are_loaded_in_pages_and_cached(monkeypatch):
  calls=[]
@@ -98,7 +108,7 @@ def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
 def test_catalog_batch_info_is_one_request_and_maps_code_and_article(monkeypatch):
  calls=[]
  def batch(payload):
-  calls.append(payload);return {"items":[{"code":" A-1 ","article":"ART-1","name":"Товар","horeca":False,"image_url":"https://img/1.jpg"}]}
+  calls.append(payload);return {"items":[{"code":" A-1 ","article":"ART-1","name":"Товар","horeca":False,"photo":"https://img/1.jpg"}]}
  monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
  result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":"A-1","article":"ART-1"},{"code":"A-1","article":"ART-1"}]))
  assert result["code:a-1"]["image_url"]=="https://img/1.jpg"
