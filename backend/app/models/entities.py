@@ -86,3 +86,19 @@ class ProductReportSet(Base, TimestampMixin):
 class HorecaReport(Base):
     __tablename__="horeca_reports"
     id:Mapped[int]=mapped_column(BigInteger,primary_key=True);token:Mapped[str]=mapped_column(String(64),unique=True,index=True);scenario_id:Mapped[int]=mapped_column(ForeignKey("scenarios.id",ondelete="CASCADE"));period_start:Mapped[date]=mapped_column(Date);period_end:Mapped[date]=mapped_column(Date);products:Mapped[list[dict]]=mapped_column(JSON);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now())
+
+class AccessDevice(Base, TimestampMixin):
+    __tablename__="access_devices"
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True)
+    device_name:Mapped[str]=mapped_column(String(255));owner:Mapped[str|None]=mapped_column(String(255));comment:Mapped[str|None]=mapped_column(Text)
+    common_name:Mapped[str]=mapped_column(String(255),unique=True,index=True);serial_number:Mapped[str]=mapped_column(String(255),unique=True,index=True)
+    fingerprint:Mapped[str]=mapped_column(String(128),unique=True,index=True);expires_at:Mapped[datetime]=mapped_column(DateTime(timezone=True))
+    status:Mapped[str]=mapped_column(String(32),index=True);last_used_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True),index=True)
+    revoked_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True));deleted_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True),index=True)
+    package_available:Mapped[bool]=mapped_column(Boolean,default=False);package_expires_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True))
+
+class AccessAuditEvent(Base):
+    __tablename__="access_audit_events"
+    id:Mapped[int]=mapped_column(BigInteger,primary_key=True);device_id:Mapped[int|None]=mapped_column(ForeignKey("access_devices.id",ondelete="SET NULL"),index=True)
+    action:Mapped[str]=mapped_column(String(64),index=True);actor:Mapped[str]=mapped_column(String(255));ip_address:Mapped[str|None]=mapped_column(String(64))
+    details:Mapped[dict|None]=mapped_column(JSON);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now(),index=True)

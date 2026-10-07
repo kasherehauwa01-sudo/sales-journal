@@ -7,6 +7,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import AutoImportLog, FtpConfig, ImportBatch
 from app.services.ftp_file_utils import importable_ftp_files
+from app.services.import_files import import_temp_dir
 from app.services.imports import process_import
 
 log=logging.getLogger(__name__);run_lock=asyncio.Lock()
@@ -55,7 +56,7 @@ async def run_autoload():
    for filename in filenames:await _process_file(config,filename)
 
 async def _process_file(config:FtpConfig,filename:str):
- settings.upload_dir.mkdir(parents=True,exist_ok=True);safe=re.sub(r"[^\w. -]","_",Path(filename).name);local=settings.upload_dir/f"ftp_{uuid.uuid4().hex}_{safe}"
+ safe=re.sub(r"[^\w. -]","_",Path(filename).name);local=import_temp_dir()/f"ftp_{uuid.uuid4().hex}_{safe}"
  async with SessionLocal() as db:
   entry=AutoImportLog(filename=filename,status="downloading");db.add(entry);await db.commit();await db.refresh(entry)
   try:
@@ -93,7 +94,9 @@ async def _process_file(config:FtpConfig,filename:str):
     await _with_retries(config,mark_error)
    except Exception as rename_exc:entry.message+=f"; не удалось переименовать: {rename_exc}"
   finally:
-   entry.finished_at=datetime.now(timezone.utc);await db.commit()
+   # process_import удаляет полностью загруженный файл; этот finally также
+   # очищает частичный файл при ошибке скачивания до создания ImportBatch.
+   local.unlink(missing_ok=True);entry.finished_at=datetime.now(timezone.utc);await db.commit()
 
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)
