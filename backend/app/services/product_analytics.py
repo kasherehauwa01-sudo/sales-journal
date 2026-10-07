@@ -27,6 +27,12 @@ def filter_subcategories(rows: list[dict], selected: list[str]) -> list[dict]:
     return [row for row in rows if str(row.get("subcategory") or "Не заполнено").casefold() in wanted]
 
 
+def filter_values(rows: list[dict],field: str,selected: list[str]) -> list[dict]:
+    if not selected:return rows
+    wanted={value.strip().casefold() for value in selected if value and value.strip()}
+    return [row for row in rows if str(row.get(field) or "Не заполнено").casefold() in wanted]
+
+
 def previous_period(start: date, end: date) -> tuple[date, date]:
     length = (end - start).days + 1
     return start - timedelta(days=length), start - timedelta(days=1)

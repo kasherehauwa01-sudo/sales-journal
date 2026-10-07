@@ -50,11 +50,11 @@ def horeca_keys(payload):
  return result
 
 def _image_url(item):
- value=next((item.get(key) for key in ("photo","image","image_url","photo_url","thumbnail","main_image","main_image_url","main_photo","main_photo_url") if item.get(key)),None)
+ value=next((item.get(key) for key in ("photo","image","picture","image_url","imageUrl","photo_url","photoUrl","picture_url","photo_path","image_path","thumbnail","thumbnail_url","preview","preview_url","main_image","main_image_url","mainImageUrl","main_photo","main_photo_url","mainPhotoUrl") if item.get(key)),None)
  if not value:
   collection=next((item.get(key) for key in ("images","photos","pictures") if isinstance(item.get(key),list) and item[key]),None)
   if collection:value=collection[0]
- if isinstance(value,dict):value=next((value.get(key) for key in ("url","src","path","image_url","photo_url","file_url","download_url") if value.get(key)),None)
+ if isinstance(value,dict):value=next((value.get(key) for key in ("url","src","path","relative_url","image_url","imageUrl","photo_url","photoUrl","photo_path","image_path","file_url","download_url") if value.get(key)),None)
  return value if isinstance(value,str) else None
 
 def _absolute_image_url(value:str,base_url:str):

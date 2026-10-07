@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.services.product_analytics import catalog_property, classify, clients_for_managers, filter_subcategories, group_rows, merge_periods, percent_change, previous_period, product_key, summary
+from app.services.product_analytics import catalog_property, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, percent_change, previous_period, product_key, summary
 
 
 def row(article, revenue, units, checks, **extra):
@@ -81,3 +81,9 @@ def test_missing_manager_includes_empty_client_and_unmapped_client():
 def test_multiple_subcategories_are_combined():
     rows=[{"subcategory":"Чай"},{"subcategory":"Кофе"},{"subcategory":"Посуда"}]
     assert filter_subcategories(rows,["Чай","Кофе"])==rows[:2]
+
+
+def test_multiple_brands_are_combined_case_insensitively():
+    rows=[{"brand":"Villeroy"},{"brand":"Bormioli"},{"brand":"Другой"},{"brand":None}]
+    assert filter_values(rows,"brand",["villeroy","BORMIOLI"])==rows[:2]
+    assert filter_values(rows,"brand",["Не заполнено"])==rows[3:]

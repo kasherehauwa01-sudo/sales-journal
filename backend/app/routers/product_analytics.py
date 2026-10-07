@@ -12,13 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError, get_client_managers, get_managers
-from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classify, clients_for_managers, filter_subcategories, group_rows, merge_periods, previous_period, product_key, summary
+from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, previous_period, product_key, summary
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info, get_product_filter_options, get_product_filters
 
 router=APIRouter(prefix="/reports/product-analytics",tags=["Отчеты"])
 
 class AnalyticsRequest(BaseModel):
- date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";brand:str|None=None;article:str|None=None;search:str|None=None
+ date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
 
 def _dates(data):
  if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
@@ -65,7 +65,7 @@ async def _manager_clients(data,db,old_from,old_to):
 async def _dataset(data,db):
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
  old_from,old_to=_dates(data);manager_clients=await _manager_clients(data,db,old_from,old_to);current=await _period_rows(data,db,data.date_from,data.date_to,manager_clients);old=await _period_rows(data,db,old_from,old_to,manager_clients);catalog=await _catalog(current+old);rows=merge_periods(current,old,catalog)
- if data.brand:rows=[x for x in rows if x["brand"].casefold()==data.brand.strip().casefold()]
+ rows=filter_values(rows,"brand",data.brands)
  rows=filter_subcategories(rows,data.subcategories)
  return group_rows(rows,data.group_by),old_from,old_to,manager_clients
 
@@ -98,23 +98,47 @@ def _option_values(payload):
 
 @router.get("/manager-options")
 async def manager_options(db:AsyncSession=Depends(get_db)):
- try:managers=await get_managers();mapping=await get_client_managers()
- except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ managers=[];mapping={};last_error=None
+ try:managers=await get_managers()
+ except ClientsVrError as exc:last_error=exc
+ try:mapping=await get_client_managers()
+ except ClientsVrError as exc:last_error=exc
+ if not managers:managers=sorted(set(mapping.values()),key=str.casefold)
+ if not managers and not mapping:raise HTTPException(502,str(last_error or "ClientsVR недоступен"))
  clients=list((await db.scalars(select(func.coalesce(func.lower(func.trim(Sale.client)),"")).distinct())).all())
  managers=[value for value in managers if value.strip().casefold() not in {"нет менеджера",MISSING_MANAGER.casefold()}]
  if any(not mapping.get(client or "") or mapping[client or ""].strip().casefold() in {"нет менеджера",MISSING_MANAGER.casefold()} for client in clients):managers=[*managers,MISSING_MANAGER]
  return list(dict.fromkeys(managers))
 
-@router.get("/subcategory-options")
-async def subcategory_options(search:str=""):
+async def _catalog_options(field:str,search:str):
+ aliases={"brand":["brand","Бренд","property:Бренд"],"subcategory":["subcategory","Подкатегория","property:Подкатегория"]}[field];keys=[]
  try:
-  definitions=_source(await get_product_filters());key="subcategory"
-  for item in definitions:
+  for item in _source(await get_product_filters()):
    if not isinstance(item,dict):continue
    label=str(item.get("label") or item.get("name") or item.get("title") or "").casefold();candidate=str(item.get("key") or item.get("code") or item.get("id") or "")
-   if "подкатегор" in label or candidate.casefold() in {"subcategory","подкатегория"}:key=candidate or key;break
-  return _option_values(await get_product_filter_options(key,search=search,page=1,page_size=500))
- except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+   if field in candidate.casefold() or aliases[1].casefold() in label:keys.append(candidate)
+ except VrCatalogError:pass
+ last=None
+ for key in dict.fromkeys([*keys,*aliases]):
+  if not key:continue
+  try:
+   values=_option_values(await get_product_filter_options(key,search=search,page=1,page_size=500))
+   if values:return values
+  except VrCatalogError as exc:last=exc
+ if last:raise HTTPException(502,str(last))
+ return []
+
+@router.get("/catalog-options/{field}")
+async def catalog_options(field:str,search:str=""):
+ if field not in {"brand","subcategory"}:raise HTTPException(404,"Неизвестный фильтр")
+ return await _catalog_options(field,search)
+
+@router.get("/name-suggestions")
+async def name_suggestions(search:str=Query(min_length=4,max_length=200),db:AsyncSession=Depends(get_db)):
+ value=search.strip()
+ if len(value)<4:return []
+ q=select(SaleItem.name).where(SaleItem.name.ilike(f"%{value}%")).distinct().order_by(SaleItem.name).limit(20)
+ return list((await db.scalars(q)).all())
 
 @router.post("/summary")
 async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
@@ -122,7 +146,7 @@ async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
  product_data=data.model_copy(update={"group_by":"product"});rows,old_from,old_to,manager_clients=await _dataset(product_data,db);result=summary(rows)
  # Без фильтров CatalogVR можно получить реальное число уникальных чеков
  # напрямую в PostgreSQL, не суммируя чеки отдельных SKU.
- if not data.brand and not data.subcategories:
+ if not data.brands and not data.subcategories:
   current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0
   old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0
   result["checks"]={"current":current_checks,"previous":old_checks}

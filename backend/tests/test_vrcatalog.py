@@ -76,6 +76,9 @@ def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales(
 def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
  assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/vr/catalog/media/1.jpg"}
 
+def test_catalog_image_supports_path_fields_from_batch_info():
+ assert vrcatalog.catalog_item_image_url({"preview_url":"/media/preview.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/preview.jpg"
+
 def test_catalog_image_with_full_vr_path_is_not_prefixed_twice():
  assert vrcatalog.catalog_item_image_url({"image":"/vr/catalog/media/1.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/1.jpg"
 
