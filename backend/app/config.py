@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://sales:sales@db:5432/sales"
     cors_origins: str = "https://kvasmix.ru"
     upload_dir: Path = Path("/data/imports")
+    import_temp_dir: Path = Path("/tmp/sales-journal-imports")
     log_level: str = "INFO"
     autoload_timezone: str = "Europe/Moscow"
     clients_vr_api_url: str = "https://kvasmix.ru/vr/clients/api"

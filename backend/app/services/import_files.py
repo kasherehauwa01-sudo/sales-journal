@@ -6,6 +6,14 @@ from typing import Awaitable, Callable
 log=logging.getLogger(__name__)
 
 
+def import_temp_dir()->Path:
+    """Каталог новых исходников: вне постоянного volume старых импортов."""
+    from app.config import settings
+    path=settings.import_temp_dir
+    path.mkdir(parents=True,exist_ok=True)
+    return path
+
+
 async def with_temporary_source(path:Path,operation:Callable[[],Awaitable[None]])->None:
     """Выполняет импорт и удаляет источник независимо от его результата."""
     try:
