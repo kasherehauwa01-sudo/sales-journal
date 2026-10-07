@@ -15,3 +15,11 @@ def aggregate_buyer_type_dynamics(rows,client_types:dict[str,str]):
   period=row.period.date();entry=periods.setdefault(period,{"period":period,"revenue":0.0,"sales_count":0});label=client_types.get((row.client or "").strip().lower(),"Не указан");key=keys[label]
   entry[key]=entry.get(key,0)+float(row.revenue or 0);entry[f"{key}_checks"]=entry.get(f"{key}_checks",0)+int(row.checks or 0);entry["revenue"]+=float(row.revenue or 0);entry["sales_count"]+=int(row.checks or 0)
  return {"sections":sections,"items":list(periods.values())}
+
+def aggregate_total_dynamics(rows):
+ """Резервная серия графика, не зависящая от доступности ClientsVR."""
+ periods={}
+ for row in rows:
+  period=row.period.date();entry=periods.setdefault(period,{"period":period,"revenue":0.0,"sales_count":0,"all":0.0,"all_checks":0})
+  entry["all"]+=float(row.revenue or 0);entry["all_checks"]+=int(row.checks or 0);entry["revenue"]+=float(row.revenue or 0);entry["sales_count"]+=int(row.checks or 0)
+ return {"sections":[{"key":"all","label":"Все продажи"}],"items":list(periods.values())}

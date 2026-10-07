@@ -118,6 +118,29 @@ def test_client_buyer_types_are_mapped_by_normalized_name(monkeypatch):
     }
 
 
+def test_cached_client_buyer_types_never_makes_network_request(monkeypatch):
+    monkeypatch.setattr(clients_vr, "_request", lambda _paths: (_ for _ in ()).throw(AssertionError("network")))
+    assert clients_vr.cached_client_buyer_types() is None
+    clients_vr.cache["client-buyer-types"] = (clients_vr.time.monotonic(), {"клиент": "Розница"})
+    assert clients_vr.cached_client_buyer_types() == {"клиент": "Розница"}
+
+
+def test_client_metadata_uses_one_batch_request_and_fills_both_caches(monkeypatch):
+    calls = []
+    def request(paths):
+        calls.append(paths)
+        return [{"client": "Клиент", "manager": "Иванов", "buyer_type": "Оптовик"}]
+    monkeypatch.setattr(clients_vr, "_request", request)
+
+    managers, buyer_types = asyncio.run(clients_vr.get_client_metadata())
+
+    assert calls == [["/integration/clients", "/clients"]]
+    assert managers == {"клиент": "Иванов"}
+    assert buyer_types == {"клиент": "Оптовик"}
+    assert clients_vr.get_cached_client_managers() == managers
+    assert clients_vr.cached_client_buyer_types() == buyer_types
+
+
 def test_buyer_types_are_unique_and_sorted(monkeypatch):
     monkeypatch.setattr(
         clients_vr,
