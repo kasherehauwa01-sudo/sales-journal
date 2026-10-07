@@ -12,15 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.clients_vr import ClientsVrError, get_client_managers, get_managers
-from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, previous_period, product_key, summary
-from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info, get_product_filter_options, get_product_filters
+from app.services.product_analytics import GROUP_FIELDS, classify, group_rows, merge_periods, previous_period, product_key, summary
+from app.services.vrcatalog import VrCatalogError, get_brands, get_catalog_batch_info, get_catalog_filter_keys, get_catalog_tree
 
 router=APIRouter(prefix="/reports/product-analytics",tags=["Отчеты"])
 logger=logging.getLogger(__name__)
 
 class AnalyticsRequest(BaseModel):
- date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
+ date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);group_by:str="product";brands:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);manufacturer:str|None=None;category:str|None=None;material:str|None=None;article:str|None=None;search:str|None=None
 
 def _dates(data):
  if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
@@ -68,10 +67,16 @@ async def _manager_clients(data,db,old_from,old_to):
 
 async def _dataset(data,db):
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
- old_from,old_to=_dates(data);manager_clients=await _manager_clients(data,db,old_from,old_to);current=await _period_rows(data,db,data.date_from,data.date_to,manager_clients);old=await _period_rows(data,db,old_from,old_to,manager_clients);catalog=await _catalog(current+old);rows=merge_periods(current,old,catalog)
- rows=filter_values(rows,"brand",data.brands)
- rows=filter_subcategories(rows,data.subcategories)
- return group_rows(rows,data.group_by),old_from,old_to,manager_clients
+ old_from,old_to=_dates(data);current=await _period_rows(data,db,data.date_from,data.date_to);old=await _period_rows(data,db,old_from,old_to)
+ try:allowed=await get_catalog_filter_keys(brands=data.brands,sections=data.subcategories)
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+ if allowed is not None:
+  current=[row for row in current if row["key"] in allowed];old=[row for row in old if row["key"] in allowed]
+ catalog=await _catalog(current+old);rows=merge_periods(current,old,catalog)
+ for field in ("manufacturer","category","material"):
+  value=getattr(data,field)
+  if value:rows=[x for x in rows if x[field].casefold()==value.strip().casefold()]
+ return group_rows(rows,data.group_by),old_from,old_to
 
 def _sorted(rows,section,sort_by="revenue",limit=100):
  groups=classify(rows) if section!="top" else {}
@@ -151,13 +156,23 @@ async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
  product_data=data.model_copy(update={"group_by":"product"});rows,old_from,old_to,manager_clients=await _dataset(product_data,db);result=summary(rows)
  # Без фильтров CatalogVR можно получить реальное число уникальных чеков
  # напрямую в PostgreSQL, не суммируя чеки отдельных SKU.
- if not data.brands and not data.subcategories:
-  current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0
-  old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0
+ if not any((data.brands,data.manufacturer,data.category,data.subcategories,data.material)):
+  current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to))) or 0
+  old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to))) or 0
   result["checks"]={"current":current_checks,"previous":old_checks}
  return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},"summary":result}
 
-async def _section(data,db,name,sort_by,limit):rows,_,_,_=await _dataset(data,db);return {"items":_sorted(rows,name,sort_by,limit),"total":len(_sorted(rows,name,sort_by,1000000))}
+@router.get("/catalog-tree")
+async def catalog_tree():
+ try:return await get_catalog_tree()
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+
+@router.get("/brand-options")
+async def brand_options(search:str=Query("",max_length=255),page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500)):
+ try:return await get_brands(search=search,page=page,page_size=page_size)
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+
+async def _section(data,db,name,sort_by,limit):rows,_,_=await _dataset(data,db);return {"items":_sorted(rows,name,sort_by,limit),"total":len(_sorted(rows,name,sort_by,1000000))}
 @router.post("/top")
 async def top(data:AnalyticsRequest,sort_by:str="revenue",limit:int=Query(20,ge=10,le=100),db:AsyncSession=Depends(get_db)):return await _section(data,db,"top",sort_by,limit)
 @router.post("/growth")

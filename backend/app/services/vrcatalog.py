@@ -21,6 +21,11 @@ catalog_category_negative_cache: dict[str, float] = {}
 CATALOG_CATEGORY_CACHE_TTL = 1800
 CATALOG_CATEGORY_MAP_LIMIT = 5000
 
+catalog_tree_cache: tuple[float,list[dict]]|None = None
+catalog_filter_keys_cache: dict[tuple[tuple[str,tuple[str,...]],...],tuple[float,set[str]]] = {}
+CATALOG_TREE_CACHE_TTL = 300
+CATALOG_FILTER_KEYS_CACHE_TTL = 300
+
 class VrCatalogError(RuntimeError):pass
 
 def _source(payload):
@@ -132,12 +137,49 @@ async def get_product_filter_options(filter_key:str,*,search:str="",page:int=1,p
  try:return await asyncio.to_thread(_integration_get,f"integration/product-filters/{quote(filter_key,safe='')}/options",{"search":search,"page":page,"page_size":page_size})
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
 
-async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,search:str=""):
+async def get_catalog_tree():
+ global catalog_tree_cache
+ if catalog_tree_cache and time.monotonic()-catalog_tree_cache[0]<CATALOG_TREE_CACHE_TTL:return catalog_tree_cache[1]
+ try:payload=await asyncio.to_thread(_integration_get,"integration/catalog-tree")
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ if not isinstance(payload,list):raise VrCatalogError("vrcatalog вернул некорректное дерево каталога")
+ catalog_tree_cache=(time.monotonic(),payload);return payload
+
+async def get_brands(*,search:str="",page:int=1,page_size:int=100):
+ try:return await asyncio.to_thread(_integration_get,"integration/brands",{"search":search,"page":page,"page_size":page_size})
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,search:str="",sort_by:str|None=None,sort_dir:str|None=None):
  payload={"filters":filters,"page":page,"page_size":page_size}
  if search:payload["search"]=search
+ if sort_by:payload["sort_by"]=sort_by
+ if sort_dir:payload["sort_dir"]=sort_dir
  try:return await asyncio.to_thread(_integration_search,payload)
  except VrCatalogError:raise
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+async def get_catalog_filter_keys(*,brands:list[str],sections:list[str]):
+ """Получает все SKU для выбранных фасетов постранично, без N+1 запросов."""
+ filters={}
+ if sections:filters["section"]=sections
+ if brands:filters["brand"]=brands
+ if not filters:return None
+ cache_key=tuple(sorted((key,tuple(sorted(set(values),key=str.casefold))) for key,values in filters.items()))
+ now=time.monotonic();saved=catalog_filter_keys_cache.get(cache_key)
+ if saved and now-saved[0]<CATALOG_FILTER_KEYS_CACHE_TTL:return saved[1]
+ result=set();page=1
+ while True:
+  payload=await search_catalog_products(filters=filters,page=page,page_size=500,sort_by="name",sort_dir="asc")
+  items=_source(payload)
+  for item in items:
+   if not isinstance(item,dict):continue
+   for prefix in ("code","article"):
+    key=_catalog_key(prefix,item.get(prefix))
+    if key:result.add(key)
+  pagination=_pagination(payload);pages=pagination.get("pages") or pagination.get("total_pages")
+  if not items or pagination.get("has_next") is False or (pages is not None and page>=int(pages)) or len(items)<500:break
+  page+=1
+ catalog_filter_keys_cache[cache_key]=(now,result);return result
 
 def _catalog_key(prefix:str,value):return f"{prefix}:{str(value).strip().lower()}" if value and str(value).strip() else None
 
