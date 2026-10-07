@@ -67,7 +67,11 @@ def test_catalog_error_is_wrapped(monkeypatch):
 
 def test_catalog_images_support_common_image_shapes():
  payload={"items":[{"code":"1","image_url":"https://img/1.jpg"},{"article":"A2","images":[{"url":"https://img/2.jpg"}]},{"code":"3","photos":[{"path":"media/3.jpg"}]}]}
- assert vrcatalog.catalog_product_images(payload,"https://catalog.example/api")=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg","code:3":"https://catalog.example/api/media/3.jpg"}
+ assert vrcatalog.catalog_product_images(payload,"https://catalog.example/api")=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg","code:3":"https://catalog.example/media/3.jpg"}
+
+def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales():
+ item={"photos":[{"path":"media/products/1.jpg"}]}
+ assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/products/1.jpg"
 
 def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales():
  item={"photos":[{"path":"media/products/1.jpg"}]}
@@ -78,6 +82,9 @@ def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
 
 def test_catalog_image_supports_path_fields_from_batch_info():
  assert vrcatalog.catalog_item_image_url({"preview_url":"/media/preview.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/preview.jpg"
+
+def test_catalog_image_supports_nested_media_from_batch_info():
+ assert vrcatalog.catalog_item_image_url({"media":{"url":"media/preview.jpg"}},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/preview.jpg"
 
 def test_catalog_image_with_full_vr_path_is_not_prefixed_twice():
  assert vrcatalog.catalog_item_image_url({"image":"/vr/catalog/media/1.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/1.jpg"

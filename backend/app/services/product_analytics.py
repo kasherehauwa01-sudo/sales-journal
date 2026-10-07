@@ -3,7 +3,9 @@ from datetime import date, timedelta
 GROUP_FIELDS = {"product", "brand", "manufacturer", "category", "subcategory", "material"}
 PROPERTY_ALIASES = {
     "brand": ("brand", "Бренд"), "manufacturer": ("manufacturer", "Производитель"),
-    "category": ("category", "category_name", "categoryName", "product_category", "group", "group_name", "Категория", "Группа"), "subcategory": ("subcategory", "Подкатегория"),
+    "category": ("category", "category_name", "categoryName", "product_category", "group", "group_name", "Категория", "Группа"),
+    # В CatalogVR используемое в отчёте значение называется «Раздел».
+    "subcategory": ("section", "section_name", "sectionName", "Раздел", "subcategory", "Подкатегория"),
     "material": ("material", "Материал"),
 }
 MISSING_MANAGER = "Не заполнено"

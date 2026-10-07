@@ -111,12 +111,13 @@ async def manager_options(db:AsyncSession=Depends(get_db)):
  return list(dict.fromkeys(managers))
 
 async def _catalog_options(field:str,search:str):
- aliases={"brand":["brand","Бренд","property:Бренд"],"subcategory":["subcategory","Подкатегория","property:Подкатегория"]}[field];keys=[]
+ aliases={"brand":["brand","Бренд","property:Бренд"],"subcategory":["section","Раздел","property:Раздел"]}[field];keys=[]
  try:
   for item in _source(await get_product_filters()):
    if not isinstance(item,dict):continue
    label=str(item.get("label") or item.get("name") or item.get("title") or "").casefold();candidate=str(item.get("key") or item.get("code") or item.get("id") or "")
-   if field in candidate.casefold() or aliases[1].casefold() in label:keys.append(candidate)
+   terms=("brand","бренд") if field=="brand" else ("section","раздел")
+   if any(term in candidate.casefold() or term in label for term in terms):keys.append(candidate)
  except VrCatalogError:pass
  last=None
  for key in dict.fromkeys([*keys,*aliases]):

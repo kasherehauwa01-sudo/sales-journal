@@ -50,24 +50,36 @@ def horeca_keys(payload):
  return result
 
 def _image_url(item):
- value=next((item.get(key) for key in ("photo","image","picture","image_url","imageUrl","photo_url","photoUrl","picture_url","photo_path","image_path","thumbnail","thumbnail_url","preview","preview_url","main_image","main_image_url","mainImageUrl","main_photo","main_photo_url","mainPhotoUrl") if item.get(key)),None)
+ value=next((item.get(key) for key in ("url","src","path","relative_url","photo","image","picture","image_url","imageUrl","photo_url","photoUrl","picture_url","photo_path","image_path","thumbnail","thumbnail_url","preview","preview_url","main_image","main_image_url","mainImageUrl","main_photo","main_photo_url","mainPhotoUrl") if item.get(key)),None)
  if not value:
   collection=next((item.get(key) for key in ("images","photos","pictures") if isinstance(item.get(key),list) and item[key]),None)
   if collection:value=collection[0]
+ if not value:
+  # Некоторые версии batch-info оборачивают главное фото в media/cover.
+  container=next((item.get(key) for key in ("media","main_media","cover","primary_image","primary_photo") if isinstance(item.get(key),dict)),None)
+  if container:value=_image_url(container)
  if isinstance(value,dict):value=next((value.get(key) for key in ("url","src","path","relative_url","image_url","imageUrl","photo_url","photoUrl","photo_path","image_path","file_url","download_url") if value.get(key)),None)
  return value if isinstance(value,str) else None
 
 def _absolute_image_url(value:str,base_url:str):
  if value.startswith("data:") or urlparse(value).scheme:return value
  parsed=urlparse(base_url)
+ catalog_path=parsed.path.rstrip("/")
+ if catalog_path.endswith("/api"):catalog_path=catalog_path[:-4]
  if value.startswith("/"):
   # Root-relative ссылки CatalogVR должны оставаться внутри /vr/catalog,
   # а не уходить в корень kvasmix.ru или разрешаться относительно /vr/sales/.
   if value.startswith("/vr/"):return f"{parsed.scheme}://{parsed.netloc}{value}"
-  catalog_path=parsed.path.rstrip("/")
-  if catalog_path.endswith("/api"):catalog_path=catalog_path[:-4]
   return f"{parsed.scheme}://{parsed.netloc}{catalog_path}{value}"
- return urljoin(f"{base_url.rstrip('/')}/",value)
+ # Относительные media-ссылки также обслуживаются публичным корнем CatalogVR,
+ # а не integration API и тем более не BASE_PATH Sales Journal.
+ return urljoin(f"{parsed.scheme}://{parsed.netloc}{catalog_path.rstrip('/')}/",value)
+
+def catalog_item_image_url(item:dict,base_url:str=""):
+ """Извлекает фото из поддерживаемых полей CatalogVR и нормализует URL."""
+ value=_image_url(item)
+ if not value:return None
+ return _absolute_image_url(value,base_url) if base_url else value
 
 def catalog_item_image_url(item:dict,base_url:str=""):
  """Извлекает фото из поддерживаемых полей CatalogVR и нормализует URL."""

@@ -66,6 +66,11 @@ def test_category_supports_catalog_name_and_nested_group():
     assert catalog_property({"group": {"name": "Хранение"}}, "category") == "Хранение"
 
 
+def test_subcategory_uses_catalog_section():
+    assert catalog_property({"section":"Сервировка"},"subcategory")=="Сервировка"
+    assert catalog_property({"properties":[{"name":"Раздел","value":"Посуда"}]},"subcategory")=="Посуда"
+
+
 def test_multiple_managers_are_combined_without_duplicate_clients():
     clients=["клиент а","клиент б","клиент в"]
     mapping={"клиент а":"Иванов","клиент б":"Петров","клиент в":"Сидоров"}
