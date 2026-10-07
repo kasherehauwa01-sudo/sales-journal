@@ -73,10 +73,6 @@ def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales(
  item={"photos":[{"path":"media/products/1.jpg"}]}
  assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/products/1.jpg"
 
-def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales():
- item={"photos":[{"path":"media/products/1.jpg"}]}
- assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/api/media/products/1.jpg"
-
 def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
  assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/vr/catalog/media/1.jpg"}
 
@@ -129,9 +125,45 @@ def test_catalog_batch_info_unwraps_product_payload(monkeypatch):
  result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":"A-2","article":"ART-2"}]))
  assert result["code:a-2"]["category_name"]=="Посуда"
 
-def test_catalog_batch_info_rejects_more_than_5000_products():
- with pytest.raises(VrCatalogError,match="5000"):
-  asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(5001)]))
+def test_catalog_batch_info_sends_ten_products_in_one_batch(monkeypatch):
+ calls=[]
+ def batch(payload):
+  calls.append(payload);return {"items":[{**item,"image_url":f"https://img/{item['code']}.jpg"} for item in payload["products"]]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(10)]))
+ assert len(calls)==1 and len(calls[0]["products"])==10
+ assert result["code:9"]["image_url"]=="https://img/9.jpg"
+
+def test_catalog_batch_info_splits_11587_products_and_reuses_cache(monkeypatch):
+ calls=[]
+ def batch(payload):
+  calls.append(payload);return {"items":[{**item,"article":f"A-{item['code']}","photo":"https://img/product.jpg"} for item in payload["products"]]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ products=[{"code":str(index)} for index in range(11587)]
+ result=asyncio.run(vrcatalog.get_catalog_batch_info(products))
+ assert len(calls)==47
+ assert max(len(call["products"]) for call in calls)==vrcatalog.CATALOG_BATCH_SIZE
+ assert len(result)==23174
+ assert result["code:11586"]["image_url"]=="https://img/product.jpg"
+ assert result["article:a-11586"] is result["code:11586"]
+ asyncio.run(vrcatalog.get_catalog_batch_info(products))
+ assert len(calls)==47
+
+def test_catalog_batch_info_keeps_successful_batches_when_one_fails(monkeypatch,caplog):
+ calls=0
+ def batch(payload):
+  nonlocal calls
+  calls+=1
+  if calls==2:raise TimeoutError("secret-token-must-not-be-logged")
+  return {"items":payload["products"]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(600)]))
+ assert calls==3
+ assert len(result)==350
+ assert "code:0" in result and "code:599" in result and "code:250" not in result
+ assert "code:250" not in vrcatalog.catalog_info_cache
+ assert "пакет 2 (250 товаров)" in caplog.text
+ assert "secret-token-must-not-be-logged" not in caplog.text
 
 def test_catalog_category_map_uses_lightweight_endpoint_and_normalized_keys(monkeypatch):
  calls=[]

@@ -1,5 +1,6 @@
 from datetime import date
 from io import BytesIO
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openpyxl import Workbook
@@ -16,6 +17,7 @@ from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classi
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info, get_product_filter_options, get_product_filters
 
 router=APIRouter(prefix="/reports/product-analytics",tags=["Отчеты"])
+logger=logging.getLogger(__name__)
 
 class AnalyticsRequest(BaseModel):
  date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
@@ -47,8 +49,10 @@ async def _period_rows(data,db,start,end,manager_clients):
 async def _catalog(rows):
  products=[{"article":x.get("article"),"code":x.get("code")} for x in rows if x.get("article") or x.get("code")];result={}
  try:
-  for start in range(0,len(products),5000):result.update(await get_catalog_batch_info(products[start:start+5000]))
- except VrCatalogError:pass  # отсутствие CatalogVR не скрывает продажи
+  result.update(await get_catalog_batch_info(products))
+ except VrCatalogError as exc:
+  # Продажи остаются доступны, но причина отсутствия enrichment видна в логах.
+  logger.warning("CatalogVR enrichment недоступен для %s строк: %s",len(products),type(exc).__name__)
  return result
 
 async def _manager_clients(data,db,old_from,old_to):
