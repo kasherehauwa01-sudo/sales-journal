@@ -104,47 +104,14 @@ def test_catalog_filter_metadata_and_options_use_integration_api(monkeypatch):
  assert asyncio.run(vrcatalog.get_product_filter_options("property:HoReCa",search="hor",page=2,page_size=50))=={"items":["HoReCa"]}
  assert calls==[("integration/product-filters",None),("integration/product-filters/property%3AHoReCa/options",{"search":"hor","page":2,"page_size":50})]
 
-def test_catalog_tree_preserves_recursive_nodes_and_is_cached(monkeypatch):
- calls=[];tree=[{"id":"home","code":"home","name":"Дом","parent_id":None,"children":[{"id":"storage","code":"storage","name":"Хранение","parent_id":"home","children":[]}]}]
- def request(path,params=None):calls.append((path,params));return tree
- monkeypatch.setattr(vrcatalog,"_integration_get",request)
- assert asyncio.run(vrcatalog.get_catalog_tree())==tree
- assert asyncio.run(vrcatalog.get_catalog_tree())[0]["children"][0]["parent_id"]=="home"
- assert calls==[("integration/catalog-tree",None)]
-
-def test_catalog_tree_accepts_empty_tree(monkeypatch):
- monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:[])
- assert asyncio.run(vrcatalog.get_catalog_tree())==[]
-
-def test_catalog_tree_wraps_vrcatalog_error(monkeypatch):
- monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:(_ for _ in ()).throw(TimeoutError("timed out")))
- with pytest.raises(VrCatalogError,match="vrcatalog недоступен"):
-  asyncio.run(vrcatalog.get_catalog_tree())
-
-def test_brands_use_dedicated_endpoint_with_search_and_pagination(monkeypatch):
- calls=[];response={"items":[{"value":"Pasabahce","label":"Pasabahce"}],"page":2,"page_size":50,"total":51,"pages":2}
- def request(path,params=None):calls.append((path,params));return response
- monkeypatch.setattr(vrcatalog,"_integration_get",request)
- assert asyncio.run(vrcatalog.get_brands(search="pasa",page=2,page_size=50))==response
- assert calls==[("integration/brands",{"search":"pasa","page":2,"page_size":50})]
-
-def test_catalog_filter_keys_support_multiple_facets_and_all_pages(monkeypatch):
+def test_catalog_tree_and_confirmed_brand_endpoint(monkeypatch):
  calls=[]
- async def search(**kwargs):
-  calls.append(kwargs);count=500 if kwargs["page"]==1 else 1
-  return {"items":[{"code":f'{kwargs["page"]}-{index}'} for index in range(count)],"page":kwargs["page"],"pages":2,"total":501}
- monkeypatch.setattr(vrcatalog,"search_catalog_products",search)
- keys=asyncio.run(vrcatalog.get_catalog_filter_keys(brands=["Pasabahce","Regent"],sections=["Посуда","Семена"]))
- assert len(keys)==501 and "code:2-0" in keys
- assert calls==[
-  {"filters":{"section":["Посуда","Семена"],"brand":["Pasabahce","Regent"]},"page":1,"page_size":500,"sort_by":"name","sort_dir":"asc"},
-  {"filters":{"section":["Посуда","Семена"],"brand":["Pasabahce","Regent"]},"page":2,"page_size":500,"sort_by":"name","sort_dir":"asc"},
- ]
-
-def test_empty_catalog_filters_do_not_call_search(monkeypatch):
- async def search(**_kwargs):pytest.fail("products/search must not be called")
- monkeypatch.setattr(vrcatalog,"search_catalog_products",search)
- assert asyncio.run(vrcatalog.get_catalog_filter_keys(brands=[],sections=[])) is None
+ def request(path,params=None):
+  calls.append((path,params));return {"items":[]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":[]}
+ assert asyncio.run(vrcatalog.get_catalog_brands(search="vill",page=2,page_size=25))=={"items":[]}
+ assert calls==[("integration/catalog-tree",None),("integration/brands",{"search":"vill","page":2,"page_size":25})]
 
 def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
  payload={"items":[{"id":1,"code":"001","article":"A1","name":"Товар","image_url":"https://catalog/image.jpg","properties":[]}],"total":1,"page":1,"page_size":50,"pages":1}

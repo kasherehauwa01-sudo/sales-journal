@@ -133,6 +133,14 @@ async def get_product_filters():
  try:return await asyncio.to_thread(_integration_get,"integration/product-filters")
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
 
+async def get_catalog_tree():
+ try:return await asyncio.to_thread(_integration_get,"integration/catalog-tree")
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
+async def get_catalog_brands(*,search:str="",page:int=1,page_size:int=100):
+ try:return await asyncio.to_thread(_integration_get,"integration/brands",{"search":search,"page":page,"page_size":page_size})
+ except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+
 async def get_product_filter_options(filter_key:str,*,search:str="",page:int=1,page_size:int=100):
  try:return await asyncio.to_thread(_integration_get,f"integration/product-filters/{quote(filter_key,safe='')}/options",{"search":search,"page":page,"page_size":page_size})
  except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc

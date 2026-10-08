@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from math import ceil
 
@@ -144,9 +144,20 @@ async def client_history(client_key: str, date_from: date, date_to: date, db: As
 
 
 @router.get("/export")
-async def export(date_from: date, date_to: date, segment: str | None = None, full: bool = True, db: AsyncSession = Depends(get_db)):
-    rows, boundaries, _ = await _dataset(db, date_from, date_to, [], [], [], 30, 180, 1.5, 3)
-    if segment: rows = [r for r in rows if r["segment"] == segment]
+async def export(date_from: date, date_to: date, department: str | None = None, departments: list[str] | None = Query(None),
+                 manager: str | None = None, managers: list[str] | None = Query(None), buyer_type: str | None = None,
+                 buyer_types: list[str] | None = Query(None), segment: str | None = None, r_score: int | None = Query(None, ge=1, le=5),
+                 f_score: int | None = Query(None, ge=1, le=5), m_score: int | None = Query(None, ge=1, le=5),
+                 rfm_code: str | None = Query(None, pattern="^[1-5]{3}$"), search: str | None = None,
+                 min_revenue: float | None = None, min_purchases: int | None = None, min_recency: int | None = None,
+                 max_recency: int | None = None, sort: str = "monetary", direction: str = Query("desc", pattern="^(asc|desc)$"),
+                 new_days: int = Query(30, ge=1), lost_days: int = Query(180, ge=1), sleeping_cycle: float = Query(1.5, ge=1),
+                 lost_cycle: float = Query(3, ge=1), full: bool = True, db: AsyncSession = Depends(get_db)):
+    rows, boundaries, _ = await _dataset(db, date_from, date_to, departments or ([department] if department else []),
+        managers or ([manager] if manager else []), buyer_types or ([buyer_type] if buyer_type else []),
+        new_days, lost_days, sleeping_cycle, lost_cycle)
+    rows = _filtered(rows, segment, r_score, f_score, m_score, rfm_code, search, min_revenue, min_purchases, min_recency, max_recency)
+    sort = sort if sort in SORTS else "monetary"; rows.sort(key=lambda row: (row[sort] is not None, row[sort]), reverse=direction == "desc")
     wb = Workbook(); ws = wb.active; ws.title = "Клиенты"
     columns = [("Клиент","client"),("Сегмент","segment"),("Теги","tags"),("RFM","rfm_code"),("Последняя покупка","last_purchase"),
                ("Дней без покупки","recency_days"),("Покупок","frequency"),("Выручка","monetary"),("Средний чек","average_check"),
@@ -162,5 +173,6 @@ async def export(date_from: date, date_to: date, segment: str | None = None, ful
             part=[r for r in rows if r["segment"]==name]; seg.append([name,len(part),sum(r["monetary"] for r in part)])
         cfg=wb.create_sheet("Настройки RFM"); cfg.append(["Метод","Квинтили уникальных значений без разрыва совпадений"]); cfg.append(["Границы",str(boundaries)])
     data=BytesIO(); wb.save(data); data.seek(0)
+    filename=f"rfm-analysis-{datetime.now().date().isoformat()}.xlsx"
     return StreamingResponse(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                             headers={"Content-Disposition": 'attachment; filename="rfm-report.xlsx"'})
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
