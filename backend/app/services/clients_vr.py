@@ -128,6 +128,13 @@ def get_cached_client_managers() -> dict[str,str]:
 async def get_client_buyer_types():
  return await _cached("client-buyer-types",lambda:_client_buyer_types(_request(["/integration/clients","/clients"])))
 
+async def get_client_metadata():
+ """Одним batch-запросом загружает менеджеров и виды покупателей клиентов."""
+ payload=await _cached("client-metadata-source",lambda:_request(["/integration/clients","/clients"]))
+ managers=_client_managers(payload);buyer_types=_client_buyer_types(payload);now=time.monotonic()
+ cache["client-managers"]=(now,managers);cache["client-buyer-types"]=(now,buyer_types)
+ return managers,buyer_types
+
 def cached_client_buyer_types():
  """Возвращает только актуальный кеш, не задерживая аналитику сетевым запросом."""
  saved=cache.get("client-buyer-types")
