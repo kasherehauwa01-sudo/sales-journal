@@ -11,6 +11,7 @@ from app.schemas import ItemOut, SaleOut, SalePage
 from app.services.clients_vr import ClientsVrError,resolve_manager_filter
 from app.services.sale_details import load_sale_detail
 from app.services.sales_client_filters import get_sales_buyer_type_clients
+from app.services.product_analytics_cache import invalidate_product_analytics_cache
 router=APIRouter(prefix="/sales",tags=["Продажи"])
 class SaleFilters(BaseModel):
  search:str|None=None;date_from:date|None=None;date_to:date|None=None;departments:list[str]|None=None;manager:str|None=None;buyer_type:str|None=None;client:str|None=None;author:str|None=None;price_type:str|None=None;promotion:str|None=None;social:bool|None=None;discount_card_percent:Decimal|None=None;min_amount:Decimal|None=None;max_amount:Decimal|None=None;min_discount:Decimal|None=None;max_discount:Decimal|None=None
@@ -51,6 +52,7 @@ async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
   if not payload.ids:raise HTTPException(400,"Не выбраны продажи для удаления")
   result=await db.execute(delete(Sale).where(Sale.id.in_(payload.ids)))
  await db.commit()
+ invalidate_product_analytics_cache()
  return {"deleted":result.rowcount or 0}
 @router.get("/{sale_id}",response_model=SaleOut)
 async def get_sale(sale_id:int,db:AsyncSession=Depends(get_db)):
