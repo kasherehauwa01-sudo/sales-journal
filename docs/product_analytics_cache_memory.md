@@ -116,3 +116,32 @@ No PostgreSQL, migrations, Docker Compose, frontend, deployment or other-project
 configuration changes are needed. This document records implementation evidence;
 production memory and latency still require review after an explicitly authorized
 deployment.
+
+## Restore timing diagnostics
+
+For a compressed cache hit, logs now appear in this order:
+
+1. `product_analytics_cache event=hit` (before `_restore()`).
+2. `product_analytics_cache event=restored ... restore_ms=... compressed_size_bytes=... compressed_size_mb=... result_rows=...`.
+3. `product_analytics dataset cache_hit=True result_rows=...`.
+4. `product_analytics dataset postprocess_ms=... cache_hit=True input_rows=... result_rows=...`.
+
+`restore_ms` uses `time.perf_counter()` immediately around `_restore()` and
+includes its decompression, unpickling and object allocation. It excludes the
+new log formatting and subsequent grouping. `compressed_size_bytes` is the
+payload length; `compressed_size_mb` divides it by 1024² (MiB), whereas existing
+entry accounting also includes bytearray allocation capacity and the wrapper.
+The row count is obtained with `len(result[0])`, without traversing or copying it.
+Lookup and single-flight recheck hits both emit this record. Cold loads do not.
+
+`postprocess_ms` independently times tuple unpacking and the existing
+`group_rows()` call in `_dataset()` on both cold and warm requests. It excludes
+revision SQL, the cache call (including restoration), earlier logs and later
+endpoint operations such as unique-document SQL, summary/sorting and response
+serialization. These two timings diagnose the reported gap without implying
+that they measure the entire HTTP request. No cache keys, filter values or row
+contents are logged. Algorithms, cache limits and TTL are unchanged.
+
+Tests use small in-memory fixtures and a deterministic clock to distinguish
+27,600 ms of restoration from 125 ms of subsequent processing. No production
+database requests or benchmark workloads are needed for these diagnostics.

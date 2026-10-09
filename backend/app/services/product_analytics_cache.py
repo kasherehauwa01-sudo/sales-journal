@@ -244,7 +244,24 @@ def _fresh(key: str, now: float, *, phase: str = "lookup"):
         return None
     _cache.move_to_end(key)
     _log_cache("hit", phase=phase)
-    return _restore(entry.value)
+    started = time.perf_counter()
+    result = _restore(entry.value)
+    restore_ms = (time.perf_counter() - started) * 1000
+    if isinstance(entry.value, CompressedDataset):
+        fields = {
+            "cache_event": "restored",
+            "cache_phase": phase,
+            "restore_ms": restore_ms,
+            "compressed_size_bytes": len(entry.value.payload),
+            "compressed_size_mb": len(entry.value.payload) / (1024 * 1024),
+            "result_rows": len(result[0]),
+        }
+        log.info(
+            "product_analytics_cache event=%s phase=%s restore_ms=%.3f "
+            "compressed_size_bytes=%s compressed_size_mb=%.3f result_rows=%s",
+            *fields.values(), extra=fields,
+        )
+    return result
 
 
 def _store(key: str, value: Any, now: float) -> None:
