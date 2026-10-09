@@ -1,4 +1,6 @@
-import asyncio,json,logging,time
+import asyncio,json,logging,time,sys,threading
+from app.services.product_analytics_runtime import run_cpu, diagnostics, heavy_operation, ensure_headroom
+from app.services.product_analytics_cache import _bounded_size
 from collections import OrderedDict
 from urllib.parse import urljoin,urlparse
 from urllib.parse import quote,urlencode
@@ -13,6 +15,10 @@ image_cache:tuple[float,dict[str,str]]|None=None
 catalog_info_cache: dict[str, tuple[float, dict | None]] = {}
 CATALOG_INFO_CACHE_TTL = 1800
 CATALOG_INFO_CACHE_MAX_ENTRIES = 30000
+# Conservative accounting charges code/article aliases separately.
+CATALOG_INFO_CACHE_MAX_BYTES = 24 * 1024 * 1024
+_catalog_info_sizes = {}
+_catalog_info_bytes = 0
 CATALOG_BATCH_SIZE = 250
 CATALOG_BATCH_CONCURRENCY = 2
 logger=logging.getLogger(__name__)
@@ -229,13 +235,37 @@ async def get_catalog_filter_keys(*,brands:list[str],sections:list[str]):
 
 def _catalog_key(prefix:str,value):return f"{prefix}:{str(value).strip().lower()}" if value and str(value).strip() else None
 
-def _prune_catalog_info_cache(now:float):
- expired=[key for key,(created_at,_) in catalog_info_cache.items() if now-created_at>=CATALOG_INFO_CACHE_TTL]
- for key in expired:catalog_info_cache.pop(key,None)
- while len(catalog_info_cache)>CATALOG_INFO_CACHE_MAX_ENTRIES:
-  catalog_info_cache.pop(next(iter(catalog_info_cache)))
+def _drop_catalog_info(key):
+ global _catalog_info_bytes
+ catalog_info_cache.pop(key,None)
+ _catalog_info_bytes-=_catalog_info_sizes.pop(key,0)
 
-async def get_catalog_batch_info(products:list[dict]):
+def _cache_catalog_info(key,item,now,size):
+ global _catalog_info_bytes
+ _drop_catalog_info(key)
+ charge=size+sys.getsizeof(key)+256
+ if charge>CATALOG_INFO_CACHE_MAX_BYTES:return
+ catalog_info_cache[key]=(now,item);_catalog_info_sizes[key]=charge;_catalog_info_bytes+=charge
+ while _catalog_info_bytes>CATALOG_INFO_CACHE_MAX_BYTES or len(catalog_info_cache)>CATALOG_INFO_CACHE_MAX_ENTRIES:
+  _drop_catalog_info(next(iter(catalog_info_cache)))
+
+def _prune_catalog_info_cache(now:float):
+ global _catalog_info_bytes
+ if not catalog_info_cache:
+  _catalog_info_sizes.clear();_catalog_info_bytes=0
+ expired=[key for key,(created_at,_) in catalog_info_cache.items() if now-created_at>=CATALOG_INFO_CACHE_TTL]
+ for key in expired:_drop_catalog_info(key)
+ while len(catalog_info_cache)>CATALOG_INFO_CACHE_MAX_ENTRIES:
+  _drop_catalog_info(next(iter(catalog_info_cache)))
+
+async def _finish_catalog_workers(tasks):
+ await asyncio.gather(*tasks,return_exceptions=True)
+
+async def get_catalog_batch_info(products):
+ async with heavy_operation("catalog"):
+  return await _get_catalog_batch_info(products)
+
+def _prepare_catalog_batch_info(products):
  global catalog_info_cache
 
  unique={(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):(item.get("code"),item.get("article")) for item in products if item.get("code") or item.get("article")}
@@ -267,48 +297,79 @@ async def get_catalog_batch_info(products:list[dict]):
   else:
    missing.append({"code":code,"article":article})
 
- semaphore=asyncio.Semaphore(CATALOG_BATCH_CONCURRENCY)
+ del unique
+ return now,result,missing
+
+async def _get_catalog_batch_info(products):
+ now,result,missing=await run_cpu(_prepare_catalog_batch_info,products)
+ failed_batches=0;successful_batches=0
+ consume_lock=threading.Lock()
+ def consume(offset,batch,response,exc):
+  nonlocal failed_batches,successful_batches
+  with consume_lock:
+   batch_number=offset//CATALOG_BATCH_SIZE+1
+   if exc is not None:
+    failed_batches+=1
+    # Не логируем URL, payload и текст исключения: они могут содержать секреты.
+    logger.warning("CatalogVR batch-info: пакет %s (%s товаров) не обработан: %s",batch_number,len(batch),type(exc).__name__)
+    return
+
+   successful_batches+=1
+   returned_keys=set()
+   for item in _source(response):
+    if not isinstance(item,dict):continue
+    nested=next((item.get(key) for key in ("product","catalog_product","catalogProduct","item") if isinstance(item.get(key),dict)),None)
+    if nested:item={**item,**nested}
+    image=catalog_item_image_url(item)
+    if image:
+     if not image.startswith("data:") and not urlparse(image).scheme:
+      from app.config import settings
+      image=_absolute_image_url(image,settings.vrcatalog_api_url)
+     item={**item,"image_url":image}
+    keys=(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article")))
+    item_size=_bounded_size(item,CATALOG_INFO_CACHE_MAX_BYTES)
+    for key in keys:
+     if key:
+      returned_keys.add(key);result[key]=item;_cache_catalog_info(key,item,now,item_size)
+
+   # Отрицательно кешируем только результат успешно выполненного пакета.
+   # Товары из упавшего запроса должны быть повторно запрошены при следующем отчёте.
+   for requested in batch:
+    code_key=_catalog_key("code",requested.get("code"));article_key=_catalog_key("article",requested.get("article"))
+    if not any(key in returned_keys for key in (code_key,article_key) if key):
+     if code_key:_cache_catalog_info(code_key,None,now,16)
+     if article_key:_cache_catalog_info(article_key,None,now,16)
+
  async def load_batch(offset):
   batch=missing[offset:offset+CATALOG_BATCH_SIZE]
-  try:
-   async with semaphore:return offset,batch,await asyncio.to_thread(_integration_batch,{"products":batch}),None
+  try:response=await run_cpu(_integration_batch,{"products":batch})
   except Exception as exc:return offset,batch,None,exc
+  return offset,batch,response,None
 
- responses=await asyncio.gather(*(load_batch(offset) for offset in range(0,len(missing),CATALOG_BATCH_SIZE)))
- failed_batches=0;successful_batches=0
- for offset,batch,response,exc in responses:
-  batch_number=offset//CATALOG_BATCH_SIZE+1
-  if exc is not None:
-   failed_batches+=1
-   # Не логируем URL, payload и текст исключения: они могут содержать секреты.
-   logger.warning("CatalogVR batch-info: пакет %s (%s товаров) не обработан: %s",batch_number,len(batch),type(exc).__name__)
-   continue
-
-  successful_batches+=1
-  returned_keys=set()
-  for item in _source(response):
-   if not isinstance(item,dict):continue
-   nested=next((item.get(key) for key in ("product","catalog_product","catalogProduct","item") if isinstance(item.get(key),dict)),None)
-   if nested:item={**item,**nested}
-   image=catalog_item_image_url(item)
-   if image:
-    if not image.startswith("data:") and not urlparse(image).scheme:
-     from app.config import settings
-     image=_absolute_image_url(image,settings.vrcatalog_api_url)
-    item={**item,"image_url":image}
-   keys=(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article")))
-   for key in keys:
-    if key:
-     returned_keys.add(key);result[key]=item;catalog_info_cache[key]=(now,item)
-
-  # Отрицательно кешируем только результат успешно выполненного пакета.
-  # Товары из упавшего запроса должны быть повторно запрошены при следующем отчёте.
-  for requested in batch:
-   code_key=_catalog_key("code",requested.get("code"));article_key=_catalog_key("article",requested.get("article"))
-   if not any(key in returned_keys for key in (code_key,article_key) if key):
-    if code_key:catalog_info_cache[code_key]=(now,None)
-    if article_key:catalog_info_cache[article_key]=(now,None)
-
+ max_workers=0
+ # A bounded window preserves the old offset-order merge, including colliding
+ # code/article aliases and negative-cache results, without keeping all replies.
+ for start in range(0,len(missing),CATALOG_BATCH_SIZE*CATALOG_BATCH_CONCURRENCY):
+  ensure_headroom()
+  tasks=[asyncio.create_task(load_batch(offset)) for offset in range(start,min(len(missing),start+CATALOG_BATCH_SIZE*CATALOG_BATCH_CONCURRENCY),CATALOG_BATCH_SIZE)]
+  max_workers=max(max_workers,len(tasks))
+  try:
+   for task in tasks:
+    record=await task
+    await run_cpu(consume,*record)
+    del record
+  finally:
+   for task in tasks:
+    if not task.done():task.cancel()
+   cleanup=asyncio.create_task(_finish_catalog_workers(tasks))
+   cancelled_during_cleanup=False
+   while not cleanup.done():
+    try:await asyncio.shield(cleanup)
+    except asyncio.CancelledError:cancelled_during_cleanup=True
+   cleanup.result()
+   if cancelled_during_cleanup:raise asyncio.CancelledError
+  del task,tasks,cleanup
+ diagnostics("catalog_batches", batch_size=CATALOG_BATCH_SIZE, batch_workers=max_workers, requested_products=len(missing), catalog_keys=len(result), failed_batches=failed_batches, catalog_cache_charged_bytes=_catalog_info_bytes)
  _prune_catalog_info_cache(now)
 
  if failed_batches and not successful_batches and not result:

@@ -1,0 +1,121 @@
+{
+  "baseline_commit": "96692baacbfab1b53a7c7e4d5d0d74b461e2358a",
+  "environment": "Python 3.12, managed Linux environment; not production; separate process per run",
+  "tracemalloc_enabled": true,
+  "cold_benchmark_wait_seconds": 240,
+  "application_wait_seconds": 10,
+  "results": {
+    "baseline_cold": {
+      "mode": "baseline",
+      "case": "cold",
+      "rows": 27016,
+      "responses": 3,
+      "elapsed_ms_with_tracing": 56453.71056099975,
+      "peak_additional_bytes": 351796837,
+      "process_peak_rss_kib": 861228,
+      "peak_response_operations": 3,
+      "checksums": [
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ]
+      ],
+      "cache_retained_bytes": 49379630
+    },
+    "bounded_cold": {
+      "mode": "bounded",
+      "case": "cold",
+      "rows": 27016,
+      "responses": 3,
+      "elapsed_ms_with_tracing": 53391.085648000626,
+      "peak_additional_bytes": 199404723,
+      "process_peak_rss_kib": 418124,
+      "peak_response_operations": 1,
+      "checksums": [
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ]
+      ],
+      "cache_retained_bytes": 49379630
+    },
+    "baseline_warm": {
+      "mode": "baseline",
+      "case": "warm",
+      "rows": 27016,
+      "responses": 3,
+      "elapsed_ms_with_tracing": 3251.1580730006244,
+      "peak_additional_bytes": 319662419,
+      "process_peak_rss_kib": 692416,
+      "peak_response_operations": 3,
+      "checksums": [
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ]
+      ],
+      "cache_retained_bytes": 24689815
+    },
+    "bounded_warm": {
+      "mode": "bounded",
+      "case": "warm",
+      "rows": 27016,
+      "responses": 3,
+      "elapsed_ms_with_tracing": 3128.0426040002567,
+      "peak_additional_bytes": 115385169,
+      "process_peak_rss_kib": 368220,
+      "peak_response_operations": 1,
+      "checksums": [
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ],
+        [
+          27016,
+          364945636.0,
+          "2025-01-01"
+        ]
+      ],
+      "cache_retained_bytes": 24689815
+    }
+  }
+}
