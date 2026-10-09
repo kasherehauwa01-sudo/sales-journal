@@ -113,10 +113,7 @@ def _restore(value):
         return value
     # This payload is generated only in this process, never read from a client,
     # disk or remote cache. Do not expose this unpickler to external input.
-    # An 8 KiB default buffer repeatedly limits decompression output and copies
-    # unconsumed tails from 64 KiB compressed input blocks. Keep streaming, but
-    # amortize these calls with a bounded 256 KiB output buffer.
-    with io.BufferedReader(_CompressedReader(value.payload), buffer_size=256 * 1024) as reader:
+    with io.BufferedReader(_CompressedReader(value.payload)) as reader:
         return pickle.Unpickler(reader).load()
 
 
