@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://sales:sales@db:5432/sales"
     cors_origins: str = "https://kvasmix.ru"
     upload_dir: Path = Path("/data/imports")
+    import_temp_dir: Path = Path("/tmp/sales-journal-imports")
     log_level: str = "INFO"
     autoload_timezone: str = "Europe/Moscow"
     clients_vr_api_url: str = "https://kvasmix.ru/vr/clients/api"
@@ -16,6 +17,12 @@ class Settings(BaseSettings):
     vrcatalog_api_url: str = "https://kvasmix.ru/vr/catalog/api"
     vrcatalog_api_token: str = ""
     public_url: str = "https://kvasmix.ru/vr/sales"
+    settings_admin_password_hash: str = ""
+    settings_admin_session_secret: str = ""
+    settings_admin_cookie_secure: bool = True
+    mtls_helper_socket: Path = Path("/run/sales-mtls-helper/helper.sock")
+    mtls_helper_secret: str = ""
+    mtls_proxy_secret: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     @property
     def api_prefix(self) -> str: return f"{self.base_path.rstrip('/')}/api"
