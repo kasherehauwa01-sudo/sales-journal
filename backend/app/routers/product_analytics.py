@@ -128,7 +128,7 @@ async def _catalog_options(field:str,search:str):
  for key in dict.fromkeys([*keys,*aliases]):
   if not key:continue
   try:
-   values=_option_values(await get_product_filter_options(key,search=search,page=1,page_size=100))
+   values=_option_values(await get_product_filter_options(key,search=search,page=1,page_size=500))
    if values:return values
   except VrCatalogError as exc:last=exc
  if last:raise HTTPException(502,str(last))
@@ -171,11 +171,65 @@ async def stopped(data:AnalyticsRequest,limit:int=Query(100,le=500),db:AsyncSess
 async def new(data:AnalyticsRequest,limit:int=Query(100,le=500),db:AsyncSession=Depends(get_db)):return await _section(data,db,"new","revenue",limit)
 
 class DetailRequest(AnalyticsRequest):article_key:str
+
+def _detail_product(data:DetailRequest):
+ """Строит точное условие для одного SKU из ключа таблицы."""
+ try:prefix,value=data.article_key.split(":",1)
+ except ValueError as exc:raise HTTPException(422,"Неверный ключ товара") from exc
+ if prefix=="code":column=SaleItem.code
+ elif prefix=="article":column=SaleItem.article
+ elif prefix=="unknown":column=SaleItem.name
+ else:raise HTTPException(422,"Неверный ключ товара")
+ return func.lower(func.trim(column))==value.strip().casefold(),prefix,value.strip()
+
+async def _detail_manager_clients(data:DetailRequest,db:AsyncSession,product_condition):
+ """Определяет клиентов менеджеров только для выбранного SKU и периода."""
+ if not data.managers:return None
+ try:mapping=await get_client_managers()
+ except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ normalized=func.coalesce(func.lower(func.trim(Sale.client)),"")
+ conditions=[*_conditions(data,data.date_from,data.date_to),product_condition]
+ clients=list((await db.scalars(select(normalized).join(SaleItem,SaleItem.sale_id==Sale.id).where(*conditions).distinct())).all())
+ return clients_for_managers(clients,mapping,data.managers)
+
+def _empty_detail_product(article_key:str,prefix:str,value:str):
+ """Сохраняет структуру product, даже если в периоде нет продаж."""
+ return {"key":article_key,"article":value if prefix=="article" else None,
+         "code":value if prefix=="code" else None,"name":value if prefix=="unknown" else "Товар",
+         "revenue":0.0,"units":0.0,"checks":0,"first_sale":None,"last_sale":None}
+
 @router.post("/details")
 async def details(data:DetailRequest,group_by:str=Query("day",pattern="^(day|week|month)$"),db:AsyncSession=Depends(get_db)):
- rows,_,_,manager_clients=await _dataset(data,db);prefix,value=data.article_key.split(":",1);column=SaleItem.code if prefix=="code" else SaleItem.article if prefix=="article" else SaleItem.name;condition=func.lower(func.trim(column))==value;bucket=func.date_trunc(group_by,Sale.sale_date).label("period");q=select(bucket,func.sum(SaleItem.quantity*SaleItem.actual_price).label("revenue"),func.sum(SaleItem.quantity).label("units"),func.count(distinct(Sale.id)).label("checks")).join(Sale,Sale.id==SaleItem.sale_id).where(*_conditions(data,data.date_from,data.date_to,manager_clients),condition).group_by(bucket).order_by(bucket);points=(await db.execute(q)).all();item=next((x for x in rows if x["key"]==data.article_key),None)
- if not item:raise HTTPException(404,"Товар не найден")
- return {"product":item,"group_by":group_by,"points":[{"period":x.period.date(),"revenue":float(x.revenue or 0),"units":float(x.units or 0),"checks":x.checks} for x in points]}
+ if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
+ condition,prefix,value=_detail_product(data)
+ manager_clients=await _detail_manager_clients(data,db,condition)
+ bucket=func.date_trunc(group_by,Sale.sale_date).label("period")
+ query=select(
+  bucket,func.sum(SaleItem.quantity*SaleItem.actual_price).label("revenue"),
+  func.sum(SaleItem.quantity).label("units"),func.count(distinct(Sale.id)).label("checks"),
+  func.max(SaleItem.article).label("article"),func.max(SaleItem.code).label("code"),
+  func.max(SaleItem.name).label("name"),func.min(Sale.sale_date).label("first_sale"),
+  func.max(Sale.sale_date).label("last_sale"),
+ ).join(Sale,Sale.id==SaleItem.sale_id).where(
+  *_conditions(data,data.date_from,data.date_to,manager_clients),condition
+ ).group_by(bucket).order_by(bucket)
+ rows=(await db.execute(query)).all()
+ points=[{"period":row.period.date(),"revenue":float(row.revenue or 0),
+          "units":float(row.units or 0),"checks":row.checks} for row in rows]
+ if rows:
+  first=rows[0]
+  current={"key":data.article_key,"article":first.article,"code":first.code,"name":first.name,
+           "revenue":sum(point["revenue"] for point in points),"units":sum(point["units"] for point in points),
+           "checks":sum(point["checks"] for point in points),"first_sale":min(row.first_sale for row in rows),
+           "last_sale":max(row.last_sale for row in rows)}
+ else:
+  identity=(await db.execute(select(SaleItem.article,SaleItem.code,SaleItem.name).where(
+   condition).order_by(SaleItem.id.desc()).limit(1))).first()
+  current=_empty_detail_product(data.article_key,prefix,value)
+  if identity:current.update(article=identity.article,code=identity.code,name=identity.name)
+ catalog=await _catalog([current])
+ product=merge_periods([current],[],catalog)[0]
+ return {"product":product,"group_by":group_by,"points":points}
 
 def _sheet(book,title,headers,rows):
  sheet=book.create_sheet(title);sheet.append(headers)
