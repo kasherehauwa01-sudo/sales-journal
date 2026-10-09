@@ -1,5 +1,5 @@
-import asyncio,secrets,smtplib
-from datetime import date,datetime,time,timedelta
+import asyncio,logging,secrets,smtplib
+from datetime import date,datetime,timedelta
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 from sqlalchemy import false,func,select
@@ -8,9 +8,12 @@ from app.database import SessionLocal
 from app.models import HorecaReport,Sale,SaleItem,Scenario,ScenarioRun,SmtpConfig
 from app.services.clients_vr import get_manager_clients
 from app.services.scenario_periods import months_before,report_period
+from app.services.scenario_retry import SCENARIO_RETRY_INTERVAL,scheduled_run_plan
 from app.services.vrcatalog import get_catalog_batch_info
 from app.services.email_recipients import parse_recipient_emails
 from app.services.horeca_report_utils import build_horeca_products_from_info,limit_horeca_products
+
+logger=logging.getLogger(__name__)
 
 def _send(config:SmtpConfig,to:str|list[str],subject:str,body:str,attachment:bytes|None=None):
  recipients=[to] if isinstance(to,str) else to
@@ -42,18 +45,42 @@ async def run_scenario(scenario:Scenario,run_date:date,period_override:tuple[dat
   recipients=parse_recipient_emails(scenario.email);await asyncio.to_thread(_send,smtp,recipients,"Продажи HoReCa",f"{scenario.message_text.strip()}\n\n{period_text}\n\nОткрыть перечень товаров: {link}".strip())
   return {"date_from":period[0],"date_to":period[1],"recipients":recipients,"link":link,"products":len(products)}
 
+async def process_scheduled_scenarios(db,now:datetime):
+ scenarios=(await db.scalars(select(Scenario).where(Scenario.enabled.is_(True)))).all()
+ for scenario in scenarios:
+  # Транзакционная advisory-блокировка сериализует планировщики до фиксации
+  # результата и не требует изменения структуры БД.
+  await db.execute(select(func.pg_advisory_xact_lock(scenario.id)))
+  latest=await db.scalar(select(ScenarioRun).where(ScenarioRun.scenario_id==scenario.id,ScenarioRun.run_type=="scheduled").order_by(ScenarioRun.run_date.desc(),ScenarioRun.created_at.desc(),ScenarioRun.id.desc()).limit(1))
+  plan=scheduled_run_plan(now,latest)
+  if not plan:
+   await db.commit()
+   continue
+  run_date,period=plan
+  if latest is not None and latest.run_date==run_date:
+   run=latest
+   run.period_start=period[0];run.period_end=period[1];run.recipients=scenario.email
+  else:
+   run=ScenarioRun(scenario_id=scenario.id,run_date=run_date,run_type="scheduled",period_start=period[0],period_end=period[1],recipients=scenario.email)
+   db.add(run)
+  # В текущей схеме отдельной колонки last_attempt_at нет. Для одной записи
+  # расписания created_at является временем последней попытки и обновляется при
+  # повторе; сама запись и её идентификатор сохраняются.
+  run.created_at=now;run.status="running";run.message=None
+  await db.flush()
+  try:await run_scenario(scenario,run_date,period);run.status="completed";run.message="Отчет отправлен"
+  except Exception as exc:
+   run.status="failed";run.message=str(exc)[:4000]
+   logger.warning("Сценарий %s завершился ошибкой; повтор через час: %s",scenario.id,type(exc).__name__)
+  await db.commit()
+
 async def scheduler():
  zone=ZoneInfo(settings.autoload_timezone)
  while True:
-  today=datetime.now(zone).date()
-  if report_period(today):
-   async with SessionLocal() as db:
-    scenarios=(await db.scalars(select(Scenario).where(Scenario.enabled.is_(True)))).all()
-    for scenario in scenarios:
-     exists=await db.scalar(select(ScenarioRun.id).where(ScenarioRun.scenario_id==scenario.id,ScenarioRun.run_date==today,ScenarioRun.run_type=="scheduled"))
-     if exists:continue
-     period=report_period(today);run=ScenarioRun(scenario_id=scenario.id,run_date=today,run_type="scheduled",period_start=period[0],period_end=period[1],recipients=scenario.email,status="running");db.add(run);await db.commit()
-     try:await run_scenario(scenario,today,period);run.status="completed";run.message="Отчет отправлен"
-     except Exception as exc:run.status="failed";run.message=str(exc)[:4000]
-     await db.commit()
-  target=datetime.combine(today+timedelta(days=1),time(0,5),zone);await asyncio.sleep((target-datetime.now(zone)).total_seconds())
+  now=datetime.now(zone)
+  try:
+   async with SessionLocal() as db:await process_scheduled_scenarios(db,now)
+  except asyncio.CancelledError:raise
+  except Exception:logger.exception("Не удалось обработать очередь сценариев; следующая попытка через час")
+  # Следующая проверка выполняется через час после текущей попытки.
+  await asyncio.sleep(SCENARIO_RETRY_INTERVAL.total_seconds())

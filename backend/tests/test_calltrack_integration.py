@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
 from app.config import settings
+from app.repositories import sales as sales_repository
 from app.routers.calltrack_integration import require_calltrack_token, sale_detail
 from app.schemas import ItemOut, SaleOut
 from app.schemas.calltrack import CALLTRACK_BATCH_LIMIT, CalltrackClientRef, CalltrackSalesRequest
@@ -31,9 +32,8 @@ def run_batch(monkeypatch, payload, sales):
     calls=[]
     async def find(_db, **kwargs):
         calls.append(kwargs);return sales
-    async def managers():return {"ооо ромашка":"Менеджер"}
     monkeypatch.setattr(calltrack_integration,"find_client_sales",find)
-    monkeypatch.setattr(calltrack_integration,"get_client_managers",managers)
+    monkeypatch.setattr(calltrack_integration,"get_cached_client_managers",lambda:{"ооо ромашка":"Менеджер"})
     result=asyncio.run(calltrack_integration.find_sales_for_calltrack(object(),payload))
     return result,calls
 
@@ -69,9 +69,8 @@ def test_period_is_inclusive_and_excludes_outside_sales(monkeypatch):
     async def find(_db,**kwargs):
         calls.append(kwargs)
         return [row for row in candidates if kwargs["date_from"]<=row.sale_date<=kwargs["date_to"]]
-    async def managers():return {}
     monkeypatch.setattr(calltrack_integration,"find_client_sales",find)
-    monkeypatch.setattr(calltrack_integration,"get_client_managers",managers)
+    monkeypatch.setattr(calltrack_integration,"get_cached_client_managers",lambda:{})
     result=asyncio.run(calltrack_integration.find_sales_for_calltrack(object(),payload))
     assert [row.sale_id for row in result]==[1,2]
     assert len(calls)==1
@@ -85,6 +84,25 @@ def test_sale_is_deduplicated_when_phone_and_name_match(monkeypatch):
     assert result[0].matched_by=="phone"
 
 
+def test_empty_manager_cache_returns_sale_with_null_manager(monkeypatch):
+    payload=request([CalltrackClientRef(key="c1",phone="79991234567")])
+    async def find(_db,**_kwargs):return [sale(100)]
+    monkeypatch.setattr(calltrack_integration,"find_client_sales",find)
+    monkeypatch.setattr(calltrack_integration,"get_cached_client_managers",lambda:{})
+
+    result=asyncio.run(calltrack_integration.find_sales_for_calltrack(object(),payload))
+
+    assert result[0].manager is None
+    assert result[0].model_dump()["manager"] is None
+
+
+def test_fresh_manager_cache_enriches_sale(monkeypatch):
+    payload=request([CalltrackClientRef(key="c1",name="  ооо РОМАШКА ")])
+    result,_=run_batch(monkeypatch,payload,[sale(100,phone=None)])
+    assert result[0].matched_by=="name"
+    assert result[0].manager=="Менеджер"
+
+
 def test_similar_names_do_not_match(monkeypatch):
     payload=request([CalltrackClientRef(key="c1",name="ООО Ромашка")])
     result,_=run_batch(monkeypatch,payload,[sale(100,client="ООО Ромашка Плюс",phone=None)])
@@ -95,6 +113,40 @@ def test_no_sales_is_successful_empty_result(monkeypatch):
     payload=request([CalltrackClientRef(key="c1",name="Неизвестный клиент")])
     result,calls=run_batch(monkeypatch,payload,[])
     assert result==[] and len(calls)==1
+
+
+def test_find_client_sales_disables_sale_items_loading(monkeypatch):
+    marker=object()
+    captured={}
+
+    class Query:
+        def options(self,*options):
+            captured["options"]=options;return self
+        def where(self,*_conditions):return self
+        def order_by(self,*_columns):return self
+
+    class Result:
+        def all(self):return []
+
+    class Db:
+        async def scalars(self,query):
+            captured["query"]=query;return Result()
+
+    query=Query()
+    monkeypatch.setattr(sales_repository,"select",lambda model: query)
+    monkeypatch.setattr(
+        sales_repository,
+        "noload",
+        lambda relationship: marker if relationship is sales_repository.Sale.items else None,
+    )
+
+    result=asyncio.run(sales_repository.find_client_sales(
+        Db(),phones={"+79991234567"},names=set(),
+        date_from=date(2026,9,1),date_to=date(2026,9,30),
+    ))
+
+    assert result==[]
+    assert captured=={"options":(marker,),"query":query}
 
 
 def test_ambiguous_identifiers_are_rejected(monkeypatch):
