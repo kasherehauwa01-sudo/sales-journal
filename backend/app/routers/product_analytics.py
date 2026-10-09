@@ -71,6 +71,7 @@ async def _manager_clients(data,db,old_from,old_to):
 
 def _dataset_cache_key(data:AnalyticsRequest,revision:int) -> str:
  payload=data.model_dump(mode="json")
+ payload["group_by"]="product"
  for field in ("departments","managers","brands","manufacturers","subcategories"):
   payload[field]=sorted(payload[field],key=str.casefold)
  return f"{revision}:"+json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
@@ -91,12 +92,15 @@ async def _build_dataset(data,db):
  return rows,old_from,old_to,manager_clients
 
 async def _dataset(data,db):
+ if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
  # max(id) использует PK-индекс и инвалидирует кеш между worker-процессами.
  revision=int(await db.scalar(select(func.max(Sale.id))) or 0)
  key=_dataset_cache_key(data,revision)
- result,hit=await cached_product_dataset(key,lambda:_build_dataset(data,db))
+ product_data=data.model_copy(update={"group_by":"product"})
+ result,hit=await cached_product_dataset(key,lambda:_build_dataset(product_data,db))
  logger.info("product_analytics dataset cache_hit=%s result_rows=%s",hit,len(result[0]))
- return result
+ rows,old_from,old_to,manager_clients=result
+ return group_rows(rows,data.group_by),old_from,old_to,manager_clients
 
 def _sorted(rows,section,sort_by="revenue",limit=100):
  groups=classify(rows) if section!="top" else {}
