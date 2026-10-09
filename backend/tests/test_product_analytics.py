@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 
 from app.services.product_analytics import catalog_property, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, percent_change, previous_period, product_key, summary
