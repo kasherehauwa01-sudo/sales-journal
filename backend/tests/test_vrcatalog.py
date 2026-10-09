@@ -1,4 +1,5 @@
 import asyncio
+import time
 import pytest
 from app.services import vrcatalog
 from app.services.vrcatalog import VrCatalogError,horeca_keys,is_horeca
@@ -6,7 +7,7 @@ from app.services.vrcatalog import VrCatalogError,horeca_keys,is_horeca
 def setup_function():
  vrcatalog.cache=None;vrcatalog.image_cache=None
  vrcatalog.catalog_info_cache.clear();vrcatalog.catalog_category_cache.clear();vrcatalog.catalog_category_negative_cache.clear()
- vrcatalog.catalog_tree_cache=None;vrcatalog.catalog_filter_keys_cache.clear()
+ vrcatalog.directory_cache.clear();vrcatalog.directory_locks.clear()
 
 def test_horeca_products_are_detected_by_article_and_code():
  payload={"items":[{"article":" A-1 ","code":"001","properties":{"HoReCa":"HoReCa"}},{"article":"A-2","properties":{"HoReCa":"Нет"}}]}
@@ -112,6 +113,23 @@ def test_catalog_tree_and_confirmed_brand_endpoint(monkeypatch):
  assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":[]}
  assert asyncio.run(vrcatalog.get_catalog_brands(search="vill",page=2,page_size=25))=={"items":[]}
  assert calls==[("integration/catalog-tree",None),("integration/brands",{"search":"vill","page":2,"page_size":25})]
+
+def test_catalog_directories_are_cached_and_reused(monkeypatch):
+ calls=0
+ def request(_path,_params=None):
+  nonlocal calls;calls+=1;return {"items":["Посуда"]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ assert calls==1
+
+def test_catalog_directory_uses_stale_value_on_timeout(monkeypatch):
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda _path,_params=None:{"items":["Посуда"]})
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ key=next(iter(vrcatalog.directory_cache));_,value=vrcatalog.directory_cache[key]
+ vrcatalog.directory_cache[key]=(time.monotonic()-vrcatalog.DIRECTORY_CACHE_TTL-1,value)
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:(_ for _ in ()).throw(TimeoutError()))
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
 
 def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
  payload={"items":[{"id":1,"code":"001","article":"A1","name":"Товар","image_url":"https://catalog/image.jpg","properties":[]}],"total":1,"page":1,"page_size":50,"pages":1}
