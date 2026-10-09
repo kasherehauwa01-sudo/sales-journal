@@ -20,7 +20,7 @@ router=APIRouter(prefix="/reports/product-analytics",tags=["Отчеты"])
 logger=logging.getLogger(__name__)
 
 class AnalyticsRequest(BaseModel):
- date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
+ date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);manufacturers:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
 
 def _dates(data):
  if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
@@ -70,6 +70,7 @@ async def _dataset(data,db):
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
  old_from,old_to=_dates(data);manager_clients=await _manager_clients(data,db,old_from,old_to);current=await _period_rows(data,db,data.date_from,data.date_to,manager_clients);old=await _period_rows(data,db,old_from,old_to,manager_clients);catalog=await _catalog(current+old);rows=merge_periods(current,old,catalog)
  rows=filter_values(rows,"brand",data.brands)
+ rows=filter_values(rows,"manufacturer",data.manufacturers)
  rows=filter_subcategories(rows,data.subcategories)
  return group_rows(rows,data.group_by),old_from,old_to,manager_clients
 
@@ -115,12 +116,12 @@ async def manager_options(db:AsyncSession=Depends(get_db)):
  return list(dict.fromkeys(managers))
 
 async def _catalog_options(field:str,search:str):
- aliases={"brand":["brand","Бренд","property:Бренд"],"subcategory":["section","Раздел","property:Раздел"]}[field];keys=[]
+ aliases={"brand":["brand","Бренд","property:Бренд"],"manufacturer":["manufacturer","Производитель","property:Производитель"],"subcategory":["section","Раздел","property:Раздел"]}[field];keys=[]
  try:
   for item in _source(await get_product_filters()):
    if not isinstance(item,dict):continue
    label=str(item.get("label") or item.get("name") or item.get("title") or "").casefold();candidate=str(item.get("key") or item.get("code") or item.get("id") or "")
-   terms=("brand","бренд") if field=="brand" else ("section","раздел")
+   terms={"brand":("brand","бренд"),"manufacturer":("manufacturer","производител"),"subcategory":("section","раздел")}[field]
    if any(term in candidate.casefold() or term in label for term in terms):keys.append(candidate)
  except VrCatalogError:pass
  last=None
@@ -135,7 +136,7 @@ async def _catalog_options(field:str,search:str):
 
 @router.get("/catalog-options/{field}")
 async def catalog_options(field:str,search:str=""):
- if field not in {"brand","subcategory"}:raise HTTPException(404,"Неизвестный фильтр")
+ if field not in {"brand","manufacturer","subcategory"}:raise HTTPException(404,"Неизвестный фильтр")
  return await _catalog_options(field,search)
 
 @router.get("/name-suggestions")
@@ -151,7 +152,7 @@ async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
  product_data=data.model_copy(update={"group_by":"product"});rows,old_from,old_to,manager_clients=await _dataset(product_data,db);result=summary(rows)
  # Без фильтров CatalogVR можно получить реальное число уникальных чеков
  # напрямую в PostgreSQL, не суммируя чеки отдельных SKU.
- if not data.brands and not data.subcategories:
+ if not data.brands and not data.manufacturers and not data.subcategories:
   current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0
   old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0
   result["checks"]={"current":current_checks,"previous":old_checks}
