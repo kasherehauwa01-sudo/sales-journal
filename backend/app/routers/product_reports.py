@@ -9,14 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import ProductReportSet,Sale,SaleItem
 from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_managers,get_manager_clients
-from app.services.product_report_utils import localized_summary_rows,normalize_identifier as _norm,percent_change as _change,previous_period as _previous,product_key as _product_key
-from app.services.vrcatalog import VrCatalogError,get_product_filter_options,get_product_filters,search_catalog_products
+from app.services.report_periods import comparison_period
+from app.services.product_report_utils import localized_summary_rows,normalize_identifier as _norm,percent_change as _change,product_key as _product_key
+from app.services.vrcatalog import VrCatalogError,get_catalog_brands,get_catalog_tree,get_product_filter_options,get_product_filters,search_catalog_products
 
 router=APIRouter(prefix="/reports/product-sales",tags=["Отчеты"])
 
 class ProductRef(BaseModel):article:str|None=None;code:str|None=None;name:str;image_url:str|None=None
 class ReportRequest(BaseModel):
- date_from:date;date_to:date;manager:str|None=None;buyer_type:str|None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False
+ date_from:date;date_to:date;manager:str|None=None;buyer_type:str|None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False;comparison_mode:str=Field("previous_period",pattern="^(previous_period|previous_year)$")
 class DetailRequest(ReportRequest):product:ProductRef
 class SetIn(BaseModel):name:str=Field(min_length=1,max_length=255);products:list[ProductRef]
 class CatalogSearch(BaseModel):filters:dict[str,list[str]]=Field(default_factory=dict);search:str="";page:int=Field(1,ge=1);page_size:int=Field(50,ge=1,le=500)
@@ -58,8 +59,9 @@ async def _summary(data,db,start=None,end=None):
  return {"revenue":rev,"units":qty,"checks":checks,"clients":row[3],"average_price":rev/qty if qty else 0,"items_per_check":qty/checks if checks else 0,"discount_amount":discount,"average_discount":discount/float(row[4])*100 if row[4] else 0}
 @router.post("/summary")
 async def summary(data:ReportRequest,db:AsyncSession=Depends(get_db)):
- current=await _summary(data,db);previous=await _summary(data,db,*_previous(data.date_from,data.date_to)) if data.compare else None
- return {"current":current,"previous":previous,"changes":{key:{"absolute":current[key]-previous[key],"percent":_change(current[key],previous[key])} for key in current} if previous else None}
+ previous_dates=comparison_period(data.date_from,data.date_to,data.comparison_mode) if data.compare else None
+ current=await _summary(data,db);previous=await _summary(data,db,*previous_dates) if previous_dates else None
+ return {"current":current,"previous":previous,"changes":{key:{"absolute":current[key]-previous[key],"percent":_change(current[key],previous[key])} for key in current} if previous else None,"period":{"start":data.date_from,"end":data.date_to},"comparison_period":{"start":previous_dates[0],"end":previous_dates[1]} if previous_dates else None}
 
 async def _products(data,db,start=None,end=None):
  c=await _conditions(data,start,end);revenue=func.sum(SaleItem.quantity*SaleItem.actual_price);units=func.sum(SaleItem.quantity);base=func.sum(SaleItem.quantity*SaleItem.base_price)
@@ -68,7 +70,7 @@ async def _products(data,db,start=None,end=None):
  return [{**dict(x._mapping),"key":_product_key(x.article,x.code,x.name),"units":float(x.units or 0),"revenue":float(x.revenue or 0),"average_price":float(x.average_price or 0),"discount_amount":float(x.discount_amount or 0),"average_discount":float(x.average_discount or 0),"revenue_share":float(x.revenue or 0)/total*100 if total else 0} for x in rows]
 @router.post("/products")
 async def products(data:ReportRequest,sort_by:str="revenue",sort_dir:str="desc",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500),db:AsyncSession=Depends(get_db)):
- current=await _products(data,db);previous=await _products(data,db,*_previous(data.date_from,data.date_to)) if data.compare else [];previous_by={x["key"]:x for x in previous}
+ current=await _products(data,db);previous=await _products(data,db,*comparison_period(data.date_from,data.date_to,data.comparison_mode)) if data.compare else [];previous_by={x["key"]:x for x in previous}
  for item in current:
   old=previous_by.get(item["key"],{});item["previous_revenue"]=old.get("revenue",0);item["previous_units"]=old.get("units",0);item["revenue_change_percent"]=_change(item["revenue"],item["previous_revenue"]);item["units_change_percent"]=_change(item["units"],item["previous_units"])
  allowed={"revenue","units","checks","clients","average_price","discount_amount","last_sale"};key=sort_by if sort_by in allowed else "revenue";current.sort(key=lambda x:(x[key] is not None,x[key]),reverse=sort_dir=="desc")
@@ -123,6 +125,16 @@ async def delete_set(set_id:int,db:AsyncSession=Depends(get_db)):await db.execut
 @router.get("/catalog/filters")
 async def catalog_filters():
  try:return await get_product_filters()
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+
+@router.get("/catalog/tree")
+async def catalog_tree():
+ try:return await get_catalog_tree()
+ except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
+
+@router.get("/catalog/brands")
+async def catalog_brands(search:str="",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500)):
+ try:return await get_catalog_brands(search=search,page=page,page_size=page_size)
  except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
 
 @router.get("/catalog/filters/{filter_key}/options")
