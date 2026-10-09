@@ -170,6 +170,33 @@ async def stopped(data:AnalyticsRequest,limit:int=Query(100,le=500),db:AsyncSess
 async def new(data:AnalyticsRequest,limit:int=Query(100,le=500),db:AsyncSession=Depends(get_db)):return await _section(data,db,"new","revenue",limit)
 
 class DetailRequest(AnalyticsRequest):article_key:str
+
+def _detail_product(data:DetailRequest):
+ """Строит точное условие для одного SKU из ключа таблицы."""
+ try:prefix,value=data.article_key.split(":",1)
+ except ValueError as exc:raise HTTPException(422,"Неверный ключ товара") from exc
+ if prefix=="code":column=SaleItem.code
+ elif prefix=="article":column=SaleItem.article
+ elif prefix=="unknown":column=SaleItem.name
+ else:raise HTTPException(422,"Неверный ключ товара")
+ return func.lower(func.trim(column))==value.strip().casefold(),prefix,value.strip()
+
+async def _detail_manager_clients(data:DetailRequest,db:AsyncSession,product_condition):
+ """Определяет клиентов менеджеров только для выбранного SKU и периода."""
+ if not data.managers:return None
+ try:mapping=await get_client_managers()
+ except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ normalized=func.coalesce(func.lower(func.trim(Sale.client)),"")
+ conditions=[*_conditions(data,data.date_from,data.date_to),product_condition]
+ clients=list((await db.scalars(select(normalized).join(SaleItem,SaleItem.sale_id==Sale.id).where(*conditions).distinct())).all())
+ return clients_for_managers(clients,mapping,data.managers)
+
+def _empty_detail_product(article_key:str,prefix:str,value:str):
+ """Сохраняет структуру product, даже если в периоде нет продаж."""
+ return {"key":article_key,"article":value if prefix=="article" else None,
+         "code":value if prefix=="code" else None,"name":value if prefix=="unknown" else "Товар",
+         "revenue":0.0,"units":0.0,"checks":0,"first_sale":None,"last_sale":None}
+
 @router.post("/details")
 async def details(data:DetailRequest,group_by:str=Query("day",pattern="^(day|week|month)$"),db:AsyncSession=Depends(get_db)):
  rows,_,_,manager_clients=await _dataset(data,db);prefix,value=data.article_key.split(":",1);column=SaleItem.code if prefix=="code" else SaleItem.article if prefix=="article" else SaleItem.name;condition=func.lower(func.trim(column))==value;bucket=func.date_trunc(group_by,Sale.sale_date).label("period");q=select(bucket,func.sum(SaleItem.quantity*SaleItem.actual_price).label("revenue"),func.sum(SaleItem.quantity).label("units"),func.count(distinct(Sale.id)).label("checks")).join(Sale,Sale.id==SaleItem.sale_id).where(*_conditions(data,data.date_from,data.date_to,manager_clients),condition).group_by(bucket).order_by(bucket);points=(await db.execute(q)).all();item=next((x for x in rows if x["key"]==data.article_key),None)
