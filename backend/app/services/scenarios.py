@@ -48,10 +48,26 @@ async def run_scenario(scenario:Scenario,run_date:date,period_override:tuple[dat
 async def process_scheduled_scenarios(db,now:datetime):
  scenarios=(await db.scalars(select(Scenario).where(Scenario.enabled.is_(True)))).all()
  for scenario in scenarios:
+  # Транзакционная advisory-блокировка сериализует планировщики до фиксации
+  # результата и не требует изменения структуры БД.
+  await db.execute(select(func.pg_advisory_xact_lock(scenario.id)))
   latest=await db.scalar(select(ScenarioRun).where(ScenarioRun.scenario_id==scenario.id,ScenarioRun.run_type=="scheduled").order_by(ScenarioRun.run_date.desc(),ScenarioRun.created_at.desc(),ScenarioRun.id.desc()).limit(1))
   plan=scheduled_run_plan(now,latest)
-  if not plan:continue
-  run_date,period=plan;run=ScenarioRun(scenario_id=scenario.id,run_date=run_date,run_type="scheduled",period_start=period[0],period_end=period[1],recipients=scenario.email,status="running");db.add(run);await db.commit();await db.refresh(run)
+  if not plan:
+   await db.commit()
+   continue
+  run_date,period=plan
+  if latest is not None and latest.run_date==run_date:
+   run=latest
+   run.period_start=period[0];run.period_end=period[1];run.recipients=scenario.email
+  else:
+   run=ScenarioRun(scenario_id=scenario.id,run_date=run_date,run_type="scheduled",period_start=period[0],period_end=period[1],recipients=scenario.email)
+   db.add(run)
+  # В текущей схеме отдельной колонки last_attempt_at нет. Для одной записи
+  # расписания created_at является временем последней попытки и обновляется при
+  # повторе; сама запись и её идентификатор сохраняются.
+  run.created_at=now;run.status="running";run.message=None
+  await db.flush()
   try:await run_scenario(scenario,run_date,period);run.status="completed";run.message="Отчет отправлен"
   except Exception as exc:
    run.status="failed";run.message=str(exc)[:4000]

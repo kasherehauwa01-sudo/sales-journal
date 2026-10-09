@@ -1,8 +1,6 @@
 from datetime import date
 from io import BytesIO
-import json
 import logging
-import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openpyxl import Workbook
@@ -16,14 +14,13 @@ from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError, get_client_managers, get_managers
 from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, previous_period, product_key, summary
-from app.services.product_analytics_cache import cached_product_dataset
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info, get_product_filter_options, get_product_filters
 
 router=APIRouter(prefix="/reports/product-analytics",tags=["Отчеты"])
 logger=logging.getLogger(__name__)
 
 class AnalyticsRequest(BaseModel):
- date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);manufacturers:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
+ date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
 
 def _dates(data):
  if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
@@ -69,34 +66,12 @@ async def _manager_clients(data,db,old_from,old_to):
  sales_clients=list((await db.scalars(select(normalized).where(*conditions).distinct())).all())
  return clients_for_managers(sales_clients,mapping,data.managers)
 
-def _dataset_cache_key(data:AnalyticsRequest,revision:int) -> str:
- payload=data.model_dump(mode="json")
- for field in ("departments","managers","brands","manufacturers","subcategories"):
-  payload[field]=sorted(payload[field],key=str.casefold)
- return f"{revision}:"+json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
-
-async def _build_dataset(data,db):
- if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
- started=time.perf_counter();old_from,old_to=_dates(data);manager_clients=await _manager_clients(data,db,old_from,old_to)
- stage=time.perf_counter();current=await _period_rows(data,db,data.date_from,data.date_to,manager_clients);current_ms=(time.perf_counter()-stage)*1000
- stage=time.perf_counter();old=await _period_rows(data,db,old_from,old_to,manager_clients);comparison_ms=(time.perf_counter()-stage)*1000
- stage=time.perf_counter();catalog=await _catalog(current+old);catalog_ms=(time.perf_counter()-stage)*1000
- stage=time.perf_counter();rows=merge_periods(current,old,catalog)
- rows=filter_values(rows,"brand",data.brands)
- rows=filter_values(rows,"manufacturer",data.manufacturers)
- rows=filter_subcategories(rows,data.subcategories)
- rows=group_rows(rows,data.group_by);processing_ms=(time.perf_counter()-stage)*1000
- logger.info("product_analytics stages_ms current=%.1f comparison=%.1f catalog=%.1f processing=%.1f total=%.1f current_rows=%s comparison_rows=%s result_rows=%s",
-  current_ms,comparison_ms,catalog_ms,processing_ms,(time.perf_counter()-started)*1000,len(current),len(old),len(rows))
- return rows,old_from,old_to,manager_clients
-
 async def _dataset(data,db):
- # max(id) использует PK-индекс и инвалидирует кеш между worker-процессами.
- revision=int(await db.scalar(select(func.max(Sale.id))) or 0)
- key=_dataset_cache_key(data,revision)
- result,hit=await cached_product_dataset(key,lambda:_build_dataset(data,db))
- logger.info("product_analytics dataset cache_hit=%s result_rows=%s",hit,len(result[0]))
- return result
+ if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
+ old_from,old_to=_dates(data);manager_clients=await _manager_clients(data,db,old_from,old_to);current=await _period_rows(data,db,data.date_from,data.date_to,manager_clients);old=await _period_rows(data,db,old_from,old_to,manager_clients);catalog=await _catalog(current+old);rows=merge_periods(current,old,catalog)
+ rows=filter_values(rows,"brand",data.brands)
+ rows=filter_subcategories(rows,data.subcategories)
+ return group_rows(rows,data.group_by),old_from,old_to,manager_clients
 
 def _sorted(rows,section,sort_by="revenue",limit=100):
  groups=classify(rows) if section!="top" else {}
@@ -106,24 +81,6 @@ def _sorted(rows,section,sort_by="revenue",limit=100):
  elif section=="stopped":key="previous_revenue";reverse=True
  else:key=sort_by if sort_by in {"revenue","units","checks"} else "revenue";reverse=True
  return sorted(source,key=lambda x:x.get(key) if x.get(key) is not None else float("-inf"),reverse=reverse)[:limit]
-
-def _selected_products_condition(rows,metric):
- values={"code":[],"article":[],"unknown":[]}
- for row in rows:
-  if not row.get(metric):continue
-  prefix,_,value=row["key"].partition(":")
-  if prefix in values and value:values[prefix].append(value)
- conditions=[]
- for prefix,column in (("code",SaleItem.code),("article",SaleItem.article),("unknown",SaleItem.name)):
-  if values[prefix]:
-   selected=cast(bindparam(f"selected_{prefix}_{metric}",value=values[prefix],unique=True),ARRAY(String))
-   conditions.append(func.lower(func.trim(column))==any_(selected))
- return or_(*conditions) if conditions else false()
-
-async def _unique_checks(data,db,rows,start,end,manager_clients,metric):
- """Считает каждый документ один раз, даже если в нём несколько отобранных SKU."""
- return await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(
-  *_conditions(data,start,end,manager_clients),_selected_products_condition(rows,metric))) or 0
 
 def _source(payload):
  if isinstance(payload,list):return payload
@@ -158,12 +115,12 @@ async def manager_options(db:AsyncSession=Depends(get_db)):
  return list(dict.fromkeys(managers))
 
 async def _catalog_options(field:str,search:str):
- aliases={"brand":["brand","Бренд","property:Бренд"],"manufacturer":["manufacturer","Производитель","property:Производитель"],"subcategory":["section","Раздел","property:Раздел"]}[field];keys=[]
+ aliases={"brand":["brand","Бренд","property:Бренд"],"subcategory":["section","Раздел","property:Раздел"]}[field];keys=[]
  try:
   for item in _source(await get_product_filters()):
    if not isinstance(item,dict):continue
    label=str(item.get("label") or item.get("name") or item.get("title") or "").casefold();candidate=str(item.get("key") or item.get("code") or item.get("id") or "")
-   terms={"brand":("brand","бренд"),"manufacturer":("manufacturer","производител"),"subcategory":("section","раздел")}[field]
+   terms=("brand","бренд") if field=="brand" else ("section","раздел")
    if any(term in candidate.casefold() or term in label for term in terms):keys.append(candidate)
  except VrCatalogError:pass
  last=None
@@ -178,7 +135,7 @@ async def _catalog_options(field:str,search:str):
 
 @router.get("/catalog-options/{field}")
 async def catalog_options(field:str,search:str=""):
- if field not in {"brand","manufacturer","subcategory"}:raise HTTPException(404,"Неизвестный фильтр")
+ if field not in {"brand","subcategory"}:raise HTTPException(404,"Неизвестный фильтр")
  return await _catalog_options(field,search)
 
 @router.get("/name-suggestions")
@@ -194,39 +151,11 @@ async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
  product_data=data.model_copy(update={"group_by":"product"});rows,old_from,old_to,manager_clients=await _dataset(product_data,db);result=summary(rows)
  # Без фильтров CatalogVR можно получить реальное число уникальных чеков
  # напрямую в PostgreSQL, не суммируя чеки отдельных SKU.
- if data.brands or data.manufacturers or data.subcategories:
-  current_checks=await _unique_checks(data,db,rows,data.date_from,data.date_to,manager_clients,"revenue")
-  old_checks=await _unique_checks(data,db,rows,old_from,old_to,manager_clients,"previous_revenue")
- else:
+ if not data.brands and not data.subcategories:
   current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0
   old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0
- result["checks"]={"current":current_checks,"previous":old_checks}
+  result["checks"]={"current":current_checks,"previous":old_checks}
  return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},"summary":result}
-
-@router.post("/report")
-async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(top|growth|decline|stopped|new)$"),
-                      sort_by:str="revenue",limit:int=Query(20,ge=10,le=500),db:AsyncSession=Depends(get_db)):
- """Возвращает KPI и активную вкладку из одного рассчитанного набора."""
- if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
- product_data=data.model_copy(update={"group_by":"product"})
- product_rows,old_from,old_to,manager_clients=await _dataset(product_data,db)
- grouped=product_rows if data.group_by=="product" else group_rows(product_rows,data.group_by)
- result=summary(product_rows)
- # Уникальные чеки не суммируем между SKU. Без catalog-фильтров считаем их точно в SQL.
- if data.brands or data.manufacturers or data.subcategories:
-  result["checks"]={
-   "current":await _unique_checks(data,db,product_rows,data.date_from,data.date_to,manager_clients,"revenue"),
-   "previous":await _unique_checks(data,db,product_rows,old_from,old_to,manager_clients,"previous_revenue"),
-  }
- else:
-  result["checks"]={
-   "current":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0,
-   "previous":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0,
-  }
- items=_sorted(grouped,section,sort_by,limit)
- total=len(_sorted(grouped,section,sort_by,1000000))
- return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},
-         "summary":result,"items":items,"total":total}
 
 async def _section(data,db,name,sort_by,limit):rows,_,_,_=await _dataset(data,db);return {"items":_sorted(rows,name,sort_by,limit),"total":len(_sorted(rows,name,sort_by,1000000))}
 @router.post("/top")
@@ -270,36 +199,9 @@ def _empty_detail_product(article_key:str,prefix:str,value:str):
 
 @router.post("/details")
 async def details(data:DetailRequest,group_by:str=Query("day",pattern="^(day|week|month)$"),db:AsyncSession=Depends(get_db)):
- if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
- condition,prefix,value=_detail_product(data)
- manager_clients=await _detail_manager_clients(data,db,condition)
- bucket=func.date_trunc(group_by,Sale.sale_date).label("period")
- query=select(
-  bucket,func.sum(SaleItem.quantity*SaleItem.actual_price).label("revenue"),
-  func.sum(SaleItem.quantity).label("units"),func.count(distinct(Sale.id)).label("checks"),
-  func.max(SaleItem.article).label("article"),func.max(SaleItem.code).label("code"),
-  func.max(SaleItem.name).label("name"),func.min(Sale.sale_date).label("first_sale"),
-  func.max(Sale.sale_date).label("last_sale"),
- ).join(Sale,Sale.id==SaleItem.sale_id).where(
-  *_conditions(data,data.date_from,data.date_to,manager_clients),condition
- ).group_by(bucket).order_by(bucket)
- rows=(await db.execute(query)).all()
- points=[{"period":row.period.date(),"revenue":float(row.revenue or 0),
-          "units":float(row.units or 0),"checks":row.checks} for row in rows]
- if rows:
-  first=rows[0]
-  current={"key":data.article_key,"article":first.article,"code":first.code,"name":first.name,
-           "revenue":sum(point["revenue"] for point in points),"units":sum(point["units"] for point in points),
-           "checks":sum(point["checks"] for point in points),"first_sale":min(row.first_sale for row in rows),
-           "last_sale":max(row.last_sale for row in rows)}
- else:
-  identity=(await db.execute(select(SaleItem.article,SaleItem.code,SaleItem.name).where(
-   condition).order_by(SaleItem.id.desc()).limit(1))).first()
-  current=_empty_detail_product(data.article_key,prefix,value)
-  if identity:current.update(article=identity.article,code=identity.code,name=identity.name)
- catalog=await _catalog([current])
- product=merge_periods([current],[],catalog)[0]
- return {"product":product,"group_by":group_by,"points":points}
+ rows,_,_,manager_clients=await _dataset(data,db);prefix,value=data.article_key.split(":",1);column=SaleItem.code if prefix=="code" else SaleItem.article if prefix=="article" else SaleItem.name;condition=func.lower(func.trim(column))==value;bucket=func.date_trunc(group_by,Sale.sale_date).label("period");q=select(bucket,func.sum(SaleItem.quantity*SaleItem.actual_price).label("revenue"),func.sum(SaleItem.quantity).label("units"),func.count(distinct(Sale.id)).label("checks")).join(Sale,Sale.id==SaleItem.sale_id).where(*_conditions(data,data.date_from,data.date_to,manager_clients),condition).group_by(bucket).order_by(bucket);points=(await db.execute(q)).all();item=next((x for x in rows if x["key"]==data.article_key),None)
+ if not item:raise HTTPException(404,"Товар не найден")
+ return {"product":item,"group_by":group_by,"points":[{"period":x.period.date(),"revenue":float(x.revenue or 0),"units":float(x.units or 0),"checks":x.checks} for x in points]}
 
 def _sheet(book,title,headers,rows):
  sheet=book.create_sheet(title);sheet.append(headers)

@@ -8,11 +8,17 @@ SCENARIO_RETRY_INTERVAL = timedelta(hours=1)
 def scheduled_run_plan(now: datetime, latest):
     """Определяет первичный запуск либо почасовой повтор последней ошибки."""
     if latest and latest.status in {"failed", "running"}:
-        created = latest.created_at
-        if created:
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=now.tzinfo)
-            if now - created < SCENARIO_RETRY_INTERVAL:
+        # В новых схемах используется явное время последней попытки. Fallback
+        # сохраняет совместимость с текущей таблицей без новой миграции.
+        attempted_at = (
+            getattr(latest, "last_attempt_at", None)
+            or getattr(latest, "updated_at", None)
+            or latest.created_at
+        )
+        if attempted_at:
+            if attempted_at.tzinfo is None:
+                attempted_at = attempted_at.replace(tzinfo=now.tzinfo)
+            if now - attempted_at < SCENARIO_RETRY_INTERVAL:
                 return None
         if latest.period_start and latest.period_end:
             return latest.run_date, (latest.period_start, latest.period_end)

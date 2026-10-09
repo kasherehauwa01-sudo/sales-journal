@@ -6,7 +6,6 @@ from app.database import SessionLocal
 from app.importer.parser import include_document, include_for_filename, normalize_sale, read_sales
 from app.models import ImportBatch, ImportError, Sale, SaleItem
 from app.services.import_files import with_temporary_source
-from app.services.product_analytics_cache import invalidate_product_analytics_cache
 
 log=logging.getLogger(__name__)
 
@@ -62,8 +61,6 @@ async def process_import(import_id:int):
  try:
   await with_temporary_source(path,operation)
  finally:
-  # Новые продажи не должны оставаться за локальным TTL отчёта.
-  invalidate_product_analytics_cache()
   if not path.exists():
    try:await _clear_stored_path(import_id,path)
    except Exception:log.exception("Не удалось очистить stored_path импорта %s",import_id)

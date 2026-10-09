@@ -93,9 +93,3 @@ def test_multiple_brands_are_combined_case_insensitively():
     rows=[{"brand":"Villeroy"},{"brand":"Bormioli"},{"brand":"Другой"},{"brand":None}]
     assert filter_values(rows,"brand",["villeroy","BORMIOLI"])==rows[:2]
     assert filter_values(rows,"brand",["Не заполнено"])==rows[3:]
-
-
-def test_multiple_manufacturers_are_combined_case_insensitively():
-    rows=[{"manufacturer":"Libbey"},{"manufacturer":"ARC"},{"manufacturer":"Другой"},{"manufacturer":None}]
-    assert filter_values(rows,"manufacturer",["libbey","arc"])==rows[:2]
-    assert filter_values(rows,"manufacturer",["Не заполнено"])==rows[3:]

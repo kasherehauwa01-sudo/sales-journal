@@ -12,18 +12,9 @@ image_cache:tuple[float,dict[str,str]]|None=None
 # десятки тысяч уже известных товаров через batch-info.
 catalog_info_cache: dict[str, tuple[float, dict | None]] = {}
 CATALOG_INFO_CACHE_TTL = 1800
-CATALOG_INFO_CACHE_MAX_ENTRIES = 30000
+CATALOG_INFO_CACHE_MAX_ENTRIES = 60000
 CATALOG_BATCH_SIZE = 250
-CATALOG_BATCH_CONCURRENCY = 2
 logger=logging.getLogger(__name__)
-
-# Небольшой stale-if-error кеш защищает справочники фильтров от кратковременных
-# таймаутов CatalogVR. В ключах нет токена, а число поисковых запросов ограничено.
-DIRECTORY_CACHE_TTL = 300
-DIRECTORY_CACHE_STALE_TTL = 86400
-DIRECTORY_CACHE_MAX_ENTRIES = 128
-directory_cache: OrderedDict[str, tuple[float, object]] = OrderedDict()
-directory_locks: dict[str, asyncio.Lock] = {}
 
 # Карта категорий хранится отдельно от тяжёлой информации о товаре. Отдельное
 # множество позволяет отличить отрицательный результат от category=null.
@@ -32,10 +23,17 @@ catalog_category_negative_cache: dict[str, float] = {}
 CATALOG_CATEGORY_CACHE_TTL = 1800
 CATALOG_CATEGORY_MAP_LIMIT = 5000
 
-catalog_tree_cache: tuple[float,list[dict]]|None = None
 catalog_filter_keys_cache: dict[tuple[tuple[str,tuple[str,...]],...],tuple[float,set[str]]] = {}
-CATALOG_TREE_CACHE_TTL = 300
 CATALOG_FILTER_KEYS_CACHE_TTL = 300
+
+DIRECTORY_CACHE_TTL = 300
+DIRECTORY_CACHE_STALE_TTL = 86400
+DIRECTORY_CACHE_MAX_ENTRIES = 128
+DIRECTORY_LOCKS_MAX_ENTRIES = 256
+directory_cache: OrderedDict[str,tuple[float,object]] = OrderedDict()
+directory_locks: dict[str,asyncio.Lock] = {}
+directory_lock_users: dict[str,int] = {}
+directory_overflow_lock: asyncio.Lock|None = None
 
 class VrCatalogError(RuntimeError):pass
 
@@ -141,11 +139,18 @@ def _integration_get(path:str,params:dict|None=None):
  with urlopen(request,timeout=30) as response:return json.load(response)
 
 async def _cached_integration_get(path:str,params:dict|None=None):
+ global directory_overflow_lock
  key=json.dumps([path,sorted((params or {}).items())],ensure_ascii=False,separators=(",",":"))
  now=time.monotonic();entry=directory_cache.get(key)
  if entry and now-entry[0]<DIRECTORY_CACHE_TTL:
   directory_cache.move_to_end(key);return entry[1]
- lock=directory_locks.setdefault(key,asyncio.Lock())
+ lock=directory_locks.get(key);tracked=True
+ if lock is None:
+  if len(directory_locks)<DIRECTORY_LOCKS_MAX_ENTRIES:
+   lock=asyncio.Lock();directory_locks[key]=lock;directory_lock_users[key]=1
+  else:
+   directory_overflow_lock=directory_overflow_lock or asyncio.Lock();lock=directory_overflow_lock;tracked=False
+ else:directory_lock_users[key]=directory_lock_users.get(key,0)+1
  try:
   async with lock:
    now=time.monotonic();entry=directory_cache.get(key)
@@ -154,46 +159,38 @@ async def _cached_integration_get(path:str,params:dict|None=None):
    try:result=await asyncio.to_thread(_integration_get,path,params)
    except Exception as exc:
     if entry and now-entry[0]<DIRECTORY_CACHE_STALE_TTL:
-     logger.warning("CatalogVR: использован устаревший кеш справочника %s после %s",path,type(exc).__name__)
-     return entry[1]
+     logger.warning("CatalogVR: использован устаревший кеш справочника %s после %s",path,type(exc).__name__);return entry[1]
     raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
    directory_cache[key]=(time.monotonic(),result);directory_cache.move_to_end(key)
    while len(directory_cache)>DIRECTORY_CACHE_MAX_ENTRIES:directory_cache.popitem(last=False)
    return result
  finally:
-  if not lock.locked() and directory_locks.get(key) is lock:directory_locks.pop(key,None)
+  if tracked:
+   users=directory_lock_users.get(key,1)-1
+   if users<=0 and directory_locks.get(key) is lock:
+    directory_lock_users.pop(key,None);directory_locks.pop(key,None)
+   else:directory_lock_users[key]=users
 
 async def get_product_filters():
  return await _cached_integration_get("integration/product-filters")
 
 async def get_catalog_tree():
- return await _cached_integration_get("integration/catalog-tree")
+ payload=await _cached_integration_get("integration/catalog-tree")
+ def valid(value):
+  if isinstance(value,list):return True
+  if not isinstance(value,dict):return False
+  return any(key in value and (isinstance(value[key],list) or valid(value[key])) for key in ("items","categories","sections","tree","data"))
+ if not valid(payload):raise VrCatalogError("vrcatalog вернул некорректное дерево каталога")
+ return payload
 
 async def get_catalog_brands(*,search:str="",page:int=1,page_size:int=100):
  return await _cached_integration_get("integration/brands",{"search":search,"page":page,"page_size":page_size})
 
-async def get_catalog_tree():
- try:return await asyncio.to_thread(_integration_get,"integration/catalog-tree")
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
-async def get_catalog_brands(*,search:str="",page:int=1,page_size:int=100):
- try:return await asyncio.to_thread(_integration_get,"integration/brands",{"search":search,"page":page,"page_size":page_size})
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
 async def get_product_filter_options(filter_key:str,*,search:str="",page:int=1,page_size:int=100):
  return await _cached_integration_get(f"integration/product-filters/{quote(filter_key,safe='')}/options",{"search":search,"page":page,"page_size":page_size})
 
-async def get_catalog_tree():
- global catalog_tree_cache
- if catalog_tree_cache and time.monotonic()-catalog_tree_cache[0]<CATALOG_TREE_CACHE_TTL:return catalog_tree_cache[1]
- try:payload=await asyncio.to_thread(_integration_get,"integration/catalog-tree")
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
- if not isinstance(payload,list):raise VrCatalogError("vrcatalog вернул некорректное дерево каталога")
- catalog_tree_cache=(time.monotonic(),payload);return payload
-
 async def get_brands(*,search:str="",page:int=1,page_size:int=100):
- try:return await asyncio.to_thread(_integration_get,"integration/brands",{"search":search,"page":page,"page_size":page_size})
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ return await get_catalog_brands(search=search,page=page,page_size=page_size)
 
 async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,search:str="",sort_by:str|None=None,sort_dir:str|None=None):
  payload={"filters":filters,"page":page,"page_size":page_size}
@@ -230,10 +227,9 @@ async def get_catalog_filter_keys(*,brands:list[str],sections:list[str]):
 def _catalog_key(prefix:str,value):return f"{prefix}:{str(value).strip().lower()}" if value and str(value).strip() else None
 
 def _prune_catalog_info_cache(now:float):
- expired=[key for key,(created_at,_) in catalog_info_cache.items() if now-created_at>=CATALOG_INFO_CACHE_TTL]
- for key in expired:catalog_info_cache.pop(key,None)
- while len(catalog_info_cache)>CATALOG_INFO_CACHE_MAX_ENTRIES:
-  catalog_info_cache.pop(next(iter(catalog_info_cache)))
+ for key,(created_at,_) in list(catalog_info_cache.items()):
+  if now-created_at>=CATALOG_INFO_CACHE_TTL:catalog_info_cache.pop(key,None)
+ while len(catalog_info_cache)>CATALOG_INFO_CACHE_MAX_ENTRIES:catalog_info_cache.pop(next(iter(catalog_info_cache)))
 
 async def get_catalog_batch_info(products:list[dict]):
  global catalog_info_cache
@@ -267,18 +263,13 @@ async def get_catalog_batch_info(products:list[dict]):
   else:
    missing.append({"code":code,"article":article})
 
- semaphore=asyncio.Semaphore(CATALOG_BATCH_CONCURRENCY)
- async def load_batch(offset):
+ failed_batches=0
+ successful_batches=0
+ for offset in range(0,len(missing),CATALOG_BATCH_SIZE):
   batch=missing[offset:offset+CATALOG_BATCH_SIZE]
-  try:
-   async with semaphore:return offset,batch,await asyncio.to_thread(_integration_batch,{"products":batch}),None
-  except Exception as exc:return offset,batch,None,exc
-
- responses=await asyncio.gather(*(load_batch(offset) for offset in range(0,len(missing),CATALOG_BATCH_SIZE)))
- failed_batches=0;successful_batches=0
- for offset,batch,response,exc in responses:
   batch_number=offset//CATALOG_BATCH_SIZE+1
-  if exc is not None:
+  try:response=await asyncio.to_thread(_integration_batch,{"products":batch})
+  except Exception as exc:
    failed_batches+=1
    # Не логируем URL, payload и текст исключения: они могут содержать секреты.
    logger.warning("CatalogVR batch-info: пакет %s (%s товаров) не обработан: %s",batch_number,len(batch),type(exc).__name__)
@@ -309,10 +300,10 @@ async def get_catalog_batch_info(products:list[dict]):
     if code_key:catalog_info_cache[code_key]=(now,None)
     if article_key:catalog_info_cache[article_key]=(now,None)
 
- _prune_catalog_info_cache(now)
-
  if failed_batches and not successful_batches and not result:
   raise VrCatalogError(f"CatalogVR не обработал {failed_batches} batch-пакетов")
+
+ _prune_catalog_info_cache(now)
 
  return result
 
