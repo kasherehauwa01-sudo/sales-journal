@@ -13,7 +13,7 @@ from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import (ClientsVrError, cached_client_buyer_types,
     get_buyer_type_clients, get_cached_client_managers, get_client_metadata,
-    get_manager_clients)
+    get_manager_clients, normalize_client_name)
 from app.services.rfm import SEGMENTS, SegmentSettings, enrich
 
 router = APIRouter(prefix="/reports/rfm", tags=["Отчеты"])
@@ -77,11 +77,15 @@ async def _dataset(db, date_from, date_to, departments, managers_filter, buyer_t
     rows, boundaries = enrich(rows, date_to, SegmentSettings(new_days, lost_days, sleeping_cycle, lost_cycle))
     managers, buyer_types = get_cached_client_managers(), cached_client_buyer_types() or {}
     try:
-        managers, buyer_types = await get_client_metadata(); clients_vr_available = True
+        managers, buyer_types = await get_client_metadata()
+        clients_vr_available = bool(managers or buyer_types)
     except ClientsVrError:
         clients_vr_available = False
     for row in rows:
-        row["manager"] = managers.get(row["client_key"]); row["buyer_type"] = buyer_types.get(row["client_key"])
+        # SQL и ClientsVR могут по-разному обрабатывать регистр и повторные
+        # пробелы, поэтому связываем справочники по общему Python-ключу.
+        metadata_key = normalize_client_name(row["client"])
+        row["manager"] = managers.get(metadata_key); row["buyer_type"] = buyer_types.get(metadata_key)
         row.pop("purchase_dates", None)
     return rows, boundaries, clients_vr_available
 

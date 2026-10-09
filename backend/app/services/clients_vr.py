@@ -18,8 +18,24 @@ MANAGER_ORDER=(
 )
 cache:dict[str,tuple[float,object]]={}
 CACHE_TTL_SECONDS=300
-BUYER_TYPE_KEYS=("buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","Вид покупателя","ВидПокупателя")
+CLIENT_KEYS=("client","name","client_name","full_name","customer","customer_name","Клиент")
+MANAGER_KEYS=("manager","manager_name","manager_full_name","responsible","responsible_name","Менеджер")
+BUYER_TYPE_KEYS=("buyer_type","buyer_type_name","buyer_type_label","customer_type","client_type","client_kind","type_name","Вид покупателя","ВидПокупателя")
 class ClientsVrError(RuntimeError):pass
+
+def normalize_client_name(value) -> str:
+ """Приводит имя клиента из ClientsVR и продаж к одному ключу."""
+ return " ".join(str(value or "").split()).casefold()
+
+def _text_value(item,keys):
+ """Извлекает строку из плоского или вложенного справочника ClientsVR."""
+ if not isinstance(item,dict):return None
+ for key in keys:
+  value=item.get(key)
+  if isinstance(value,dict):
+   value=next((value.get(nested) for nested in ("name","full_name","label","value") if value.get(nested)),None)
+  if value is not None and str(value).strip():return str(value).strip()
+ return None
 
 def _request(paths:list[str]):
  from app.config import settings
@@ -67,22 +83,21 @@ def _client_managers(payload):
  result={}
  for item in _source(payload,("clients",)):
   if not isinstance(item,dict):continue
-  client=next((item.get(key) for key in ("client","name","client_name","full_name","Клиент") if item.get(key)),None)
-  manager=next((item.get(key) for key in ("manager","manager_name","manager_full_name","Менеджер") if item.get(key)),None)
-  if client and manager:result[str(client).strip().lower()]=str(manager).strip()
+  client=_text_value(item,CLIENT_KEYS);manager=_text_value(item,MANAGER_KEYS)
+  if client and manager:result[normalize_client_name(client)]=manager
  return result
 
 def _client_buyer_types(payload):
  result={}
  for item in _source(payload,("clients",)):
   if not isinstance(item,dict):continue
-  client=next((item.get(key) for key in ("client","name","client_name","full_name","Клиент") if item.get(key)),None)
+  client=_text_value(item,CLIENT_KEYS)
   buyer_type=_buyer_type(item)
-  if client and buyer_type:result[str(client).strip().lower()]=str(buyer_type).strip()
+  if client and buyer_type:result[normalize_client_name(client)]=str(buyer_type).strip()
  return result
 
 def _buyer_type(item):
- return next((item.get(key) for key in BUYER_TYPE_KEYS if item.get(key)),None) if isinstance(item,dict) else None
+ return _text_value(item,BUYER_TYPE_KEYS)
 
 def _buyer_type_clients(payload,buyer_type):
  source=_source(payload,("clients",));expected=buyer_type.strip().casefold();no_type=expected=="нет"
@@ -113,7 +128,7 @@ async def get_manager_clients(manager:str):
 async def get_client_manager(client:str|None):
  if not client:return None
  managers=await get_client_managers()
- return managers.get(client.strip().lower())
+ return managers.get(normalize_client_name(client))
 
 async def get_client_managers():
  return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
