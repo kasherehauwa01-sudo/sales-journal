@@ -157,6 +157,39 @@ async def manager_options(db:AsyncSession=Depends(get_db)):
  if any(not mapping.get(client or "") or mapping[client or ""].strip().casefold() in {"нет менеджера",MISSING_MANAGER.casefold()} for client in clients):managers=[*managers,MISSING_MANAGER]
  return list(dict.fromkeys(managers))
 
+def _options_pagination(payload):
+ if not isinstance(payload,dict):return {}
+ result={}
+ for key in ("data","results"):
+  if isinstance(payload.get(key),dict):result.update(_options_pagination(payload[key]))
+ result.update({key:payload[key] for key in ("total","pages","total_pages","has_next") if key in payload})
+ if isinstance(payload.get("pagination"),dict):result.update(payload["pagination"])
+ return result
+
+async def _all_catalog_option_values(key:str,search:str):
+ """Загружает справочник через существующий кеш отдельных страниц."""
+ values={};loaded=0;page_size=100
+ for page in range(1,10001):
+  payload=await get_product_filter_options(key,search=search,page=page,page_size=page_size)
+  items=_source(payload)
+  if not items:return list(values)
+  page_values=_option_values(payload)
+  if not any(value not in values for value in page_values):
+   raise VrCatalogError("vrcatalog повторил страницу справочника фильтра")
+  values.update(dict.fromkeys(page_values));loaded+=len(items)
+  pagination=_options_pagination(payload)
+  pages=pagination.get("pages") or pagination.get("total_pages")
+  total=pagination.get("total")
+  try:
+   if pagination.get("has_next") is False or (pages is not None and page>=int(pages)) or (total is not None and loaded>=int(total)):
+    return list(values)
+  except (TypeError,ValueError) as exc:
+   raise VrCatalogError("vrcatalog вернул некорректную пагинацию фильтра") from exc
+  # Явный has_next имеет приоритет над длиной страницы.
+  if pagination.get("has_next") is not True and pages is None and total is None and len(items)<page_size:
+   return list(values)
+ raise VrCatalogError("vrcatalog превысил число страниц справочника фильтра")
+
 async def _catalog_options(field:str,search:str):
  aliases={"brand":["brand","Бренд","property:Бренд"],"manufacturer":["manufacturer","Производитель","property:Производитель"],"subcategory":["section","Раздел","property:Раздел"]}[field];keys=[]
  try:
@@ -170,7 +203,7 @@ async def _catalog_options(field:str,search:str):
  for key in dict.fromkeys([*keys,*aliases]):
   if not key:continue
   try:
-   values=_option_values(await get_product_filter_options(key,search=search,page=1,page_size=500))
+   values=await _all_catalog_option_values(key,search)
    if values:return values
   except VrCatalogError as exc:last=exc
  if last:raise HTTPException(502,str(last))
