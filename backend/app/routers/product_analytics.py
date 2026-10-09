@@ -128,7 +128,7 @@ async def _catalog_options(field:str,search:str):
  for key in dict.fromkeys([*keys,*aliases]):
   if not key:continue
   try:
-   values=_option_values(await get_product_filter_options(key,search=search,page=1,page_size=500))
+   values=_option_values(await get_product_filter_options(key,search=search,page=1,page_size=100))
    if values:return values
   except VrCatalogError as exc:last=exc
  if last:raise HTTPException(502,str(last))
