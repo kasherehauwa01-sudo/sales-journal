@@ -6,6 +6,7 @@ from app.services.vrcatalog import VrCatalogError,horeca_keys,is_horeca
 def setup_function():
  vrcatalog.cache=None;vrcatalog.image_cache=None
  vrcatalog.catalog_info_cache.clear();vrcatalog.catalog_category_cache.clear();vrcatalog.catalog_category_negative_cache.clear()
+ vrcatalog.catalog_tree_cache=None;vrcatalog.catalog_filter_keys_cache.clear()
 
 def test_horeca_products_are_detected_by_article_and_code():
  payload={"items":[{"article":" A-1 ","code":"001","properties":{"HoReCa":"HoReCa"}},{"article":"A-2","properties":{"HoReCa":"Нет"}}]}
