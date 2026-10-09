@@ -99,8 +99,13 @@ async def _dataset(data,db):
  product_data=data.model_copy(update={"group_by":"product"})
  result,hit=await cached_product_dataset(key,lambda:_build_dataset(product_data,db))
  logger.info("product_analytics dataset cache_hit=%s result_rows=%s",hit,len(result[0]))
+ started=time.perf_counter()
  rows,old_from,old_to,manager_clients=result
- return group_rows(rows,data.group_by),old_from,old_to,manager_clients
+ grouped=group_rows(rows,data.group_by)
+ postprocess_ms=(time.perf_counter()-started)*1000
+ logger.info("product_analytics dataset postprocess_ms=%.3f cache_hit=%s input_rows=%s result_rows=%s",
+  postprocess_ms,hit,len(rows),len(grouped),extra={"postprocess_ms":postprocess_ms,"cache_hit":hit,"input_rows":len(rows),"result_rows":len(grouped)})
+ return grouped,old_from,old_to,manager_clients
 
 def _sorted(rows,section,sort_by="revenue",limit=100):
  groups=classify(rows) if section!="top" else {}
