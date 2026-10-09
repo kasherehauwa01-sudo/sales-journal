@@ -10,24 +10,26 @@ from app.services.scenarios import send_test
 from app.services.scenarios import run_scenario
 from app.services.email_recipients import parse_recipient_emails
 from app.services.scenario_periods import manual_test_period
+from app.services.scenario_history import scenario_run_out
 from app.config import settings
+from app.services.settings_auth import require_settings_admin
 
 router=APIRouter(tags=["Настройки"])
 class SmtpIn(BaseModel):host:str;port:int=Field(ge=1,le=65535);security:str;username:str;password:str="";sender_email:str;sender_name:str
 class TestEmail(BaseModel):email:str=Field(min_length=3,max_length=255)
 class ScenarioIn(BaseModel):name:str;email:str;reply_emails:str="";manager:str="Трошина Лариса";message_text:str="";enabled:bool=True
 def smtp_out(row):return {"host":row.host,"port":row.port,"security":row.security,"username":row.username,"password":"","sender_email":row.sender_email,"sender_name":row.sender_name,"has_password":bool(row.password)}
-@router.get("/smtp/settings")
+@router.get("/smtp/settings",dependencies=[Depends(require_settings_admin)])
 async def get_smtp(db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1);return smtp_out(row) if row else None
-@router.put("/smtp/settings")
+@router.put("/smtp/settings",dependencies=[Depends(require_settings_admin)])
 async def save_smtp(data:SmtpIn,db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1)
  if not row:row=SmtpConfig(id=1,password=data.password);db.add(row)
  for key,value in data.model_dump(exclude={"password"}).items():setattr(row,key,value)
  if data.password:row.password=data.password
  await db.commit();await db.refresh(row);return smtp_out(row)
-@router.post("/smtp/test")
+@router.post("/smtp/test",dependencies=[Depends(require_settings_admin)])
 async def test_smtp(data:TestEmail,db:AsyncSession=Depends(get_db)):
  row=await db.get(SmtpConfig,1)
  if not row:raise HTTPException(400,"SMTP не настроен")
@@ -35,13 +37,17 @@ async def test_smtp(data:TestEmail,db:AsyncSession=Depends(get_db)):
  try:await send_test(row,data.email)
  except Exception as exc:raise HTTPException(502,f"Не удалось отправить письмо: {exc}") from exc
  return {"sent":True}
-@router.get("/smtp/history")
+@router.get("/smtp/history",dependencies=[Depends(require_settings_admin)])
 async def smtp_history(db:AsyncSession=Depends(get_db)):
  rows=(await db.scalars(select(ScenarioRun).order_by(ScenarioRun.created_at.desc()).limit(200))).all()
  return [{"id":row.id,"run_date":row.run_date,"run_type":row.run_type,"period_start":row.period_start,"period_end":row.period_end,"recipients":row.recipients,"status":row.status,"message":row.message} for row in rows]
-@router.get("/scenarios")
+@router.get("/scenarios",dependencies=[Depends(require_settings_admin)])
 async def scenarios(db:AsyncSession=Depends(get_db)):return (await db.scalars(select(Scenario).order_by(Scenario.id))).all()
-@router.post("/scenarios/{scenario_id}/test")
+@router.get("/scenarios/history",dependencies=[Depends(require_settings_admin)])
+async def scenario_history(limit:int=200,db:AsyncSession=Depends(get_db)):
+ rows=(await db.execute(select(ScenarioRun,Scenario.name).join(Scenario,Scenario.id==ScenarioRun.scenario_id).order_by(ScenarioRun.created_at.desc(),ScenarioRun.id.desc()).limit(min(max(limit,1),500)))).all()
+ return [scenario_run_out(run,name) for run,name in rows]
+@router.post("/scenarios/{scenario_id}/test",dependencies=[Depends(require_settings_admin)])
 async def test_scenario(scenario_id:int,db:AsyncSession=Depends(get_db)):
  row=await db.get(Scenario,scenario_id)
  if not row:raise HTTPException(404,"Сценарий не найден")
@@ -53,7 +59,7 @@ async def test_scenario(scenario_id:int,db:AsyncSession=Depends(get_db)):
  except Exception as exc:
   run.status="failed";run.message=str(exc)[:4000];await db.commit();raise HTTPException(502,f"Не удалось отправить тестовый отчет: {exc}") from exc
  await db.commit();return {"sent":True,"date_from":result["date_from"],"date_to":result["date_to"],"recipients":result["recipients"]}
-@router.put("/scenarios/{scenario_id}")
+@router.put("/scenarios/{scenario_id}",dependencies=[Depends(require_settings_admin)])
 async def update_scenario(scenario_id:int,data:ScenarioIn,db:AsyncSession=Depends(get_db)):
  row=await db.get(Scenario,scenario_id)
  if not row:raise HTTPException(404,"Сценарий не найден")
@@ -65,6 +71,6 @@ async def update_scenario(scenario_id:int,data:ScenarioIn,db:AsyncSession=Depend
  except ValueError as exc:raise HTTPException(422,str(exc)) from exc
  for key,value in data.model_dump().items():setattr(row,key,value)
  await db.commit();await db.refresh(row);return row
-@router.delete("/scenarios/{scenario_id}",status_code=204)
+@router.delete("/scenarios/{scenario_id}",status_code=204,dependencies=[Depends(require_settings_admin)])
 async def remove_scenario(scenario_id:int,db:AsyncSession=Depends(get_db)):
  await db.execute(delete(Scenario).where(Scenario.id==scenario_id));await db.commit();return Response(status_code=204)
