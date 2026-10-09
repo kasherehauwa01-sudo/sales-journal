@@ -1,0 +1,4 @@
+import {HelpCircle,X} from 'lucide-react';
+import {useState} from 'react';
+export type HelpSection={title:string;text:string;action?:string};
+export function ReportHelp({title='Как пользоваться анализом',sections}:{title?:string;sections:HelpSection[]}){const [open,setOpen]=useState(false);return <><button type="button" className="report-help-button" onClick={()=>setOpen(true)}><HelpCircle size={17}/>{title}</button>{open&&<><div className="backdrop" onClick={()=>setOpen(false)}/><section className="report-help-modal" role="dialog" aria-modal="true" aria-label={title}><div className="drawer-head"><h2>{title}</h2><button onClick={()=>setOpen(false)}><X/>Закрыть</button></div><div className="drawer-body">{sections.map(section=><article key={section.title}><h3>{section.title}</h3><p>{section.text}</p>{section.action&&<p><b>Что делать:</b> {section.action}</p>}</article>)}</div></section></>}</>}

@@ -10,7 +10,8 @@ from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError
 from app.services.sales_client_filters import get_sales_filter_clients
-from app.services.sales_dynamics_report import align_chart_points, calculated_metrics, default_grouping, effective_period, metric_comparison, previous_period
+from app.services.report_periods import comparison_period
+from app.services.sales_dynamics_report import align_chart_points, calculated_metrics, default_grouping, effective_period, metric_comparison
 
 router = APIRouter(prefix="/reports/sales-dynamics", tags=["Отчеты"])
 
@@ -23,17 +24,18 @@ async def _client_filter(db: AsyncSession, manager: str | None, buyer_type: str 
         raise HTTPException(502, str(exc)) from exc
 
 
-def _conditions(start: date, end: date, department: str | None, clients: list[str] | None):
+def _conditions(start: date, end: date, department: str | None, clients: list[str] | None, client: str | None = None):
     result = [Sale.sale_date >= start, Sale.sale_date <= end]
     if department:
         result.append(Sale.department == department)
     if clients is not None:
         normalized = [value.strip().lower() for value in clients]
         result.append(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False)
+    if client: result.append(func.lower(func.trim(Sale.client)) == client.strip().casefold())
     return result
 
 
-def _sales_rows(start: date, end: date, department: str | None, clients: list[str] | None):
+def _sales_rows(start: date, end: date, department: str | None, clients: list[str] | None, client: str | None = None):
     """Сначала агрегирует позиции только для отфильтрованных продаж, сохраняя одну строку на чек."""
     return (
         select(
@@ -43,14 +45,14 @@ def _sales_rows(start: date, end: date, department: str | None, clients: list[st
             func.coalesce(func.sum(SaleItem.quantity), 0).label("items_count"),
         )
         .outerjoin(SaleItem, SaleItem.sale_id == Sale.id)
-        .where(*_conditions(start, end, department, clients))
+        .where(*_conditions(start, end, department, clients, client))
         .group_by(Sale.id, Sale.sale_date, Sale.total_amount)
         .subquery()
     )
 
 
-async def _metrics(db: AsyncSession, start: date, end: date, department: str | None, clients: list[str] | None):
-    sales = _sales_rows(start, end, department, clients)
+async def _metrics(db: AsyncSession, start: date, end: date, department: str | None, clients: list[str] | None, client: str | None = None):
+    sales = _sales_rows(start, end, department, clients, client)
     row = (await db.execute(
         select(
             func.coalesce(func.sum(sales.c.total_amount), 0),
@@ -61,8 +63,8 @@ async def _metrics(db: AsyncSession, start: date, end: date, department: str | N
     return calculated_metrics(float(row[0] or 0), int(row[1] or 0), float(row[2] or 0))
 
 
-async def _chart(db: AsyncSession, start: date, end: date, group_by: str, department: str | None, clients: list[str] | None):
-    sales = _sales_rows(start, end, department, clients);bucket = func.date_trunc(group_by, sales.c.sale_date).label("period")
+async def _chart(db: AsyncSession, start: date, end: date, group_by: str, department: str | None, clients: list[str] | None, client: str | None = None):
+    sales = _sales_rows(start, end, department, clients, client);bucket = func.date_trunc(group_by, sales.c.sale_date).label("period")
     rows = (await db.execute(
         select(
             bucket,
@@ -83,6 +85,8 @@ async def report(
     department: str | None = None,
     manager: str | None = None,
     buyer_type: str | None = None,
+    client: str | None = None,
+    comparison_mode: str = Query("previous_period", pattern="^(previous_period|previous_year)$"),
     db: AsyncSession = Depends(get_db),
 ):
     if date_from > date_to:
@@ -91,13 +95,13 @@ async def report(
     effective_from, effective_to, warning = effective_period(date_from, date_to, period_kind, today)
     if effective_from > effective_to:
         raise HTTPException(422, warning or "В выбранном периоде пока нет загруженных данных")
-    previous_from, previous_to = previous_period(effective_from, effective_to, period_kind)
+    previous_from, previous_to = comparison_period(effective_from, effective_to, comparison_mode, period_kind)
     grouping = group_by or default_grouping(effective_from, effective_to)
     clients = await _client_filter(db, manager, buyer_type)
-    current = await _metrics(db, effective_from, effective_to, department, clients)
-    previous = await _metrics(db, previous_from, previous_to, department, clients)
-    current_points = await _chart(db, effective_from, effective_to, grouping, department, clients)
-    previous_points = await _chart(db, previous_from, previous_to, grouping, department, clients)
+    current = await _metrics(db, effective_from, effective_to, department, clients, client)
+    previous = await _metrics(db, previous_from, previous_to, department, clients, client)
+    current_points = await _chart(db, effective_from, effective_to, grouping, department, clients, client)
+    previous_points = await _chart(db, previous_from, previous_to, grouping, department, clients, client)
     points = align_chart_points(current_points, previous_points)
     return {
         "period": {"start": effective_from, "end": effective_to},
@@ -107,3 +111,9 @@ async def report(
         "metrics": {key: metric_comparison(current[key], previous[key]) for key in current},
         "chart": {"group_by": grouping, "points": points},
     }
+
+@router.get("/client-options")
+async def client_options(search: str = Query(min_length=2, max_length=200), limit: int = Query(20, ge=1, le=50), db: AsyncSession = Depends(get_db)):
+    value=f"%{search.strip()}%"
+    query=select(Sale.client).where(Sale.client.is_not(None),func.length(func.trim(Sale.client))>0,Sale.client.ilike(value)).distinct().order_by(Sale.client).limit(limit)
+    return list((await db.scalars(query)).all())
