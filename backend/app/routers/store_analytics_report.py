@@ -12,9 +12,10 @@ from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError
+from app.services.report_periods import comparison_period
 from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import default_grouping, effective_period
-from app.services.store_analytics_report import METRIC_KEYS, calculated_store_metrics, comparable_period, compare_metrics, merge_store_rows
+from app.services.store_analytics_report import METRIC_KEYS, calculated_store_metrics, compare_metrics, merge_store_rows
 
 router = APIRouter(prefix="/reports/store-analytics", tags=["Отчеты"])
 
@@ -99,14 +100,14 @@ def _total(rows: list[dict]):
     return calculated_store_metrics(sum(x["revenue"] for x in rows), sum(x["checks"] for x in rows), sum(x["items"] for x in rows), sum(x["average_discount"] * x["checks"] for x in rows))
 
 
-async def _scope(date_from: date, date_to: date, period_kind: str, stores: list[str], manager: str | None, buyer_type: str | None, db: AsyncSession):
+async def _scope(date_from: date, date_to: date, period_kind: str, comparison_mode: str, stores: list[str], manager: str | None, buyer_type: str | None, db: AsyncSession):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
     current_from, current_to, warning = effective_period(date_from, date_to, period_kind, today)
     if current_from > current_to:
         raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
-    previous_from, previous_to = comparable_period(current_from, current_to)
+    previous_from, previous_to = comparison_period(current_from, current_to, comparison_mode, period_kind)
     clients = await _clients(db, manager, buyer_type)
     current = await _aggregates(db, current_from, current_to, stores, clients)
     previous = await _aggregates(db, previous_from, previous_to, stores, clients)
@@ -114,8 +115,8 @@ async def _scope(date_from: date, date_to: date, period_kind: str, stores: list[
 
 
 @router.get("")
-async def report(date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
-    start, end, previous_start, previous_end, warning, _, current, previous = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, db)
+async def report(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period",pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
+    start, end, previous_start, previous_end, warning, _, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db)
     return {"period": {"start": start, "end": end}, "previous_period": {"start": previous_start, "end": previous_end}, "warning": warning, "metrics": compare_metrics(_total(current), _total(previous)), "stores": merge_store_rows(current, previous)}
 
 
@@ -141,8 +142,8 @@ def _sheet(book, title, headers, rows):
 
 
 @router.get("/export")
-async def export(date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
-    start, end, previous_start, previous_end, _, clients, current, previous = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, db); merged = merge_store_rows(current, previous); totals = compare_metrics(_total(current), _total(previous)); sales = _sales(start, end, stores, clients); details = (await db.execute(select(sales).order_by(sales.c.store, sales.c.sale_date))).all(); book = Workbook(); book.remove(book.active)
+async def export(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period",pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
+    start, end, previous_start, previous_end, _, clients, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db); merged = merge_store_rows(current, previous); totals = compare_metrics(_total(current), _total(previous)); sales = _sales(start, end, stores, clients); details = (await db.execute(select(sales).order_by(sales.c.store, sales.c.sale_date))).all(); book = Workbook(); book.remove(book.active)
     names = {"revenue": "Выручка", "checks": "Количество чеков", "average_check": "Средний чек", "items": "Продано товаров", "items_per_check": "Товаров в чеке", "average_discount": "Средняя скидка"}
     headers = ["Магазин"] + [name for key in METRIC_KEYS for name in (f"{names[key]}: текущий", f"{names[key]}: предыдущий", f"{names[key]}: изменение, %")]
     _sheet(book, "Магазины", headers, [[row["store"]] + [value for key in METRIC_KEYS for value in (row["metrics"][key]["current"], row["metrics"][key]["previous"], row["metrics"][key]["change_percent"])] for row in merged])
