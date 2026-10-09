@@ -1,11 +1,16 @@
 import asyncio
+import ast
+import inspect
+import time
 import pytest
 from app.services import vrcatalog
 from app.services.vrcatalog import VrCatalogError,horeca_keys,is_horeca
 
 def setup_function():
+ vrcatalog.directory_overflow_lock=None
  vrcatalog.cache=None;vrcatalog.image_cache=None
  vrcatalog.catalog_info_cache.clear();vrcatalog.catalog_category_cache.clear();vrcatalog.catalog_category_negative_cache.clear()
+ vrcatalog.directory_cache.clear();vrcatalog.directory_locks.clear();vrcatalog.directory_lock_users.clear()
 
 def test_horeca_products_are_detected_by_article_and_code():
  payload={"items":[{"article":" A-1 ","code":"001","properties":{"HoReCa":"HoReCa"}},{"article":"A-2","properties":{"HoReCa":"Нет"}}]}
@@ -67,10 +72,23 @@ def test_catalog_error_is_wrapped(monkeypatch):
 
 def test_catalog_images_support_common_image_shapes():
  payload={"items":[{"code":"1","image_url":"https://img/1.jpg"},{"article":"A2","images":[{"url":"https://img/2.jpg"}]},{"code":"3","photos":[{"path":"media/3.jpg"}]}]}
- assert vrcatalog.catalog_product_images(payload,"https://catalog.example/api")=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg","code:3":"https://catalog.example/api/media/3.jpg"}
+ assert vrcatalog.catalog_product_images(payload,"https://catalog.example/api")=={"code:1":"https://img/1.jpg","article:a2":"https://img/2.jpg","code:3":"https://catalog.example/media/3.jpg"}
+
+def test_catalog_item_image_url_resolves_relative_url_against_catalog_not_sales():
+ item={"photos":[{"path":"media/products/1.jpg"}]}
+ assert vrcatalog.catalog_item_image_url(item,"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/products/1.jpg"
 
 def test_catalog_image_absolute_path_is_resolved_against_catalog_api():
- assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/media/1.jpg"}
+ assert vrcatalog.catalog_product_images({"items":[{"code":"1","main_photo_url":"/media/1.jpg"}]},"https://catalog.example/vr/catalog/api")=={"code:1":"https://catalog.example/vr/catalog/media/1.jpg"}
+
+def test_catalog_image_supports_path_fields_from_batch_info():
+ assert vrcatalog.catalog_item_image_url({"preview_url":"/media/preview.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/preview.jpg"
+
+def test_catalog_image_supports_nested_media_from_batch_info():
+ assert vrcatalog.catalog_item_image_url({"media":{"url":"media/preview.jpg"}},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/preview.jpg"
+
+def test_catalog_image_with_full_vr_path_is_not_prefixed_twice():
+ assert vrcatalog.catalog_item_image_url({"image":"/vr/catalog/media/1.jpg"},"https://kvasmix.ru/vr/catalog/api")=="https://kvasmix.ru/vr/catalog/media/1.jpg"
 
 def test_catalog_images_are_loaded_in_pages_and_cached(monkeypatch):
  calls=[]
@@ -90,6 +108,86 @@ def test_catalog_filter_metadata_and_options_use_integration_api(monkeypatch):
  assert asyncio.run(vrcatalog.get_product_filter_options("property:HoReCa",search="hor",page=2,page_size=50))=={"items":["HoReCa"]}
  assert calls==[("integration/product-filters",None),("integration/product-filters/property%3AHoReCa/options",{"search":"hor","page":2,"page_size":50})]
 
+def test_catalog_tree_and_confirmed_brand_endpoint(monkeypatch):
+ calls=[]
+ def request(path,params=None):
+  calls.append((path,params));return {"items":[]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":[]}
+ assert asyncio.run(vrcatalog.get_catalog_brands(search="vill",page=2,page_size=25))=={"items":[]}
+ assert calls==[("integration/catalog-tree",None),("integration/brands",{"search":"vill","page":2,"page_size":25})]
+
+def test_catalog_directories_are_cached_and_reused(monkeypatch):
+ calls=0
+ def request(_path,_params=None):
+  nonlocal calls;calls+=1;return {"items":["Посуда"]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ assert calls==1
+
+def test_all_directory_helpers_use_the_shared_cache(monkeypatch):
+ calls=[]
+ def request(path,params=None):
+  calls.append((path,params))
+  return {"items":[]} if path=="integration/catalog-tree" else {"items":["Значение"]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ async def load():
+  await vrcatalog.get_product_filters();await vrcatalog.get_product_filters()
+  await vrcatalog.get_catalog_tree();await vrcatalog.get_catalog_tree()
+  await vrcatalog.get_catalog_brands(search="vr");await vrcatalog.get_brands(search="vr")
+  await vrcatalog.get_product_filter_options("brand",search="vr")
+  await vrcatalog.get_product_filter_options("brand",search="vr")
+ asyncio.run(load())
+ assert len(calls)==4
+
+def test_directory_functions_are_defined_once():
+ tree=ast.parse(inspect.getsource(vrcatalog))
+ names=[node.name for node in tree.body if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))]
+ assert names.count("get_catalog_tree")==1
+ assert names.count("get_catalog_brands")==1
+
+def test_catalog_tree_keeps_payload_and_rejects_invalid_shape(monkeypatch):
+ payload={"data":{"categories":[{"id":1,"name":"Посуда","children":[]}]}}
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:payload)
+ assert asyncio.run(vrcatalog.get_catalog_tree()) is payload
+ vrcatalog.directory_cache.clear()
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:{"unexpected":[]})
+ with pytest.raises(VrCatalogError,match="структуру дерева"):
+  asyncio.run(vrcatalog.get_catalog_tree())
+
+def test_directory_single_flight_and_lock_cleanup(monkeypatch):
+ calls=0
+ def request(_path,_params=None):
+  nonlocal calls;calls+=1;time.sleep(.01);return {"items":[]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ async def load():return await asyncio.gather(*(vrcatalog.get_catalog_tree() for _ in range(20)))
+ assert len(asyncio.run(load()))==20
+ assert calls==1
+ assert vrcatalog.directory_locks=={}
+ assert vrcatalog.directory_lock_users=={}
+
+def test_directory_lock_registry_is_bounded(monkeypatch):
+ maximum=0
+ def request(_path,_params=None):
+  nonlocal maximum
+  maximum=max(maximum,len(vrcatalog.directory_locks));time.sleep(.001);return {"items":[]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",request)
+ async def load():
+  return await asyncio.gather(*(vrcatalog.get_catalog_brands(search=str(index)) for index in range(300)))
+ assert len(asyncio.run(load()))==300
+ assert maximum<=vrcatalog.DIRECTORY_LOCKS_MAX_ENTRIES
+ assert vrcatalog.directory_locks=={}
+ assert vrcatalog.directory_lock_users=={}
+
+def test_catalog_directory_uses_stale_value_on_timeout(monkeypatch):
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda _path,_params=None:{"items":["Посуда"]})
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ key=next(iter(vrcatalog.directory_cache));_,value=vrcatalog.directory_cache[key]
+ vrcatalog.directory_cache[key]=(time.monotonic()-vrcatalog.DIRECTORY_CACHE_TTL-1,value)
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:(_ for _ in ()).throw(TimeoutError()))
+ assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+
 def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
  payload={"items":[{"id":1,"code":"001","article":"A1","name":"Товар","image_url":"https://catalog/image.jpg","properties":[]}],"total":1,"page":1,"page_size":50,"pages":1}
  monkeypatch.setattr(vrcatalog,"_integration_search",lambda request:payload)
@@ -98,7 +196,7 @@ def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
 def test_catalog_batch_info_is_one_request_and_maps_code_and_article(monkeypatch):
  calls=[]
  def batch(payload):
-  calls.append(payload);return {"items":[{"code":" A-1 ","article":"ART-1","name":"Товар","horeca":False,"image_url":"https://img/1.jpg"}]}
+  calls.append(payload);return {"items":[{"code":" A-1 ","article":"ART-1","name":"Товар","horeca":False,"photo":"https://img/1.jpg"}]}
  monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
  result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":"A-1","article":"ART-1"},{"code":"A-1","article":"ART-1"}]))
  assert result["code:a-1"]["image_url"]=="https://img/1.jpg"
@@ -112,9 +210,57 @@ def test_catalog_batch_info_unwraps_product_payload(monkeypatch):
  result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":"A-2","article":"ART-2"}]))
  assert result["code:a-2"]["category_name"]=="Посуда"
 
-def test_catalog_batch_info_rejects_more_than_5000_products():
- with pytest.raises(VrCatalogError,match="5000"):
-  asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(5001)]))
+def test_catalog_batch_info_sends_ten_products_in_one_batch(monkeypatch):
+ calls=[]
+ def batch(payload):
+  calls.append(payload);return {"items":[{**item,"image_url":f"https://img/{item['code']}.jpg"} for item in payload["products"]]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(10)]))
+ assert len(calls)==1 and len(calls[0]["products"])==10
+ assert result["code:9"]["image_url"]=="https://img/9.jpg"
+
+def test_catalog_batch_info_splits_11587_products_and_reuses_cache(monkeypatch):
+ calls=[]
+ def batch(payload):
+  calls.append(payload);return {"items":[{**item,"article":f"A-{item['code']}","photo":"https://img/product.jpg"} for item in payload["products"]]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ products=[{"code":str(index)} for index in range(11587)]
+ result=asyncio.run(vrcatalog.get_catalog_batch_info(products))
+ assert len(calls)==47
+ assert max(len(call["products"]) for call in calls)==vrcatalog.CATALOG_BATCH_SIZE
+ assert len(result)==23174
+ assert result["code:11586"]["image_url"]=="https://img/product.jpg"
+ assert result["article:a-11586"] is result["code:11586"]
+ asyncio.run(vrcatalog.get_catalog_batch_info(products))
+ assert len(calls)==47
+
+def test_catalog_cache_keeps_27000_skus_with_code_and_article(monkeypatch):
+ calls=0
+ def batch(payload):
+  nonlocal calls;calls+=1
+  return {"items":[{**item,"article":f"A-{item['code']}"} for item in payload["products"]]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ products=[{"code":str(index),"article":f"A-{index}"} for index in range(27000)]
+ asyncio.run(vrcatalog.get_catalog_batch_info(products));first_calls=calls
+ assert len(vrcatalog.catalog_info_cache)==54000
+ asyncio.run(vrcatalog.get_catalog_batch_info(products))
+ assert calls==first_calls
+
+def test_catalog_batch_info_keeps_successful_batches_when_one_fails(monkeypatch,caplog):
+ calls=0
+ def batch(payload):
+  nonlocal calls
+  calls+=1
+  if calls==2:raise TimeoutError("secret-token-must-not-be-logged")
+  return {"items":payload["products"]}
+ monkeypatch.setattr(vrcatalog,"_integration_batch",batch)
+ result=asyncio.run(vrcatalog.get_catalog_batch_info([{"code":str(index)} for index in range(600)]))
+ assert calls==3
+ assert len(result)==350
+ assert "code:0" in result and "code:599" in result and "code:250" not in result
+ assert "code:250" not in vrcatalog.catalog_info_cache
+ assert "пакет 2 (250 товаров)" in caplog.text
+ assert "secret-token-must-not-be-logged" not in caplog.text
 
 def test_catalog_category_map_uses_lightweight_endpoint_and_normalized_keys(monkeypatch):
  calls=[]
