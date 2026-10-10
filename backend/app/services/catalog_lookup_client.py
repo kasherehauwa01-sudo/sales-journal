@@ -23,8 +23,8 @@ from app.config import settings
 from app.services.product_analytics_runtime import run_cpu
 
 BATCH_SIZE = 250
-TIMEOUT_SECONDS = 15
-MAX_ATTEMPTS = 3
+TIMEOUT_SECONDS = settings.catalog_lookup_timeout_seconds
+MAX_ATTEMPTS = settings.catalog_lookup_max_attempts
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 log = logging.getLogger(__name__)
 _slot = asyncio.Semaphore(1)

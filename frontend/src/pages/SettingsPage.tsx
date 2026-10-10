@@ -1,5 +1,6 @@
 import {Check,Clipboard} from 'lucide-react';
 import {useState} from 'react';
+import {CatalogSyncPanel} from '../components/CatalogSyncPanel';
 
 const UPDATE_SCRIPT = '/var/www/html/vr/update_sales.sh';
 
@@ -12,6 +13,7 @@ export function SettingsPage(){
   }
   return <div className="page">
     <div className="page-title"><div><h1>Настройки</h1><p>Системные параметры и обслуживание сервиса</p></div></div>
+    <CatalogSyncPanel/>
     <section className="panel settings-panel">
       <h2>Обновление приложения</h2>
       <p className="muted">Нажмите на путь, чтобы скопировать его в буфер обмена.</p>

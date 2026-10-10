@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -17,6 +18,16 @@ class Settings(BaseSettings):
     vrcatalog_api_url: str = "https://kvasmix.ru/vr/catalog/api"
     vrcatalog_api_token: str = ""
     product_analytics_local_catalog_enabled: bool = True
+    catalog_sync_batch_size: int = Field(100, ge=1, le=250)
+    catalog_sync_pause_seconds: float = Field(1.0, ge=0.1, le=3600)
+    catalog_sync_poll_seconds: float = Field(1.0, ge=0.1, le=10)
+    catalog_sync_retry_limit: int = Field(3, ge=0, le=10)
+    catalog_sync_retry_seconds: float = Field(30.0, ge=1, le=3600)
+    catalog_sync_min_available_mb: int = Field(256, ge=256)
+    catalog_sync_db_timeout_seconds: float = Field(10, ge=1, le=60)
+    catalog_sync_db_lock_timeout_seconds: float = Field(2, ge=0.1, le=10)
+    catalog_lookup_timeout_seconds: float = Field(15, ge=1, le=60)
+    catalog_lookup_max_attempts: int = Field(3, ge=1, le=3)
     public_url: str = "https://kvasmix.ru/vr/sales"
     settings_admin_password_hash: str = ""
     settings_admin_session_secret: str = ""
