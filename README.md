@@ -171,3 +171,7 @@ cd frontend && npm run build
 docker compose config
 docker compose build
 ```
+
+### Локальные характеристики VRCatalog
+
+Ручная ограниченная сверка, порядок включения, диагностика и откат описаны в [docs/local_catalog_attributes.md](docs/local_catalog_attributes.md). Автоматическая синхронизация не включается. Перед production-обновлением необходимо отдельно согласовать новую миграцию; текущий backend запускает Alembic при старте.

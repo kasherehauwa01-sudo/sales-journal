@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     calltrack_integration_token: str = ""
     vrcatalog_api_url: str = "https://kvasmix.ru/vr/catalog/api"
     vrcatalog_api_token: str = ""
+    product_analytics_local_catalog_enabled: bool = True
     public_url: str = "https://kvasmix.ru/vr/sales"
     settings_admin_password_hash: str = ""
     settings_admin_session_secret: str = ""

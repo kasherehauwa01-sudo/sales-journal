@@ -72,6 +72,9 @@ def test_postprocess_timer_excludes_cache_restore_and_preserves_result(monkeypat
     clock = [1.0]
 
     class Db:
+        async def connection(self, **kwargs):
+            pass
+
         async def scalar(self, query):
             clock[0] += 5.0
             return 42
