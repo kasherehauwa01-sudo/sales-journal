@@ -3,12 +3,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import io
+import pickle
 import sys
 import time
+import zlib
 from collections import OrderedDict
+from itertools import chain
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+
+from app.services.product_analytics_runtime import log as runtime_log
+from app.services.product_analytics_runtime import heavy_operation, run_cpu, memory_snapshot, diagnostics, ensure_headroom
 
 CACHE_TTL_SECONDS = 120
 CACHE_MAX_ENTRIES = 2
@@ -25,8 +32,92 @@ class CacheEntry:
 
 _cache: OrderedDict[str, CacheEntry] = OrderedDict()
 _locks: dict[str, asyncio.Lock] = {}
+_lock_users: dict[str, int] = {}
 _cache_bytes = 0
 log = logging.getLogger(__name__)
+_generation = 0
+
+
+@dataclass(slots=True)
+class CompressedDataset:
+    payload: bytearray
+
+
+class _EntryTooLarge(Exception):
+    pass
+
+
+class _CompressedWriter:
+    def __init__(self):
+        self.payload = bytearray()
+        self.compressor = zlib.compressobj(level=1)
+
+    def _append(self, chunk):
+        # Count allocation capacity, not just logical compressed byte length.
+        if sys.getsizeof(self.payload) + len(chunk) + sys.getsizeof(CompressedDataset(self.payload)) > CACHE_MAX_ENTRY_BYTES:
+            raise _EntryTooLarge
+        self.payload.extend(chunk)
+        if sys.getsizeof(self.payload) + sys.getsizeof(CompressedDataset(self.payload)) > CACHE_MAX_ENTRY_BYTES:
+            raise _EntryTooLarge
+
+    def write(self, data):
+        view = memoryview(data)
+        for offset in range(0, len(view), 65536):
+            self._append(self.compressor.compress(view[offset:offset + 65536]))
+        return len(data)
+
+    def finish(self):
+        self._append(self.compressor.flush())
+        return CompressedDataset(self.payload)
+
+
+class _CompressedReader(io.RawIOBase):
+    def __init__(self, payload):
+        super().__init__()
+        self.payload = memoryview(payload)
+        self.position = 0
+        self.decompressor = zlib.decompressobj()
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        while not self.decompressor.eof:
+            chunk = self.decompressor.unconsumed_tail
+            if not chunk:
+                chunk = self.payload[self.position:self.position + 65536]
+                self.position += len(chunk)
+                if not chunk:
+                    raise ValueError('Truncated internal analytics cache')
+            data = self.decompressor.decompress(chunk, len(buffer))
+            if data:
+                buffer[:len(data)] = data
+                return len(data)
+        return 0
+
+
+def _is_dataset(value):
+    return (isinstance(value, tuple) and len(value) == 4
+            and isinstance(value[0], list) and all(isinstance(row, dict) for row in value[0]))
+
+
+def _compact(value):
+    if not _is_dataset(value):
+        return value
+    writer = _CompressedWriter()
+    # No pickle.dumps or full uncompressed serialized buffer. Pickle preserves
+    # dates, exact floats, dict order and shared nested CatalogVR objects.
+    pickle.Pickler(writer, protocol=pickle.HIGHEST_PROTOCOL).dump(value)
+    return writer.finish()
+
+
+def _restore(value):
+    if not isinstance(value, CompressedDataset):
+        return value
+    # This payload is generated only in this process, never read from a client,
+    # disk or remote cache. Do not expose this unpickler to external input.
+    with io.BufferedReader(_CompressedReader(value.payload)) as reader:
+        return pickle.Unpickler(reader).load()
 
 
 def _log_cache(event: str, *, phase: str, size: int | None = None,
@@ -50,33 +141,100 @@ def _log_cache(event: str, *, phase: str, size: int | None = None,
     )
 
 
-def _bounded_size(value: Any, limit: int = CACHE_MAX_ENTRY_BYTES + 1) -> int:
-    """Оценивает память без создания большой сериализованной копии."""
-    seen: set[int] = set()
-    stack = [value]
+class _SeenObjects:
+    """Exact identity tracking without one Python int/set slot per object.
+
+    Aligned identities use paged bitmaps (512 bytes per 32 KiB address range).
+    Unaligned identities use a separate set, so no alignment assumption affects
+    correctness. Particularly useful for hundreds of thousands of small values.
+    """
+    def __init__(self):
+        self.pages = {}
+        self.unaligned = set()
+
+    def __contains__(self, identity):
+        if identity & 7:
+            return identity in self.unaligned
+        page = self.pages.get(identity >> 15)
+        slot = (identity & 32767) >> 3
+        return page is not None and bool(page[slot >> 3] & (1 << (slot & 7)))
+
+    def add(self, identity):
+        if identity & 7:
+            self.unaligned.add(identity)
+            return
+        index = identity >> 15
+        page = self.pages.get(index)
+        if page is None:
+            page = self.pages[index] = bytearray(512)
+        slot = (identity & 32767) >> 3
+        page[slot >> 3] |= 1 << (slot & 7)
+
+
+def _measure(roots, limit, seen):
+    """Traverse lazily: auxiliary iterators scale with depth, not row count."""
+    stack = [iter(roots)]
     total = 0
     while stack and total <= limit:
-        item = stack.pop()
+        try:
+            item = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
         identity = id(item)
         if identity in seen:
             continue
         seen.add(identity)
         total += sys.getsizeof(item)
         if isinstance(item, dict):
-            stack.extend(item.keys()); stack.extend(item.values())
+            stack.append(chain(item.keys(), item.values()))
         elif isinstance(item, (list, tuple, set, frozenset)):
-            stack.extend(item)
+            stack.append(iter(item))
+        elif isinstance(item, CompressedDataset):
+            stack.append(iter((item.payload,)))
     return total
+
+
+def _bounded_size(value: Any, limit: int = CACHE_MAX_ENTRY_BYTES + 1) -> int:
+    """Оценивает память без создания большой сериализованной копии."""
+    return _measure((value,), limit, _SeenObjects())
+
+
+def dataset_memory_components(value):
+    """Unique retained bytes; shared objects counted once, no data copies.
+
+    Component assignment follows this order. A shared object belongs to the
+    first component referencing it. Sizes describe Python objects, not RSS.
+    """
+    if not _is_dataset(value):
+        return {}
+    rows, old_from, old_to, managers = value
+    seen = _SeenObjects()
+    seen.add(id(value)); seen.add(id(rows))
+    containers = sys.getsizeof(value) + sys.getsizeof(rows)
+    for row in rows:
+        if id(row) not in seen:
+            containers += sys.getsizeof(row)
+            seen.add(id(row))
+    result = {'row_containers': containers}
+    for field in ('properties', 'stocks', 'prices'):
+        result[field] = _measure((row.get(field) for row in rows), float('inf'), seen)
+    result['row_values'] = _measure(
+        (item for row in rows for pair in row.items() for item in pair), float('inf'), seen)
+    result['dates'] = _measure((old_from, old_to), float('inf'), seen)
+    result['manager_clients'] = _measure((managers,), float('inf'), seen)
+    return result
 
 
 def invalidate_product_analytics_cache() -> None:
     """Сбрасывает локальный кеш после изменения продаж."""
-    global _cache_bytes
+    global _cache_bytes, _generation
+    _generation += 1
     _cache.clear()
     _cache_bytes = 0
 
 
-def _fresh(key: str, now: float, *, phase: str = "lookup"):
+def _lookup(key: str, now: float, *, phase: str = "lookup"):
     global _cache_bytes
     entry = _cache.get(key)
     if not entry:
@@ -89,16 +247,90 @@ def _fresh(key: str, now: float, *, phase: str = "lookup"):
         return None
     _cache.move_to_end(key)
     _log_cache("hit", phase=phase)
-    return entry.value
+    return entry
 
 
-def _store(key: str, value: Any, now: float) -> None:
+def _fresh(key: str, now: float, *, phase: str = "lookup"):
+    entry = _lookup(key, now, phase=phase)
+    return _restore_entry(entry, phase) if entry is not None else None
+
+
+async def _fresh_async(key, phase="lookup"):
+    entry = _lookup(key, time.monotonic(), phase=phase)
+    if entry is None:
+        return None
+    ensure_headroom()
+    result = await run_cpu(_restore_entry, entry, phase)
+    diagnostics("restore", result_rows=len(result[0]) if _is_dataset(result) else None)
+    return result
+
+
+def _restore_entry(entry, phase):
+    memory_before = memory_snapshot()
+    started = time.perf_counter()
+    result = _restore(entry.value)
+    restore_ms = (time.perf_counter() - started) * 1000
+    if isinstance(entry.value, CompressedDataset):
+        fields = {
+            "cache_event": "restored",
+            "cache_phase": phase,
+            "restore_ms": restore_ms,
+            "compressed_size_bytes": len(entry.value.payload),
+            "compressed_size_mb": len(entry.value.payload) / (1024 * 1024),
+            "result_rows": len(result[0]),
+            "restore_rss_delta_bytes": (memory_snapshot()["rss_bytes"] or 0) - (memory_before["rss_bytes"] or 0),
+            "restore_process_peak_rss_bytes": memory_snapshot()["process_peak_rss_bytes"],
+        }
+        log.info(
+            "product_analytics_cache event=%s phase=%s restore_ms=%.3f "
+            "compressed_size_bytes=%s compressed_size_mb=%.3f result_rows=%s "
+            "restore_rss_delta_bytes=%s restore_process_peak_rss_bytes=%s",
+            fields["cache_event"], fields["cache_phase"], fields["restore_ms"],
+            fields["compressed_size_bytes"], fields["compressed_size_mb"], fields["result_rows"],
+            fields["restore_rss_delta_bytes"], fields["restore_process_peak_rss_bytes"],
+            extra=fields,
+        )
+    return result
+
+
+def _store(key: str, value: Any, now: float, *, publish=True):
     global _cache_bytes
+    started = time.perf_counter()
+    memory_before = memory_snapshot()
+    if _is_dataset(value) and log.isEnabledFor(logging.INFO):
+        components = dataset_memory_components(value)
+        log.info("product_analytics_cache memory_components_bytes=%s", components,
+                 extra={"memory_components_bytes": components})
+    profile_ms = (time.perf_counter() - started) * 1000
+    started = time.perf_counter()
+    try:
+        value = _compact(value)
+    except _EntryTooLarge:
+        _log_cache("oversized", phase="store", size=CACHE_MAX_ENTRY_BYTES + 1,
+                   stored=False, reason="entry_size_limit")
+        return
+    except (pickle.PickleError, TypeError, AttributeError) as exc:
+        log.warning("product_analytics_cache encoding failed: %s", type(exc).__name__)
+        _log_cache("not_stored", phase="store", stored=False, reason="encoding_error")
+        return
+    compact_ms = (time.perf_counter() - started) * 1000
     size = _bounded_size(value)
+    memory_after = memory_snapshot()
+    fields = {"profile_ms": profile_ms, "compact_ms": compact_ms, "entry_size_bytes": size,
+              "store_rss_delta_bytes": (memory_after["rss_bytes"] or 0) - (memory_before["rss_bytes"] or 0),
+              "store_process_peak_rss_bytes": memory_after["process_peak_rss_bytes"]}
+    runtime_log.info("product_analytics_cache preparation %s", fields, extra=fields)
     if size > CACHE_MAX_ENTRY_BYTES:
         _log_cache("oversized", phase="store", size=size, stored=False,
                    reason="entry_size_limit")
         return
+    if not publish:
+        return value, size
+    _publish(key, value, now, size)
+
+
+def _publish(key, value, now, size):
+    global _cache_bytes
     previous = _cache.pop(key, None)
     if previous:
         _cache_bytes -= previous.size
@@ -113,19 +345,34 @@ def _store(key: str, value: Any, now: float) -> None:
 
 
 async def cached_product_dataset(key: str, loader: Callable[[], Awaitable[Any]]):
+    async with heavy_operation():
+        return await _cached_product_dataset(key, loader)
+
+
+async def _cached_product_dataset(key: str, loader: Callable[[], Awaitable[Any]]):
     """Возвращает набор из кеша и объединяет одновременные одинаковые расчёты."""
-    cached = _fresh(key, time.monotonic())
+    cached = await _fresh_async(key)
     if cached is not None:
         return cached, True
     lock = _locks.setdefault(key, asyncio.Lock())
+    _lock_users[key] = _lock_users.get(key, 0) + 1
     try:
         async with lock:
-            cached = _fresh(key, time.monotonic(), phase="recheck")
+            cached = await _fresh_async(key, "recheck")
             if cached is not None:
                 return cached, True
+            generation = _generation
             value = await loader()
-            _store(key, value, time.monotonic())
+            if generation == _generation:
+                started = time.perf_counter()
+                ensure_headroom()
+                prepared = await run_cpu(lambda: _store(key, value, time.monotonic(), publish=False))
+                if prepared is not None and generation == _generation:
+                    _publish(key, prepared[0], time.monotonic(), prepared[1])
+                diagnostics("store", elapsed_ms=(time.perf_counter() - started) * 1000, result_rows=len(value[0]) if _is_dataset(value) else None)
             return value, False
     finally:
-        if not lock.locked() and _locks.get(key) is lock:
+        _lock_users[key] -= 1
+        if _lock_users[key] == 0 and _locks.get(key) is lock:
+            _lock_users.pop(key, None)
             _locks.pop(key, None)

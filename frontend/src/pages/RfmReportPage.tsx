@@ -1,9 +1,11 @@
+import {ReportActions,ReportEmpty} from '../components/ReportActions';
+import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {Download, HelpCircle, X} from 'lucide-react';
-import {useEffect, useState} from 'react';
-import {API, api, query} from '../api/client';
+import {useState} from 'react';
+import {query} from '../api/client';
 import {MultiSelect} from '../components/MultiSelect';
 import {ReportHelp, type HelpSection} from '../components/ReportHelp';
-import {Empty, ErrorBox, Loading} from '../components/States';
+import {Loading} from '../components/States';
 import {useApi} from '../hooks/useApi';
 import {money} from '../utils/format';
 
@@ -41,19 +43,402 @@ const kpis:Record<string,string>={total_clients:'Всего клиентов',ac
 
 function SectionHelp({kind}:{kind:keyof typeof sectionHelp}) {return <ReportHelp title="Что показывает" sections={sectionHelp[kind]}/>}
 
-export function RfmReportPage(){
-  const [f,setF]=useState({...initialPeriod,segment:'',search:'',managers:[] as string[],buyer_types:[] as string[],departments:[] as string[],min_revenue:'',min_purchases:'',r_score:'',f_score:'',m_score:'',rfm_code:'',page:1});
-  const [activePreset,setActivePreset]=useState<Preset|null>(12);
-  const [data,setData]=useState<Response>();const [error,setError]=useState('');const [loading,setLoading]=useState(true);const [selected,setSelected]=useState<Client>();const [history,setHistory]=useState<{month:string;revenue:number;purchases:number}[]>([]);
-  const {data:filterOptions}=useApi<{departments:string[]}>('/filters');const {data:managerOptions}=useApi<string[]>('/integrations/clients-vr/managers');const {data:buyerTypeOptions}=useApi<string[]>('/integrations/clients-vr/buyer-types');
-  const change=(k:string,v:string|number|string[])=>{if(k==='date_from'||k==='date_to')setActivePreset(null);setF(x=>({...x,[k]:v,page:k==='page'?Number(v):1}))};
-  useEffect(()=>{setLoading(true);setError('');api<Response>(`/reports/rfm?${query(f)}`).then(setData).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[JSON.stringify(f)]);
-  useEffect(()=>{if(selected)api<typeof history>(`/reports/rfm/clients/${encodeURIComponent(selected.client_key)}/history?${query({date_from:f.date_from,date_to:f.date_to})}`).then(setHistory)},[selected,f.date_from,f.date_to]);
-  const preset=(months:Preset)=>{setActivePreset(months);setF(x=>({...x,...presetDates(months),page:1}))};
-  return <div className="page rfm-page">
-    <div className="page-title"><div><h1>RFM-анализ клиентов</h1><p>Рабочие сегменты для маркетинговых коммуникаций</p></div><ReportHelp sections={rfmHelp}/><a className="primary" href={`${API}/reports/rfm/export?${query({...f,page:undefined,full:true})}`}><Download size={17}/>Полный Excel</a></div>
-    <div className="panel filters"><div className="period-picker">{([[3,'3 месяца'],[6,'6 месяцев'],[12,'12 месяцев'],[0,'Весь период']] as [Preset,string][]).map(([m,l])=><button type="button" key={m} className={activePreset===m?'active':''} aria-pressed={activePreset===m} onClick={()=>preset(m)}>{l}</button>)}</div><div className="filter-grid"><label>Начало<input type="date" value={f.date_from} onChange={e=>change('date_from',e.target.value)}/></label><label>Конец<input type="date" value={f.date_to} onChange={e=>change('date_to',e.target.value)}/></label><label>Сегмент<select value={f.segment} onChange={e=>change('segment',e.target.value)}><option value="">Все</option>{data?.segments.map(s=><option key={s.segment}>{s.segment}</option>)}</select></label><label>Клиент<input value={f.search} onChange={e=>change('search',e.target.value)}/></label><label>Менеджер<MultiSelect options={managerOptions||[]} value={f.managers} onChange={value=>change('managers',value)} placeholder="Все менеджеры"/></label><label>Тип покупателя<MultiSelect options={buyerTypeOptions||[]} value={f.buyer_types} onChange={value=>change('buyer_types',value)} placeholder="Все типы покупателей"/></label><label>Подразделения<MultiSelect options={filterOptions?.departments||[]} value={f.departments} onChange={value=>change('departments',value)} placeholder="Все подразделения"/></label>{['r_score','f_score','m_score'].map(k=><label key={k}>{k[0].toUpperCase()} score<select value={f[k as keyof typeof f]} onChange={e=>change(k,e.target.value)}><option value="">Все</option>{[1,2,3,4,5].map(x=><option key={x}>{x}</option>)}</select></label>)}<label>RFM-код<input value={f.rfm_code} maxLength={3} onChange={e=>change('rfm_code',e.target.value)}/></label><label>Выручка от<input type="number" value={f.min_revenue} onChange={e=>change('min_revenue',e.target.value)}/></label><label>Покупок от<input type="number" value={f.min_purchases} onChange={e=>change('min_purchases',e.target.value)}/></label></div></div>
-    {error&&<ErrorBox text={error}/>} {loading?<Loading/>:!data?<Empty/>:<><div className="rfm-section-title"><h2>Ключевые показатели</h2><SectionHelp kind="indicators"/></div><div className="kpis rfm-kpis">{Object.entries(kpis).map(([k,l])=><div className="kpi" key={k}><span>{l}</span><strong>{k.includes('revenue')||k.includes('value')?money(data.kpi[k]||0):data.kpi[k]||0}</strong></div>)}</div>{!data.clients_vr.metadata_available&&<div className="report-warning">ClientsVR не вернул метаданные клиентов. Основной RFM продолжает работать, но менеджеры и типы покупателей временно не отображаются.</div>}<div className="rfm-section-title"><h2>Сегменты клиентов</h2><SectionHelp kind="segments"/></div><div className="rfm-segment-grid">{data.segments.filter(s=>s.clients).map(s=><button key={s.segment} className={f.segment===s.segment?'active':''} onClick={()=>change('segment',s.segment)}><b>{s.segment}</b><strong>{s.clients}</strong><span>{(s.client_share*100).toFixed(1)}% · {money(s.revenue)}</span><small>{segmentDescriptions[s.segment]?.why}</small></button>)}</div><SegmentGuide/><SegmentTable rows={data.segments} choose={v=>change('segment',v)}/><div className="rfm-section-title"><h2>Клиенты</h2><SectionHelp kind="clients"/></div><div className="panel table-panel"><div className="table-meta"><b>Клиенты · {data.clients.total}</b><a href={`${API}/reports/rfm/export?${query({...f,page:undefined,full:false})}`}>Экспортировать выборку</a></div><div className="table-wrap"><table><thead><tr>{['Клиент','Сегмент / теги','R','F','M','RFM','Последняя','Дней','Покупок','В месяц','Интервал','Выручка','Средний чек','Первая','Менеджер','Тип'].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{data.clients.items.map(c=><tr className="clickable-row" key={c.client_key} onClick={()=>setSelected(c)}><td><b>{c.client}</b></td><td>{c.segment}<small>{c.tags.join(' · ')||'Без тегов'}</small></td><td>{c.r_score}</td><td>{c.f_score}</td><td>{c.m_score}</td><td><span className="badge">{c.rfm_code}</span></td><td>{c.last_purchase}</td><td>{c.recency_days}</td><td>{c.frequency}</td><td>{c.purchases_per_month.toFixed(2)}</td><td>{c.average_interval?.toFixed(1)??'—'}</td><td>{money(c.monetary)}</td><td>{money(c.average_check)}</td><td>{c.first_purchase}</td><td>{c.manager||'Не указан'}</td><td>{c.buyer_type||'Не указан'}</td></tr>)}</tbody></table></div><div className="pagination"><button disabled={f.page<=1} onClick={()=>change('page',f.page-1)}>←</button><span>{f.page} / {data.clients.pages||1}</span><button disabled={f.page>=data.clients.pages} onClick={()=>change('page',f.page+1)}>→</button></div></div><details className="panel rfm-settings"><summary>Настройки RFM</summary><p>Квинтили 1–5 по выборке; одинаковые значения не разделяются.</p><p>Новый: ≤ {data.settings.new_days} дн. · Потерянный: ≥ {data.settings.lost_days} дн. или {data.settings.lost_cycle}× цикла · Засыпающий: {data.settings.sleeping_cycle}× цикла.</p><pre>{JSON.stringify(data.settings.boundaries,null,2)}</pre></details></>}{selected&&<ClientCard client={selected} history={history} close={()=>setSelected(undefined)}/>}</div>;
+export function RfmReportPage() {
+  const [f, setF] = useState({
+    ...initialPeriod,
+    segment: "",
+    search: "",
+    managers: [] as string[],
+    buyer_types: [] as string[],
+    departments: [] as string[],
+    min_revenue: "",
+    min_purchases: "",
+    r_score: "",
+    f_score: "",
+    m_score: "",
+    rfm_code: "",
+    page: 1,
+  });
+  const [activePreset, setActivePreset] = useState<Preset | null>(12);
+  const [selected, setSelected] = useState<Client>();
+  const [history, setHistory] = useState<
+    { month: string; revenue: number; purchases: number }[]
+  >([]);
+  const { data: filterOptions } = useApi<{ departments: string[] }>("/filters");
+  const { data: managerOptions } = useApi<string[]>(
+    "/integrations/clients-vr/managers",
+  );
+  const { data: buyerTypeOptions } = useApi<string[]>(
+    "/integrations/clients-vr/buyer-types",
+  );
+  const change = (k: string, v: string | number | string[]) => {
+    if (k === "date_from" || k === "date_to") setActivePreset(null);
+    setF((x) => ({ ...x, [k]: v, page: k === "page" ? Number(v) : 1 }));
+  };
+  const controller = useExplicitReport(
+    f,
+    (p, signal) => {setSelected(undefined);return reportJson<Response>(`/reports/rfm?${query(p)}`, signal)},
+    (p) => ({ ...p, page: 1 }),
+  );
+  const { data, loading } = controller;
+  function openClient(client: Client) {
+    if (!controller.snapshot) return;
+    const p = controller.snapshot;
+    void controller.perform(
+      "details",
+      (signal) =>
+        reportJson<typeof history>(
+          `/reports/rfm/clients/${encodeURIComponent(client.client_key)}/history?${query({ date_from: p.date_from, date_to: p.date_to })}`,
+          signal,
+        ),
+      (items) => {
+        setSelected(client);
+        setHistory(items);
+      },
+    );
+  }
+  function exportExcel(full: boolean) {
+    if (controller.snapshot)
+      void controller.perform("export", (signal) =>
+        reportDownload(
+          `/reports/rfm/export?${query({ ...controller.snapshot!, page: undefined, full })}`,
+          "rfm.xlsx",
+          signal,
+        ),
+      );
+  }
+  const preset = (months: Preset) => {
+    setActivePreset(months);
+    setF((x) => ({ ...x, ...presetDates(months), page: 1 }));
+  };
+  return (
+    <div className="page rfm-page">
+      <div className="page-title">
+        <div>
+          <h1>RFM-анализ клиентов</h1>
+          <p>Рабочие сегменты для маркетинговых коммуникаций</p>
+        </div>
+        <ReportHelp sections={rfmHelp} />
+        <button
+          className="primary"
+          disabled={controller.busy || !controller.snapshot}
+          onClick={() => exportExcel(true)}
+        >
+          <Download size={17} />
+          Полный Excel
+        </button>
+      </div>
+      <div className="panel filters">
+        <div className="period-picker">
+          {(
+            [
+              [3, "3 месяца"],
+              [6, "6 месяцев"],
+              [12, "12 месяцев"],
+              [0, "Весь период"],
+            ] as [Preset, string][]
+          ).map(([m, l]) => (
+            <button
+              type="button"
+              key={m}
+              className={activePreset === m ? "active" : ""}
+              aria-pressed={activePreset === m}
+              onClick={() => preset(m)}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+        <div className="filter-grid">
+          <label>
+            Начало
+            <input
+              type="date"
+              value={f.date_from}
+              onChange={(e) => change("date_from", e.target.value)}
+            />
+          </label>
+          <label>
+            Конец
+            <input
+              type="date"
+              value={f.date_to}
+              onChange={(e) => change("date_to", e.target.value)}
+            />
+          </label>
+          <label>
+            Сегмент
+            <select
+              value={f.segment}
+              onChange={(e) => change("segment", e.target.value)}
+            >
+              <option value="">Все</option>
+              {data?.segments.map((s) => (
+                <option key={s.segment}>{s.segment}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Клиент
+            <input
+              value={f.search}
+              onChange={(e) => change("search", e.target.value)}
+            />
+          </label>
+          <label>
+            Менеджер
+            <MultiSelect
+              options={managerOptions || []}
+              value={f.managers}
+              onChange={(value) => change("managers", value)}
+              placeholder="Все менеджеры"
+            />
+          </label>
+          <label>
+            Тип покупателя
+            <MultiSelect
+              options={buyerTypeOptions || []}
+              value={f.buyer_types}
+              onChange={(value) => change("buyer_types", value)}
+              placeholder="Все типы покупателей"
+            />
+          </label>
+          <label>
+            Подразделения
+            <MultiSelect
+              options={filterOptions?.departments || []}
+              value={f.departments}
+              onChange={(value) => change("departments", value)}
+              placeholder="Все подразделения"
+            />
+          </label>
+          {["r_score", "f_score", "m_score"].map((k) => (
+            <label key={k}>
+              {k[0].toUpperCase()} score
+              <select
+                value={f[k as keyof typeof f]}
+                onChange={(e) => change(k, e.target.value)}
+              >
+                <option value="">Все</option>
+                {[1, 2, 3, 4, 5].map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+          <label>
+            RFM-код
+            <input
+              value={f.rfm_code}
+              maxLength={3}
+              onChange={(e) => change("rfm_code", e.target.value)}
+            />
+          </label>
+          <label>
+            Выручка от
+            <input
+              type="number"
+              value={f.min_revenue}
+              onChange={(e) => change("min_revenue", e.target.value)}
+            />
+          </label>
+          <label>
+            Покупок от
+            <input
+              type="number"
+              value={f.min_purchases}
+              onChange={(e) => change("min_purchases", e.target.value)}
+            />
+          </label>
+        </div>
+        <ReportActions report={controller} />
+      </div>
+      <ReportEmpty show={!data && !loading} />
+      {loading ? (
+        <Loading />
+      ) : !data ? null : (
+        <>
+          <div className="rfm-section-title">
+            <h2>Ключевые показатели</h2>
+            <SectionHelp kind="indicators" />
+          </div>
+          <div className="kpis rfm-kpis">
+            {Object.entries(kpis).map(([k, l]) => (
+              <div className="kpi" key={k}>
+                <span>{l}</span>
+                <strong>
+                  {k.includes("revenue") || k.includes("value")
+                    ? money(data.kpi[k] || 0)
+                    : data.kpi[k] || 0}
+                </strong>
+              </div>
+            ))}
+          </div>
+          {!data.clients_vr.metadata_available && (
+            <div className="report-warning">
+              ClientsVR не вернул метаданные клиентов. Основной RFM продолжает
+              работать, но менеджеры и типы покупателей временно не
+              отображаются.
+            </div>
+          )}
+          <div className="rfm-section-title">
+            <h2>Сегменты клиентов</h2>
+            <SectionHelp kind="segments" />
+          </div>
+          <div className="rfm-segment-grid">
+            {data.segments
+              .filter((s) => s.clients)
+              .map((s) => (
+                <button
+                  key={s.segment}
+                  className={f.segment === s.segment ? "active" : ""}
+                  onClick={() => change("segment", s.segment)}
+                >
+                  <b>{s.segment}</b>
+                  <strong>{s.clients}</strong>
+                  <span>
+                    {(s.client_share * 100).toFixed(1)}% · {money(s.revenue)}
+                  </span>
+                  <small>{segmentDescriptions[s.segment]?.why}</small>
+                </button>
+              ))}
+          </div>
+          <SegmentGuide />
+          <SegmentTable
+            rows={data.segments}
+            choose={(v) => change("segment", v)}
+          />
+          <div className="rfm-section-title">
+            <h2>Клиенты</h2>
+            <SectionHelp kind="clients" />
+          </div>
+          <div className="panel table-panel">
+            <div className="table-meta">
+              <b>Клиенты · {data.clients.total}</b>
+              <button
+                disabled={controller.busy}
+                onClick={() => exportExcel(false)}
+              >
+                Экспортировать выборку
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    {[
+                      "Клиент",
+                      "Сегмент / теги",
+                      "R",
+                      "F",
+                      "M",
+                      "RFM",
+                      "Последняя",
+                      "Дней",
+                      "Покупок",
+                      "В месяц",
+                      "Интервал",
+                      "Выручка",
+                      "Средний чек",
+                      "Первая",
+                      "Менеджер",
+                      "Тип",
+                    ].map((x) => (
+                      <th key={x}>{x}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.clients.items.map((c) => (
+                    <tr
+                      className="clickable-row"
+                      key={c.client_key}
+                      onClick={() => openClient(c)}
+                    >
+                      <td>
+                        <b>{c.client}</b>
+                      </td>
+                      <td>
+                        {c.segment}
+                        <small>{c.tags.join(" · ") || "Без тегов"}</small>
+                      </td>
+                      <td>{c.r_score}</td>
+                      <td>{c.f_score}</td>
+                      <td>{c.m_score}</td>
+                      <td>
+                        <span className="badge">{c.rfm_code}</span>
+                      </td>
+                      <td>{c.last_purchase}</td>
+                      <td>{c.recency_days}</td>
+                      <td>{c.frequency}</td>
+                      <td>{c.purchases_per_month.toFixed(2)}</td>
+                      <td>{c.average_interval?.toFixed(1) ?? "—"}</td>
+                      <td>{money(c.monetary)}</td>
+                      <td>{money(c.average_check)}</td>
+                      <td>{c.first_purchase}</td>
+                      <td>{c.manager || "Не указан"}</td>
+                      <td>{c.buyer_type || "Не указан"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="pagination">
+              <button
+                disabled={
+                  controller.busy || (controller.snapshot?.page || 1) <= 1
+                }
+                onClick={() =>
+                  controller.snapshot &&
+                  void controller.generate({
+                    ...controller.snapshot,
+                    page: controller.snapshot.page - 1,
+                  })
+                }
+              >
+                ←
+              </button>
+              <span>
+                {data.clients.page} / {data.clients.pages || 1}
+              </span>
+              <button
+                disabled={
+                  controller.busy ||
+                  (controller.snapshot?.page || 1) >= data.clients.pages
+                }
+                onClick={() =>
+                  controller.snapshot &&
+                  void controller.generate({
+                    ...controller.snapshot,
+                    page: controller.snapshot.page + 1,
+                  })
+                }
+              >
+                →
+              </button>
+            </div>
+          </div>
+          <details className="panel rfm-settings">
+            <summary>Настройки RFM</summary>
+            <p>Квинтили 1–5 по выборке; одинаковые значения не разделяются.</p>
+            <p>
+              Новый: ≤ {data.settings.new_days} дн. · Потерянный: ≥{" "}
+              {data.settings.lost_days} дн. или {data.settings.lost_cycle}×
+              цикла · Засыпающий: {data.settings.sleeping_cycle}× цикла.
+            </p>
+            <pre>{JSON.stringify(data.settings.boundaries, null, 2)}</pre>
+          </details>
+        </>
+      )}
+      {selected && !loading && (
+        <ClientCard
+          client={selected}
+          history={history}
+          close={() => setSelected(undefined)}
+        />
+      )}
+    </div>
+  );
 }
 function SegmentGuide(){return <details className="panel rfm-segment-guide"><summary><HelpCircle size={17}/>Как работать с типами клиентов</summary><div className="rfm-segment-guide-grid">{Object.entries(segmentDescriptions).map(([name,item])=><article key={name}><h3>{name}</h3><p><b>Почему здесь:</b> {item.why}</p><p><b>Ценность:</b> {item.value}</p><p><b>Риск:</b> {item.risk}</p><p><b>Что делать:</b> {item.action}</p></article>)}</div></details>}
 function SegmentTable({rows,choose}:{rows:Segment[];choose:(s:string)=>void}){return <div className="panel table-panel"><div className="table-meta"><b>Показатели сегментов</b></div><div className="table-wrap"><table><thead><tr><th>Сегмент</th><th>Клиенты</th><th>Доля</th><th>Выручка</th><th>Доля выручки</th><th>Средний чек</th><th>Покупок</th><th>Recency</th></tr></thead><tbody>{rows.map(s=><tr className="clickable-row" key={s.segment} onClick={()=>choose(s.segment)}><td><b>{s.segment}</b><small>{segmentDescriptions[s.segment]?.action}</small></td><td>{s.clients}</td><td>{(s.client_share*100).toFixed(1)}%</td><td>{money(s.revenue)}</td><td>{(s.revenue_share*100).toFixed(1)}%</td><td>{money(s.average_check)}</td><td>{s.average_purchases.toFixed(1)}</td><td>{s.average_recency.toFixed(0)} дн.</td></tr>)}</tbody></table></div></div>}
