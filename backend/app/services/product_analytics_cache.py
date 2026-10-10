@@ -14,6 +14,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.product_analytics_runtime import log as runtime_log
+from app.services.product_analytics_runtime import heavy_operation, run_cpu, memory_snapshot, diagnostics, ensure_headroom
+
 CACHE_TTL_SECONDS = 120
 CACHE_MAX_ENTRIES = 2
 CACHE_MAX_ENTRY_BYTES = 32 * 1024 * 1024
@@ -231,7 +234,7 @@ def invalidate_product_analytics_cache() -> None:
     _cache_bytes = 0
 
 
-def _fresh(key: str, now: float, *, phase: str = "lookup"):
+def _lookup(key: str, now: float, *, phase: str = "lookup"):
     global _cache_bytes
     entry = _cache.get(key)
     if not entry:
@@ -244,6 +247,26 @@ def _fresh(key: str, now: float, *, phase: str = "lookup"):
         return None
     _cache.move_to_end(key)
     _log_cache("hit", phase=phase)
+    return entry
+
+
+def _fresh(key: str, now: float, *, phase: str = "lookup"):
+    entry = _lookup(key, now, phase=phase)
+    return _restore_entry(entry, phase) if entry is not None else None
+
+
+async def _fresh_async(key, phase="lookup"):
+    entry = _lookup(key, time.monotonic(), phase=phase)
+    if entry is None:
+        return None
+    ensure_headroom()
+    result = await run_cpu(_restore_entry, entry, phase)
+    diagnostics("restore", result_rows=len(result[0]) if _is_dataset(result) else None)
+    return result
+
+
+def _restore_entry(entry, phase):
+    memory_before = memory_snapshot()
     started = time.perf_counter()
     result = _restore(entry.value)
     restore_ms = (time.perf_counter() - started) * 1000
@@ -255,21 +278,31 @@ def _fresh(key: str, now: float, *, phase: str = "lookup"):
             "compressed_size_bytes": len(entry.value.payload),
             "compressed_size_mb": len(entry.value.payload) / (1024 * 1024),
             "result_rows": len(result[0]),
+            "restore_rss_delta_bytes": (memory_snapshot()["rss_bytes"] or 0) - (memory_before["rss_bytes"] or 0),
+            "restore_process_peak_rss_bytes": memory_snapshot()["process_peak_rss_bytes"],
         }
         log.info(
             "product_analytics_cache event=%s phase=%s restore_ms=%.3f "
-            "compressed_size_bytes=%s compressed_size_mb=%.3f result_rows=%s",
-            *fields.values(), extra=fields,
+            "compressed_size_bytes=%s compressed_size_mb=%.3f result_rows=%s "
+            "restore_rss_delta_bytes=%s restore_process_peak_rss_bytes=%s",
+            fields["cache_event"], fields["cache_phase"], fields["restore_ms"],
+            fields["compressed_size_bytes"], fields["compressed_size_mb"], fields["result_rows"],
+            fields["restore_rss_delta_bytes"], fields["restore_process_peak_rss_bytes"],
+            extra=fields,
         )
     return result
 
 
-def _store(key: str, value: Any, now: float) -> None:
+def _store(key: str, value: Any, now: float, *, publish=True):
     global _cache_bytes
+    started = time.perf_counter()
+    memory_before = memory_snapshot()
     if _is_dataset(value) and log.isEnabledFor(logging.INFO):
         components = dataset_memory_components(value)
         log.info("product_analytics_cache memory_components_bytes=%s", components,
                  extra={"memory_components_bytes": components})
+    profile_ms = (time.perf_counter() - started) * 1000
+    started = time.perf_counter()
     try:
         value = _compact(value)
     except _EntryTooLarge:
@@ -280,11 +313,24 @@ def _store(key: str, value: Any, now: float) -> None:
         log.warning("product_analytics_cache encoding failed: %s", type(exc).__name__)
         _log_cache("not_stored", phase="store", stored=False, reason="encoding_error")
         return
+    compact_ms = (time.perf_counter() - started) * 1000
     size = _bounded_size(value)
+    memory_after = memory_snapshot()
+    fields = {"profile_ms": profile_ms, "compact_ms": compact_ms, "entry_size_bytes": size,
+              "store_rss_delta_bytes": (memory_after["rss_bytes"] or 0) - (memory_before["rss_bytes"] or 0),
+              "store_process_peak_rss_bytes": memory_after["process_peak_rss_bytes"]}
+    runtime_log.info("product_analytics_cache preparation %s", fields, extra=fields)
     if size > CACHE_MAX_ENTRY_BYTES:
         _log_cache("oversized", phase="store", size=size, stored=False,
                    reason="entry_size_limit")
         return
+    if not publish:
+        return value, size
+    _publish(key, value, now, size)
+
+
+def _publish(key, value, now, size):
+    global _cache_bytes
     previous = _cache.pop(key, None)
     if previous:
         _cache_bytes -= previous.size
@@ -299,21 +345,31 @@ def _store(key: str, value: Any, now: float) -> None:
 
 
 async def cached_product_dataset(key: str, loader: Callable[[], Awaitable[Any]]):
+    async with heavy_operation():
+        return await _cached_product_dataset(key, loader)
+
+
+async def _cached_product_dataset(key: str, loader: Callable[[], Awaitable[Any]]):
     """Возвращает набор из кеша и объединяет одновременные одинаковые расчёты."""
-    cached = _fresh(key, time.monotonic())
+    cached = await _fresh_async(key)
     if cached is not None:
         return cached, True
     lock = _locks.setdefault(key, asyncio.Lock())
     _lock_users[key] = _lock_users.get(key, 0) + 1
     try:
         async with lock:
-            cached = _fresh(key, time.monotonic(), phase="recheck")
+            cached = await _fresh_async(key, "recheck")
             if cached is not None:
                 return cached, True
             generation = _generation
             value = await loader()
             if generation == _generation:
-                _store(key, value, time.monotonic())
+                started = time.perf_counter()
+                ensure_headroom()
+                prepared = await run_cpu(lambda: _store(key, value, time.monotonic(), publish=False))
+                if prepared is not None and generation == _generation:
+                    _publish(key, prepared[0], time.monotonic(), prepared[1])
+                diagnostics("store", elapsed_ms=(time.perf_counter() - started) * 1000, result_rows=len(value[0]) if _is_dataset(value) else None)
             return value, False
     finally:
         _lock_users[key] -= 1

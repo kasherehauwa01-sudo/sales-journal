@@ -3,6 +3,13 @@ from io import BytesIO
 import json
 import logging
 import time
+from itertools import chain
+from functools import wraps
+import sys
+from fastapi.encoders import jsonable_encoder
+from fastapi.routing import APIRoute
+from starlette.responses import JSONResponse
+from app.services.product_analytics_runtime import heavy_operation, run_cpu, diagnostics, ensure_headroom
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openpyxl import Workbook
@@ -19,7 +26,29 @@ from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classi
 from app.services.product_analytics_cache import cached_product_dataset
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info, get_product_filter_options, get_product_filters
 
-router=APIRouter(prefix="/reports/product-analytics",tags=["Отчеты"])
+class HeavyAnalyticsRoute(APIRoute):
+ def __init__(self,path,endpoint,**kwargs):
+  if "POST" in (kwargs.get("methods") or ()) and not getattr(endpoint,"_analytics_serialized",False):
+   original=endpoint
+   @wraps(original)
+   async def serialized(*args,**kw):
+    result=await original(*args,**kw)
+    if isinstance(result,Response):return result
+    def encode():return JSONResponse(jsonable_encoder(result))
+    return await run_cpu(encode)
+   serialized._analytics_serialized=True
+   endpoint=serialized
+  super().__init__(path,endpoint,**kwargs)
+ async def handle(self,scope,receive,send):
+  if scope["method"]!="POST":return await super().handle(scope,receive,send)
+  try:
+   async with heavy_operation("response"):
+    await super().handle(scope,receive,send)
+  except HTTPException as exc:
+   if exc.status_code!=503:raise
+   await JSONResponse({"detail":exc.detail},status_code=503,headers=exc.headers)(scope,receive,send)
+
+router=APIRouter(route_class=HeavyAnalyticsRoute,prefix="/reports/product-analytics",tags=["Отчеты"])
 logger=logging.getLogger(__name__)
 
 class AnalyticsRequest(BaseModel):
@@ -47,16 +76,21 @@ async def _period_rows(data,db,start,end,manager_clients):
  revenue=func.coalesce(func.sum(SaleItem.quantity*SaleItem.actual_price),0);units=func.coalesce(func.sum(SaleItem.quantity),0)
  fallback_name=case((and_(or_(SaleItem.article.is_(None),func.trim(SaleItem.article)==""),or_(SaleItem.code.is_(None),func.trim(SaleItem.code)=="")),func.lower(func.trim(SaleItem.name))),else_="")
  q=select(SaleItem.article,SaleItem.code,func.max(SaleItem.name).label("name"),revenue.label("revenue"),units.label("units"),func.count(distinct(Sale.id)).label("checks"),func.min(Sale.sale_date).label("first_sale"),func.max(Sale.sale_date).label("last_sale")).join(Sale,Sale.id==SaleItem.sale_id).where(*_conditions(data,start,end,manager_clients)).group_by(SaleItem.article,SaleItem.code,fallback_name)
- rows=(await db.execute(q)).all();return [{"key":product_key(x.article,x.code,x.name),"article":x.article,"code":x.code,"name":x.name,"revenue":float(x.revenue),"units":float(x.units),"checks":x.checks,"first_sale":x.first_sale,"last_sale":x.last_sale} for x in rows]
+ rows=[]
+ result=await db.stream(q.execution_options(yield_per=512))
+ try:
+  async for x in result:
+   if len(rows)%512==0:ensure_headroom()
+   rows.append({"key":product_key(x.article,x.code,x.name),"article":x.article,"code":x.code,"name":x.name,"revenue":float(x.revenue),"units":float(x.units),"checks":x.checks,"first_sale":x.first_sale,"last_sale":x.last_sale})
+ finally:await result.close()
+ return rows
 
 async def _catalog(rows):
- products=[{"article":x.get("article"),"code":x.get("code")} for x in rows if x.get("article") or x.get("code")];result={}
- try:
-  result.update(await get_catalog_batch_info(products))
+ products=({"article":x.get("article"),"code":x.get("code")} for x in rows if x.get("article") or x.get("code"))
+ try:return await get_catalog_batch_info(products)
  except VrCatalogError as exc:
-  # Продажи остаются доступны, но причина отсутствия enrichment видна в логах.
-  logger.warning("CatalogVR enrichment недоступен для %s строк: %s",len(products),type(exc).__name__)
- return result
+  logger.warning("CatalogVR enrichment недоступен: %s",type(exc).__name__)
+  return {}
 
 async def _manager_clients(data,db,old_from,old_to):
  if not data.managers:return None
@@ -66,8 +100,15 @@ async def _manager_clients(data,db,old_from,old_to):
  scope=or_(and_(Sale.sale_date>=data.date_from,Sale.sale_date<=data.date_to),and_(Sale.sale_date>=old_from,Sale.sale_date<=old_to))
  conditions=[scope]
  if data.departments:conditions.append(Sale.department.in_(data.departments))
- sales_clients=list((await db.scalars(select(normalized).where(*conditions).distinct())).all())
- return clients_for_managers(sales_clients,mapping,data.managers)
+ result=await db.stream_scalars(select(normalized).where(*conditions).distinct().execution_options(yield_per=512))
+ clients=[]
+ try:
+  async for batch in result.partitions(512):
+   ensure_headroom()
+   clients.extend(clients_for_managers(batch,mapping,data.managers))
+ finally:await result.close()
+ diagnostics("manager_clients", result_rows=len(clients), container_bytes=sys.getsizeof(clients))
+ return clients
 
 def _dataset_cache_key(data:AnalyticsRequest,revision:int) -> str:
  payload=data.model_dump(mode="json")
@@ -80,15 +121,24 @@ async def _build_dataset(data,db):
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
  started=time.perf_counter();old_from,old_to=_dates(data);manager_clients=await _manager_clients(data,db,old_from,old_to)
  stage=time.perf_counter();current=await _period_rows(data,db,data.date_from,data.date_to,manager_clients);current_ms=(time.perf_counter()-stage)*1000
+ diagnostics("current_period", elapsed_ms=current_ms, result_rows=len(current), container_bytes=sys.getsizeof(current)+sum(sys.getsizeof(row) for row in current))
  stage=time.perf_counter();old=await _period_rows(data,db,old_from,old_to,manager_clients);comparison_ms=(time.perf_counter()-stage)*1000
- stage=time.perf_counter();catalog=await _catalog(current+old);catalog_ms=(time.perf_counter()-stage)*1000
- stage=time.perf_counter();rows=merge_periods(current,old,catalog)
- rows=filter_values(rows,"brand",data.brands)
- rows=filter_values(rows,"manufacturer",data.manufacturers)
- rows=filter_subcategories(rows,data.subcategories)
- rows=group_rows(rows,data.group_by);processing_ms=(time.perf_counter()-stage)*1000
+ diagnostics("comparison_period", elapsed_ms=comparison_ms, result_rows=len(old), container_bytes=sys.getsizeof(old)+sum(sys.getsizeof(row) for row in old))
+ stage=time.perf_counter();catalog=await _catalog(chain(current,old));catalog_ms=(time.perf_counter()-stage)*1000
+ current_count=len(current);old_count=len(old)
+ diagnostics("catalog", current_rows=current_count, comparison_rows=old_count, catalog_keys=len(catalog), container_bytes=sys.getsizeof(catalog), elapsed_ms=catalog_ms)
+ ensure_headroom()
+ stage=time.perf_counter();rows=await run_cpu(merge_periods,current,old,catalog)
+ del current,old,catalog
+ def process():
+  selected=filter_values(rows,"brand",data.brands)
+  selected=filter_values(selected,"manufacturer",data.manufacturers)
+  selected=filter_subcategories(selected,data.subcategories)
+  return group_rows(selected,data.group_by)
+ rows=await run_cpu(process);processing_ms=(time.perf_counter()-stage)*1000
  logger.info("product_analytics stages_ms current=%.1f comparison=%.1f catalog=%.1f processing=%.1f total=%.1f current_rows=%s comparison_rows=%s result_rows=%s",
-  current_ms,comparison_ms,catalog_ms,processing_ms,(time.perf_counter()-started)*1000,len(current),len(old),len(rows))
+  current_ms,comparison_ms,catalog_ms,processing_ms,(time.perf_counter()-started)*1000,current_count,old_count,len(rows))
+ diagnostics("build", elapsed_ms=(time.perf_counter()-started)*1000, result_rows=len(rows))
  return rows,old_from,old_to,manager_clients
 
 async def _dataset(data,db):
@@ -101,8 +151,9 @@ async def _dataset(data,db):
  logger.info("product_analytics dataset cache_hit=%s result_rows=%s",hit,len(result[0]))
  started=time.perf_counter()
  rows,old_from,old_to,manager_clients=result
- grouped=group_rows(rows,data.group_by)
+ grouped=await run_cpu(group_rows,rows,data.group_by)
  postprocess_ms=(time.perf_counter()-started)*1000
+ diagnostics("postprocess", elapsed_ms=postprocess_ms, input_rows=len(rows), result_rows=len(grouped))
  logger.info("product_analytics dataset postprocess_ms=%.3f cache_hit=%s input_rows=%s result_rows=%s",
   postprocess_ms,hit,len(rows),len(grouped),extra={"postprocess_ms":postprocess_ms,"cache_hit":hit,"input_rows":len(rows),"result_rows":len(grouped)})
  return grouped,old_from,old_to,manager_clients
@@ -233,7 +284,7 @@ async def name_suggestions(search:str=Query(min_length=4,max_length=200),db:Asyn
 @router.post("/summary")
 async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
  # KPI всегда считаются по SKU, независимо от выбранной группировки таблицы.
- product_data=data.model_copy(update={"group_by":"product"});rows,old_from,old_to,manager_clients=await _dataset(product_data,db);result=summary(rows)
+ product_data=data.model_copy(update={"group_by":"product"});rows,old_from,old_to,manager_clients=await _dataset(product_data,db);result=await run_cpu(summary,rows)
  # Без фильтров CatalogVR можно получить реальное число уникальных чеков
  # напрямую в PostgreSQL, не суммируя чеки отдельных SKU.
  if data.brands or data.manufacturers or data.subcategories:
@@ -252,8 +303,8 @@ async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(t
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
  product_data=data.model_copy(update={"group_by":"product"})
  product_rows,old_from,old_to,manager_clients=await _dataset(product_data,db)
- grouped=product_rows if data.group_by=="product" else group_rows(product_rows,data.group_by)
- result=summary(product_rows)
+ grouped=product_rows if data.group_by=="product" else await run_cpu(group_rows,product_rows,data.group_by)
+ result=await run_cpu(summary,product_rows)
  # Уникальные чеки не суммируем между SKU. Без catalog-фильтров считаем их точно в SQL.
  if data.brands or data.manufacturers or data.subcategories:
   result["checks"]={
@@ -265,12 +316,15 @@ async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(t
    "current":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0,
    "previous":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0,
   }
- items=_sorted(grouped,section,sort_by,limit)
- total=len(_sorted(grouped,section,sort_by,1000000))
+ items=await run_cpu(_sorted,grouped,section,sort_by,limit)
+ total=len(await run_cpu(_sorted,grouped,section,sort_by,1000000))
  return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},
          "summary":result,"items":items,"total":total}
 
-async def _section(data,db,name,sort_by,limit):rows,_,_,_=await _dataset(data,db);return {"items":_sorted(rows,name,sort_by,limit),"total":len(_sorted(rows,name,sort_by,1000000))}
+async def _section(data,db,name,sort_by,limit):
+ rows,_,_,_=await _dataset(data,db)
+ def calculate():return {"items":_sorted(rows,name,sort_by,limit),"total":len(_sorted(rows,name,sort_by,1000000))}
+ return await run_cpu(calculate)
 @router.post("/top")
 async def top(data:AnalyticsRequest,sort_by:str="revenue",limit:int=Query(20,ge=10,le=100),db:AsyncSession=Depends(get_db)):return await _section(data,db,"top",sort_by,limit)
 @router.post("/growth")
@@ -351,5 +405,9 @@ def _sheet(book,title,headers,rows):
 
 @router.post("/export")
 async def export(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
- rows,old_from,old_to,_=await _dataset(data,db);sections={"ТОП":_sorted(rows,"top","revenue",1000000),"Рост":_sorted(rows,"growth","absolute",1000000),"Падение":_sorted(rows,"decline","absolute",1000000),"Перестали продаваться":_sorted(rows,"stopped","revenue",1000000),"Новые товары":_sorted(rows,"new","revenue",1000000)};book=Workbook();book.remove(book.active);s=summary(rows);_sheet(book,"Сводка",["Показатель","Значение"],[[k,str(v)] for k,v in s.items()]+[["Основной период",f"{data.date_from} — {data.date_to}"],["Период сравнения",f"{old_from} — {old_to}"]]);headers=["Артикул","Код","Название","Бренд","Категория","Выручка","Прошлая выручка","Изменение","Изменение, %","Количество","Прошлое количество","Чеков"]
+ rows,old_from,old_to,_=await _dataset(data,db)
+ return await run_cpu(_export_workbook,rows,data.date_from,data.date_to,old_from,old_to)
+
+def _export_workbook(rows,date_from,date_to,old_from,old_to):
+ sections={"ТОП":_sorted(rows,"top","revenue",1000000),"Рост":_sorted(rows,"growth","absolute",1000000),"Падение":_sorted(rows,"decline","absolute",1000000),"Перестали продаваться":_sorted(rows,"stopped","revenue",1000000),"Новые товары":_sorted(rows,"new","revenue",1000000)};book=Workbook();book.remove(book.active);s=summary(rows);_sheet(book,"Сводка",["Показатель","Значение"],[[k,str(v)] for k,v in s.items()]+[["Основной период",f"{date_from} — {date_to}"],["Период сравнения",f"{old_from} — {old_to}"]]);headers=["Артикул","Код","Название","Бренд","Категория","Выручка","Прошлая выручка","Изменение","Изменение, %","Количество","Прошлое количество","Чеков"]
  for title,items in sections.items():_sheet(book,title,headers,[[x.get("article"),x.get("code"),x.get("name"),x.get("brand"),x.get("category"),x.get("revenue"),x.get("previous_revenue"),x.get("revenue_difference"),x.get("revenue_change"),x.get("units"),x.get("previous_units"),x.get("checks")] for x in items]);output=BytesIO();book.save(output);return Response(output.getvalue(),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":"attachment; filename=product-analytics.xlsx"})

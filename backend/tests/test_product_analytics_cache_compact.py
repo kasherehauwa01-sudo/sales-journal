@@ -194,7 +194,7 @@ def test_dataset_reuses_catalog_across_groupings_and_invalidates_on_revision_and
         return [dict(row, revenue=row['revenue'] if start == request.date_from else row['previous_revenue']) for row in source]
 
     async def catalog(rows):
-        catalog_calls.append(len(rows))
+        catalog_calls.append(sum(1 for _ in rows))
         return {row['key']: dict(row, section=row['subcategory']) for row in source}
 
     monkeypatch.setattr(router, '_manager_clients', managers)
