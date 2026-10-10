@@ -85,3 +85,23 @@ class CatalogSyncState(Base):
         DateTime(timezone=True)
     )
     error_code: Mapped[str | None] = mapped_column(String(32))
+
+
+class CatalogSyncControl(Base):
+    """Durable operator commands; never alters the legacy sales checkpoint."""
+
+    __tablename__ = "catalog_sync_control"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default="paused")
+    mode: Mapped[str] = mapped_column(String(16), default="discovery")
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tracked_cycle: Mapped[int | None] = mapped_column(BigInteger)
+    cycle_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scanned: Mapped[int] = mapped_column(BigInteger, default=0)
+    processed: Mapped[int] = mapped_column(BigInteger, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(32))
+    refresh_cursor: Mapped[str | None] = mapped_column(String(64))
+    refresh_upper: Mapped[str | None] = mapped_column(String(64))
+    refresh_completed: Mapped[bool] = mapped_column(Boolean, default=True)

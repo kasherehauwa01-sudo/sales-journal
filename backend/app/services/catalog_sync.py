@@ -28,11 +28,11 @@ class SyncBusy(RuntimeError):
 
 
 @asynccontextmanager
-async def sync_lock(engine):
+async def sync_lock(engine, lock_id=SYNC_LOCK_ID):
     # Separate nonblocking lock: never hold the analytics lock across network I/O.
     async with engine.connect() as connection:
         acquired = await connection.scalar(
-            text("SELECT pg_try_advisory_lock(:key)"), {"key": SYNC_LOCK_ID}
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_id}
         )
         if not acquired:
             raise SyncBusy("catalog_sync_already_running")
@@ -40,13 +40,13 @@ async def sync_lock(engine):
         # across network requests while retaining the dedicated connection.
         await connection.commit()
         try:
-            yield
+            yield connection
         finally:
 
             async def release():
                 try:
                     await connection.execute(
-                        text("SELECT pg_advisory_unlock(:key)"), {"key": SYNC_LOCK_ID}
+                        text("SELECT pg_advisory_unlock(:key)"), {"key": lock_id}
                     )
                     await connection.commit()
                 except BaseException:
@@ -155,7 +155,8 @@ async def synchronize(
     max_scan_rows=10000,
     batch_size=100,
     stop_event=None,
-    client=lookup_products
+    client=lookup_products,
+    lock_guard=None,
 ):
     """Caller MUST hold sync_lock. Limits apply per invocation; cursor persists."""
     if (
@@ -171,12 +172,14 @@ async def synchronize(
     async with session_factory() as db:
         state = await _state(db)
         if state.completed:
+            state.started_at = now()
             state.cycle += 1
             state.cursor = 0
             state.upper_id = int(await db.scalar(select(func.max(SaleItem.id))) or 0)
             state.completed = False
         state.status = "running"
-        state.started_at = now()
+        if state.started_at is None:
+            state.started_at = now()
         state.finished_at = None
         state.error_code = None
         await db.commit()
@@ -186,6 +189,8 @@ async def synchronize(
             and scanned < max_scan_rows
             and not stop_event.is_set()
         ):
+            if lock_guard is not None:
+                await lock_guard()
             ensure_headroom()
             async with session_factory() as db:
                 state = await _state(db)
@@ -267,6 +272,8 @@ async def synchronize(
                 # HTTP fails. Previous product projections/statuses survive.
                 await db.commit()
                 results = await client(inputs) if inputs else []
+                if lock_guard is not None:
+                    await lock_guard()
                 await save_results(db, pending, results, state.cycle)
                 for lookup in invalid:
                     lookup.status = "invalid"
