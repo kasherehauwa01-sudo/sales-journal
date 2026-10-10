@@ -102,6 +102,8 @@ beforeEach(() => {
     if (init?.method === "POST") return post(url, init);
     if (url.endsWith("/filters"))
       return Promise.resolve(json({ departments: ["Магазин A"] }));
+    if (url.includes("/catalog-status"))
+      return Promise.resolve(json({ state: { completed: true, last_full_success_at: "2026-10-10", last_success_at: "2026-10-10" } }));
     if (url.includes("/manager-options"))
       return Promise.resolve(json(["Менеджер A"]));
     if (url.includes("/catalog-options/brand"))
@@ -455,5 +457,26 @@ describe("explicit product analytics loading", () => {
     await act(async () => reply.resolve(json(report)));
     await screen.findByText(/Расчёт на сервере может продолжаться/);
     expect(screen.queryByText("Тестовый товар")).toBeNull();
+  });
+});
+
+
+describe("local CatalogVR characteristics diagnostics", () => {
+  it("shows an incomplete directory without launching a report", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => url.includes("/catalog-status")
+      ? Promise.resolve(json({ state: null })) : original(url, init));
+    render(<ProductAnalyticsPage />);
+    await screen.findByText(/Локальные характеристики товаров ещё не сверены полностью/);
+    expect(post).not.toHaveBeenCalled();
+  });
+  it("shows an ambiguous identity and a report coverage warning", async () => {
+    post.mockResolvedValue(json({ ...report, items: [{ ...product, catalog_status: "ambiguous" }],
+      catalog: { warning: "Один товар требует проверки сопоставления", missing: 1, counts: { ambiguous: 1 } } }));
+    render(<ProductAnalyticsPage />);
+    fireEvent.click(build());
+    await screen.findByText("Неоднозначное сопоставление");
+    expect(screen.getByText("Один товар требует проверки сопоставления")).toBeTruthy();
+    expect(post).toHaveBeenCalledTimes(1);
   });
 });

@@ -179,6 +179,9 @@ def test_dataset_reuses_catalog_across_groupings_and_invalidates_on_revision_and
     class Db:
         revision = 10
 
+        async def connection(self, **kwargs):
+            pass
+
         async def scalar(self, query):
             return self.revision
 
@@ -193,13 +196,13 @@ def test_dataset_reuses_catalog_across_groupings_and_invalidates_on_revision_and
         period_calls.append((start, end))
         return [dict(row, revenue=row['revenue'] if start == request.date_from else row['previous_revenue']) for row in source]
 
-    async def catalog(rows):
+    async def catalog(rows, db):
         catalog_calls.append(sum(1 for _ in rows))
         return {row['key']: dict(row, section=row['subcategory']) for row in source}
 
     monkeypatch.setattr(router, '_manager_clients', managers)
     monkeypatch.setattr(router, '_period_rows', period)
-    monkeypatch.setattr(router, '_catalog', catalog)
+    monkeypatch.setattr(router, 'local_catalog', catalog)
 
     async def run():
         # Compute the reference using the unmodified calculation pipeline.
@@ -298,6 +301,9 @@ def test_report_summary_and_export_match_uncached_pipeline(monkeypatch):
     catalog_calls = []
 
     class Db:
+        async def connection(self, **kwargs):
+            pass
+
         async def scalar(self, query):
             return 42 if 'max(' in str(query) else 17
 
@@ -311,7 +317,7 @@ def test_report_summary_and_export_match_uncached_pipeline(monkeypatch):
     async def period(data, db, start, end, clients):
         return [dict(row, revenue=row['revenue'] if start == request.date_from else row['previous_revenue']) for row in source]
 
-    async def catalog(rows):
+    async def catalog(rows, db):
         catalog_calls.append(1)
         return {row['key']: dict(row, section=row['subcategory']) for row in source}
 
@@ -320,7 +326,7 @@ def test_report_summary_and_export_match_uncached_pipeline(monkeypatch):
 
     monkeypatch.setattr(router, '_manager_clients', managers)
     monkeypatch.setattr(router, '_period_rows', period)
-    monkeypatch.setattr(router, '_catalog', catalog)
+    monkeypatch.setattr(router, 'local_catalog', catalog)
     optimized = router._dataset
 
     def spreadsheet(response):
