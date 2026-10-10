@@ -18,12 +18,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import String, and_, any_, bindparam, case, cast, distinct, false, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import get_db
+from app.config import settings
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError, get_client_managers, get_managers
 from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, previous_period, product_key, summary
 from app.services.product_analytics_cache import cached_product_dataset
+from app.services.catalog_attributes import local_catalog, begin_catalog_snapshot, catalog_revision, local_options, coverage, sync_status, remember_detail_image
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info, get_product_filter_options, get_product_filters
 
 class HeavyAnalyticsRoute(APIRoute):
@@ -124,11 +127,16 @@ async def _build_dataset(data,db):
  diagnostics("current_period", elapsed_ms=current_ms, result_rows=len(current), container_bytes=sys.getsizeof(current)+sum(sys.getsizeof(row) for row in current))
  stage=time.perf_counter();old=await _period_rows(data,db,old_from,old_to,manager_clients);comparison_ms=(time.perf_counter()-stage)*1000
  diagnostics("comparison_period", elapsed_ms=comparison_ms, result_rows=len(old), container_bytes=sys.getsizeof(old)+sum(sys.getsizeof(row) for row in old))
- stage=time.perf_counter();catalog=await _catalog(chain(current,old));catalog_ms=(time.perf_counter()-stage)*1000
+ stage=time.perf_counter();catalog=await local_catalog(chain(current,old),db) if settings.product_analytics_local_catalog_enabled else await _catalog(chain(current,old));catalog_ms=(time.perf_counter()-stage)*1000
  current_count=len(current);old_count=len(old)
  diagnostics("catalog", current_rows=current_count, comparison_rows=old_count, catalog_keys=len(catalog), container_bytes=sys.getsizeof(catalog), elapsed_ms=catalog_ms)
  ensure_headroom()
  stage=time.perf_counter();rows=await run_cpu(merge_periods,current,old,catalog)
+ if settings.product_analytics_local_catalog_enabled:
+  for row in rows:
+   info=catalog.get(row["key"],{})
+   row.update(catalog_status=info.get("catalog_status","not_synced"),catalog_synced_at=info.get("catalog_synced_at"),horeca=info.get("horeca"))
+  diagnostics("local_catalog_coverage", **coverage(rows)["counts"])
  del current,old,catalog
  def process():
   selected=filter_values(rows,"brand",data.brands)
@@ -143,9 +151,11 @@ async def _build_dataset(data,db):
 
 async def _dataset(data,db):
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
+ if settings.product_analytics_local_catalog_enabled:await begin_catalog_snapshot(db)
  # max(id) использует PK-индекс и инвалидирует кеш между worker-процессами.
  revision=int(await db.scalar(select(func.max(Sale.id))) or 0)
- key=_dataset_cache_key(data,revision)
+ source_revision=f"local-catalog:{await catalog_revision(db)}:" if settings.product_analytics_local_catalog_enabled else "legacy-catalog:"
+ key=source_revision+_dataset_cache_key(data,revision)
  product_data=data.model_copy(update={"group_by":"product"})
  result,hit=await cached_product_dataset(key,lambda:_build_dataset(product_data,db))
  logger.info("product_analytics dataset cache_hit=%s result_rows=%s",hit,len(result[0]))
@@ -270,9 +280,14 @@ async def _catalog_options(field:str,search:str):
  return []
 
 @router.get("/catalog-options/{field}")
-async def catalog_options(field:str,search:str=""):
+async def catalog_options(field:str,search:str="",db:AsyncSession=Depends(get_db)):
  if field not in {"brand","manufacturer","subcategory"}:raise HTTPException(404,"Неизвестный фильтр")
- return await _catalog_options(field,search)
+ return await local_options(db,field,search) if settings.product_analytics_local_catalog_enabled else await _catalog_options(field,search)
+
+@router.get("/catalog-status")
+async def catalog_status(db:AsyncSession=Depends(get_db)):
+ if not settings.product_analytics_local_catalog_enabled:return {"enabled":False,"automatic_sync_enabled":False}
+ return {"enabled":True,**await sync_status(db)}
 
 @router.get("/name-suggestions")
 async def name_suggestions(search:str=Query(min_length=4,max_length=200),db:AsyncSession=Depends(get_db)):
@@ -319,7 +334,7 @@ async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(t
  items=await run_cpu(_sorted,grouped,section,sort_by,limit)
  total=len(await run_cpu(_sorted,grouped,section,sort_by,1000000))
  return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},
-         "summary":result,"items":items,"total":total}
+         "summary":result,"items":items,"total":total,"catalog":coverage(product_rows) if settings.product_analytics_local_catalog_enabled else None}
 
 async def _section(data,db,name,sort_by,limit):
  rows,_,_,_=await _dataset(data,db)
@@ -395,6 +410,11 @@ async def details(data:DetailRequest,group_by:str=Query("day",pattern="^(day|wee
   if identity:current.update(article=identity.article,code=identity.code,name=identity.name)
  catalog=await _catalog([current])
  product=merge_periods([current],[],catalog)[0]
+ if settings.product_analytics_local_catalog_enabled and product.get("image_url"):
+  try:await remember_detail_image(db,current,product["image_url"])
+  except SQLAlchemyError:
+   await db.rollback()
+   logger.warning("product_analytics photo cache unavailable")
  return {"product":product,"group_by":group_by,"points":points}
 
 def _sheet(book,title,headers,rows):

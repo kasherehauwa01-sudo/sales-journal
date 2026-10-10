@@ -25,6 +25,7 @@ type Row = {
   brand: string;
   manufacturer: string;
   category: string;
+  catalog_status?: string;
   subcategory: string;
   material: string;
   image_url?: string;
@@ -78,7 +79,8 @@ type ReportRequest = {
   sort: string;
   limit: number;
 };
-type Report = { summary: Summary; items: Row[]; total: number };
+type Report = {
+  catalog?: { warning: string | null; missing: number; counts: Record<string, number> }; summary: Summary; items: Row[]; total: number };
 type Detail = {
   product: Row | null;
   points: Array<{ period: string; revenue: number; units: number }>;
@@ -267,6 +269,7 @@ export function ProductAnalyticsPage() {
       setCompareTo(shiftMonth(dateTo));
     }
   }, [dateFrom, dateTo, comparePreset]);
+  const { data: catalogState } = useApi<{ enabled?: boolean; has_unscanned_sales?: boolean; lookup_counts?: Record<string, number>; state: { completed: boolean; last_success_at: string | null; last_full_success_at: string | null } | null }>("/reports/product-analytics/catalog-status");
   const { data: subcategoryOptions } = useApi<string[]>(
     `/reports/product-analytics/catalog-options/subcategory?${query({ search: debouncedSubcategorySearch })}`,
   );
@@ -472,6 +475,13 @@ export function ProductAnalyticsPage() {
             : "Выгрузить в Excel"}
         </button>
       </div>
+      {catalogState && catalogState.enabled !== false && (!catalogState.state?.last_full_success_at || !catalogState.state.completed || catalogState.has_unscanned_sales) && (
+        <div className="report-warning" role="status">
+          Локальные характеристики товаров ещё не сверены полностью. Некоторые значения фильтров и характеристики могут отсутствовать. Обратитесь к администратору для ручной синхронизации.
+        </div>
+      )}
+      {catalogState?.state?.last_success_at && <p className="muted">Последняя успешная синхронизация характеристик: {new Date(catalogState.state.last_success_at).toLocaleString("ru-RU")}</p>}
+      {reportData?.catalog?.warning && <div className="report-warning" role="status">{reportData.catalog.warning}</div>}
       <section className="panel report-builder">
         <div className="analytics-periods">
           <fieldset>
@@ -796,7 +806,7 @@ export function ProductAnalyticsPage() {
                           <ProductPhoto src={x.image_url} name={x.name} />
                         </td>
                         <td>{x.article || x.code || "—"}</td>
-                        <td>{x.name}</td>
+                        <td>{x.name}{x.catalog_status && x.catalog_status !== "matched" && <small>{({ not_synced: "Характеристики не синхронизированы", pending: "Характеристики не синхронизированы", ambiguous: "Неоднозначное сопоставление", not_found: "Товар не найден в VRCatalog", invalid: "Нет корректных идентификаторов" } as Record<string, string>)[x.catalog_status] || "Характеристики отсутствуют"}</small>}</td>
                         <td>{money(x.previous_revenue)}</td>
                         <td>{money(x.revenue)}</td>
                         <td

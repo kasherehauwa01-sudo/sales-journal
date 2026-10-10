@@ -68,6 +68,33 @@ services:
       timeout: 5s
       retries: 10
 
+  # Opt-in idle worker. Starting this service NEVER resumes a saved run command.
+  catalog-sync:
+    profiles: ["catalog-sync"]
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.catalog_worker"]
+    restart: "no"
+    stop_grace_period: 180s
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sales}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-sales}"
+      VRCATALOG_API_URL: "${VRCATALOG_API_URL:-https://kvasmix.ru/vr/catalog/api}"
+      VRCATALOG_API_TOKEN: "${VRCATALOG_API_TOKEN:-}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      CATALOG_SYNC_BATCH_SIZE: "${CATALOG_SYNC_BATCH_SIZE:-100}"
+      CATALOG_SYNC_PAUSE_SECONDS: "${CATALOG_SYNC_PAUSE_SECONDS:-1}"
+      CATALOG_SYNC_POLL_SECONDS: "${CATALOG_SYNC_POLL_SECONDS:-1}"
+      CATALOG_SYNC_RETRY_LIMIT: "${CATALOG_SYNC_RETRY_LIMIT:-3}"
+      CATALOG_SYNC_RETRY_SECONDS: "${CATALOG_SYNC_RETRY_SECONDS:-30}"
+      CATALOG_SYNC_MIN_AVAILABLE_MB: "${CATALOG_SYNC_MIN_AVAILABLE_MB:-256}"
+      CATALOG_SYNC_DB_TIMEOUT_SECONDS: "${CATALOG_SYNC_DB_TIMEOUT_SECONDS:-10}"
+      CATALOG_SYNC_DB_LOCK_TIMEOUT_SECONDS: "${CATALOG_SYNC_DB_LOCK_TIMEOUT_SECONDS:-2}"
+      CATALOG_LOOKUP_TIMEOUT_SECONDS: "${CATALOG_LOOKUP_TIMEOUT_SECONDS:-15}"
+      CATALOG_LOOKUP_MAX_ATTEMPTS: "${CATALOG_LOOKUP_MAX_ATTEMPTS:-3}"
+    depends_on:
+      db:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend

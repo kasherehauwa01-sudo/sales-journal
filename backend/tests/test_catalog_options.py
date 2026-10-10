@@ -35,8 +35,8 @@ def test_all_filters_load_more_than_100_values_and_cache_pages(monkeypatch, fiel
                          'pagination': {'page': page, 'total': 205, 'total_pages': 3, 'has_next': page < 3}}}
 
     monkeypatch.setattr(vrcatalog, '_integration_get', request)
-    assert asyncio.run(router.catalog_options(field, search)) == names
-    assert asyncio.run(router.catalog_options(field, search)) == names
+    assert asyncio.run(router._catalog_options(field, search)) == names
+    assert asyncio.run(router._catalog_options(field, search)) == names
     assert calls == [1, 2, 3]
 
 
@@ -105,7 +105,7 @@ def test_api_errors_return_502_without_partial_results(monkeypatch, error, faile
 
     monkeypatch.setattr(vrcatalog, '_integration_get', request)
     with pytest.raises(HTTPException) as caught:
-        asyncio.run(router.catalog_options('brand'))
+        asyncio.run(router._catalog_options('brand', ''))
     assert caught.value.status_code == 502
 
 
@@ -119,9 +119,9 @@ def test_search_has_separate_cache_key(monkeypatch):
         return {'items': [params['search'] or 'Все бренды'], 'has_next': False}
 
     monkeypatch.setattr(vrcatalog, '_integration_get', request)
-    assert asyncio.run(router.catalog_options('brand')) == ['Все бренды']
-    assert asyncio.run(router.catalog_options('brand', 'Бренд')) == ['Бренд']
-    assert asyncio.run(router.catalog_options('brand', 'Бренд')) == ['Бренд']
+    assert asyncio.run(router._catalog_options('brand', '')) == ['Все бренды']
+    assert asyncio.run(router._catalog_options('brand', 'Бренд')) == ['Бренд']
+    assert asyncio.run(router._catalog_options('brand', 'Бренд')) == ['Бренд']
     assert calls == ['', 'Бренд']
 
 
@@ -162,5 +162,5 @@ def test_alias_fallback_still_loads_all_pages(monkeypatch):
 
     monkeypatch.setattr(router, 'get_product_filters', filters)
     monkeypatch.setattr(router, 'get_product_filter_options', options)
-    assert asyncio.run(router.catalog_options('brand')) == ['Бренд А', 'Бренд Б']
+    assert asyncio.run(router._catalog_options('brand', '')) == ['Бренд А', 'Бренд Б']
     assert calls == [('brand', 1), ('Бренд', 1), ('Бренд', 2)]
