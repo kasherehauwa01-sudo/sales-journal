@@ -108,28 +108,28 @@ def test_catalog_filter_metadata_and_options_use_integration_api(monkeypatch):
 def test_catalog_tree_and_confirmed_brand_endpoint(monkeypatch):
  calls=[]
  def request(path,params=None):
-  calls.append((path,params));return {"items":[]}
+  calls.append((path,params));return [] if path=="integration/catalog-tree" else {"items":[]}
  monkeypatch.setattr(vrcatalog,"_integration_get",request)
- assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":[]}
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[]
  assert asyncio.run(vrcatalog.get_catalog_brands(search="vill",page=2,page_size=25))=={"items":[]}
  assert calls==[("integration/catalog-tree",None),("integration/brands",{"search":"vill","page":2,"page_size":25})]
 
 def test_catalog_directories_are_cached_and_reused(monkeypatch):
  calls=0
  def request(_path,_params=None):
-  nonlocal calls;calls+=1;return {"items":["Посуда"]}
+  nonlocal calls;calls+=1;return [{"name":"Посуда"}]
  monkeypatch.setattr(vrcatalog,"_integration_get",request)
- assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
- assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[{"name":"Посуда"}]
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[{"name":"Посуда"}]
  assert calls==1
 
 def test_catalog_directory_uses_stale_value_on_timeout(monkeypatch):
- monkeypatch.setattr(vrcatalog,"_integration_get",lambda _path,_params=None:{"items":["Посуда"]})
- assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ monkeypatch.setattr(vrcatalog,"_integration_get",lambda _path,_params=None:[{"name":"Посуда"}])
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[{"name":"Посуда"}]
  key=next(iter(vrcatalog.directory_cache));_,value=vrcatalog.directory_cache[key]
  vrcatalog.directory_cache[key]=(time.monotonic()-vrcatalog.DIRECTORY_CACHE_TTL-1,value)
  monkeypatch.setattr(vrcatalog,"_integration_get",lambda *_args:(_ for _ in ()).throw(TimeoutError()))
- assert asyncio.run(vrcatalog.get_catalog_tree())=={"items":["Посуда"]}
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[{"name":"Посуда"}]
 
 def test_catalog_search_keeps_image_url_and_pagination(monkeypatch):
  payload={"items":[{"id":1,"code":"001","article":"A1","name":"Товар","image_url":"https://catalog/image.jpg","properties":[]}],"total":1,"page":1,"page_size":50,"pages":1}
@@ -231,3 +231,107 @@ def test_catalog_category_map_rejects_incomplete_response_shape(monkeypatch):
  monkeypatch.setattr(vrcatalog,"_integration_category_map",lambda _payload:{"data":[]})
  with pytest.raises(VrCatalogError,match="некорректную карту"):
   asyncio.run(vrcatalog.get_catalog_category_map([{"code":"1"}]))
+
+
+@pytest.mark.parametrize('loader', [vrcatalog.get_catalog_tree, vrcatalog.get_catalog_brands])
+def test_directory_refreshes_after_ttl(monkeypatch, loader):
+ from unittest.mock import Mock
+ clock=Mock(return_value=1000)
+ request=Mock(side_effect=[[], [{'name':'new'}]])
+ monkeypatch.setattr(vrcatalog.time,'monotonic',clock)
+ monkeypatch.setattr(vrcatalog,'_integration_get',request)
+ assert asyncio.run(loader())==[]
+ assert asyncio.run(loader())==[]
+ assert request.call_count==1
+ clock.return_value+=vrcatalog.DIRECTORY_CACHE_TTL
+ assert asyncio.run(loader())==[{'name':'new'}]
+ assert asyncio.run(loader())==[{'name':'new'}]
+ assert request.call_count==2
+
+@pytest.mark.parametrize('loader', [vrcatalog.get_catalog_tree, vrcatalog.get_catalog_brands])
+@pytest.mark.parametrize('age', [None, 301, 86400])
+@pytest.mark.parametrize('error', [TimeoutError('secret-token https://user:password@example.test'), ConnectionError('temporary'), ValueError('invalid JSON')])
+def test_directory_errors_respect_stale_window(monkeypatch, caplog, loader, age, error):
+ from unittest.mock import Mock
+ request=Mock(return_value=[])
+ monkeypatch.setattr(vrcatalog,'_integration_get',request)
+ if age is not None:
+  assert asyncio.run(loader())==[]
+  key=next(iter(vrcatalog.directory_cache))
+  vrcatalog.directory_cache[key]=(time.monotonic()-age,[])
+  saved=vrcatalog.directory_cache[key]
+ request.side_effect=error
+ if age==301:
+  assert asyncio.run(loader())==[]
+  assert vrcatalog.directory_cache[key]==saved
+  assert 'устаревший кеш' in caplog.text
+ else:
+  with pytest.raises(VrCatalogError,match='vrcatalog недоступен') as raised:
+   asyncio.run(loader())
+  assert 'secret-token' not in str(raised.value)
+  if age is None:assert not vrcatalog.directory_cache
+ assert 'secret-token' not in caplog.text
+ assert 'user:password' not in caplog.text
+ request.side_effect=None
+ request.return_value=[{'name':'recovered'}]
+ assert asyncio.run(loader())==[{'name':'recovered'}]
+
+@pytest.mark.parametrize('payload', [None, {}, {'items':[]}, 'invalid', 42])
+@pytest.mark.parametrize('stale', [False, True])
+def test_invalid_tree_never_poison_cache(monkeypatch, payload, stale):
+ from unittest.mock import Mock
+ request=Mock(return_value=[])
+ monkeypatch.setattr(vrcatalog,'_integration_get',request)
+ if stale:
+  assert asyncio.run(vrcatalog.get_catalog_tree())==[]
+  key=next(iter(vrcatalog.directory_cache))
+  vrcatalog.directory_cache[key]=(time.monotonic()-vrcatalog.DIRECTORY_CACHE_TTL-1,[])
+  saved=vrcatalog.directory_cache[key]
+ request.return_value=payload
+ if stale:
+  assert asyncio.run(vrcatalog.get_catalog_tree())==[]
+  assert vrcatalog.directory_cache[key]==saved
+ else:
+  with pytest.raises(VrCatalogError,match='некорректное дерево каталога'):
+   asyncio.run(vrcatalog.get_catalog_tree())
+  assert not vrcatalog.directory_cache
+ request.return_value=[{'name':'valid'}]
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[{'name':'valid'}]
+
+@pytest.mark.parametrize('loader', [vrcatalog.get_catalog_tree, vrcatalog.get_catalog_brands])
+def test_concurrent_directory_calls_share_request(monkeypatch, loader):
+ from unittest.mock import AsyncMock
+ async def scenario():
+  started=asyncio.Event();release=asyncio.Event()
+  async def request(*args):
+   started.set()
+   await release.wait()
+   return []
+  worker=AsyncMock(side_effect=request)
+  monkeypatch.setattr(vrcatalog.asyncio,'to_thread',worker)
+  first=asyncio.create_task(loader())
+  await started.wait()
+  others=[asyncio.create_task(loader()) for _ in range(5)]
+  await asyncio.sleep(0)
+  release.set()
+  assert await asyncio.gather(first,*others)==[[]]*6
+  assert worker.await_count==1
+ asyncio.run(scenario())
+
+
+def test_brand_cache_keys_include_search_and_pagination(monkeypatch):
+ from unittest.mock import Mock
+ request=Mock(return_value={'items':[]})
+ monkeypatch.setattr(vrcatalog,'_integration_get',request)
+ async def scenario():
+  for params in ({}, {'search':'VR'}, {'page':2}, {'page_size':25}):
+   assert await vrcatalog.get_catalog_brands(**params)=={'items':[]}
+   assert await vrcatalog.get_brands(**params)=={'items':[]}
+ asyncio.run(scenario())
+ assert request.call_count==4
+ assert [call.args[1] for call in request.call_args_list]==[
+  {'search':'','page':1,'page_size':100},
+  {'search':'VR','page':1,'page_size':100},
+  {'search':'','page':2,'page_size':100},
+  {'search':'','page':1,'page_size':25},
+ ]

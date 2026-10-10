@@ -140,7 +140,7 @@ def _integration_get(path:str,params:dict|None=None):
  request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/{path.lstrip('/')}{query}",headers=headers,method="GET")
  with urlopen(request,timeout=30) as response:return json.load(response)
 
-async def _cached_integration_get(path:str,params:dict|None=None):
+async def _cached_integration_get(path:str,params:dict|None=None,*,validate=None):
  key=json.dumps([path,sorted((params or {}).items())],ensure_ascii=False,separators=(",",":"))
  now=time.monotonic();entry=directory_cache.get(key)
  if entry and now-entry[0]<DIRECTORY_CACHE_TTL:
@@ -151,12 +151,15 @@ async def _cached_integration_get(path:str,params:dict|None=None):
    now=time.monotonic();entry=directory_cache.get(key)
    if entry and now-entry[0]<DIRECTORY_CACHE_TTL:
     directory_cache.move_to_end(key);return entry[1]
-   try:result=await asyncio.to_thread(_integration_get,path,params)
+   try:
+    result=await asyncio.to_thread(_integration_get,path,params)
+    if validate is not None:validate(result)
    except Exception as exc:
     if entry and now-entry[0]<DIRECTORY_CACHE_STALE_TTL:
      logger.warning("CatalogVR: использован устаревший кеш справочника %s после %s",path,type(exc).__name__)
      return entry[1]
-    raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+    if isinstance(exc,VrCatalogError):raise
+    raise VrCatalogError(f"vrcatalog недоступен: {type(exc).__name__}") from exc
    directory_cache[key]=(time.monotonic(),result);directory_cache.move_to_end(key)
    while len(directory_cache)>DIRECTORY_CACHE_MAX_ENTRIES:directory_cache.popitem(last=False)
    return result
@@ -167,33 +170,18 @@ async def get_product_filters():
  return await _cached_integration_get("integration/product-filters")
 
 async def get_catalog_tree():
- return await _cached_integration_get("integration/catalog-tree")
+ def validate(payload):
+  if not isinstance(payload,list):raise VrCatalogError("vrcatalog вернул некорректное дерево каталога")
+ return await _cached_integration_get("integration/catalog-tree",validate=validate)
 
 async def get_catalog_brands(*,search:str="",page:int=1,page_size:int=100):
  return await _cached_integration_get("integration/brands",{"search":search,"page":page,"page_size":page_size})
 
-async def get_catalog_tree():
- try:return await asyncio.to_thread(_integration_get,"integration/catalog-tree")
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
-async def get_catalog_brands(*,search:str="",page:int=1,page_size:int=100):
- try:return await asyncio.to_thread(_integration_get,"integration/brands",{"search":search,"page":page,"page_size":page_size})
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
-
 async def get_product_filter_options(filter_key:str,*,search:str="",page:int=1,page_size:int=100):
  return await _cached_integration_get(f"integration/product-filters/{quote(filter_key,safe='')}/options",{"search":search,"page":page,"page_size":page_size})
 
-async def get_catalog_tree():
- global catalog_tree_cache
- if catalog_tree_cache and time.monotonic()-catalog_tree_cache[0]<CATALOG_TREE_CACHE_TTL:return catalog_tree_cache[1]
- try:payload=await asyncio.to_thread(_integration_get,"integration/catalog-tree")
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
- if not isinstance(payload,list):raise VrCatalogError("vrcatalog вернул некорректное дерево каталога")
- catalog_tree_cache=(time.monotonic(),payload);return payload
-
 async def get_brands(*,search:str="",page:int=1,page_size:int=100):
- try:return await asyncio.to_thread(_integration_get,"integration/brands",{"search":search,"page":page,"page_size":page_size})
- except Exception as exc:raise VrCatalogError(f"vrcatalog недоступен: {exc}") from exc
+ return await get_catalog_brands(search=search,page=page,page_size=page_size)
 
 async def search_catalog_products(*,filters:dict,page:int=1,page_size:int=500,search:str="",sort_by:str|None=None,sort_dir:str|None=None):
  payload={"filters":filters,"page":page,"page_size":page_size}
