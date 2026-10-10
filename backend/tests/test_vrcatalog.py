@@ -335,3 +335,97 @@ def test_brand_cache_keys_include_search_and_pagination(monkeypatch):
   {'search':'','page':2,'page_size':100},
   {'search':'','page':1,'page_size':25},
  ]
+
+@pytest.mark.parametrize('payload', [[None], [123], ['bad'], [{'name':'root','children':{}}], [{'name':'root','children':[None]}]])
+def test_invalid_tree_nodes_do_not_enter_directory_cache(monkeypatch,payload):
+ monkeypatch.setattr(vrcatalog,'_integration_get',lambda *_args:payload)
+ with pytest.raises(VrCatalogError,match='некорректное дерево'):
+  asyncio.run(vrcatalog.get_catalog_tree())
+ assert not vrcatalog.directory_cache
+ assert not vrcatalog.directory_locks and not vrcatalog.directory_lock_users
+
+
+def test_valid_nested_tree_keeps_original_structure(monkeypatch):
+ payload=[{'id':'001','name':'root','children':[{'value':'0002','name':'child','items':[]}]}]
+ monkeypatch.setattr(vrcatalog,'_integration_get',lambda *_args:payload)
+ assert asyncio.run(vrcatalog.get_catalog_tree()) is payload
+
+
+def test_transport_catalog_error_cannot_expose_source_exception(monkeypatch,caplog):
+ def request(*_args):raise VrCatalogError('SECRET_TOKEN https://user:password@example.test')
+ monkeypatch.setattr(vrcatalog,'_integration_get',request)
+ with pytest.raises(VrCatalogError) as raised:
+  asyncio.run(vrcatalog.get_catalog_tree())
+ assert 'SECRET_TOKEN' not in str(raised.value)
+ assert 'SECRET_TOKEN' not in caplog.text
+ assert raised.value.__cause__ is None
+
+
+def test_cancelled_directory_request_waits_for_native_thread(monkeypatch):
+ import threading
+ async def scenario():
+  entered=threading.Event();release=threading.Event();calls=[]
+  def request(*_args):
+   calls.append(True);entered.set();release.wait(5);return []
+  monkeypatch.setattr(vrcatalog,'_integration_get',request)
+  first=asyncio.create_task(vrcatalog.get_catalog_tree())
+  while not entered.is_set():await asyncio.sleep(0.001)
+  first.cancel()
+  second=asyncio.create_task(vrcatalog.get_catalog_tree())
+  await asyncio.sleep(0.01)
+  assert len(calls)==1 and not first.done()
+  release.set()
+  with pytest.raises(asyncio.CancelledError):await first
+  assert await second==[]
+  assert not vrcatalog.directory_locks and not vrcatalog.directory_lock_users
+ asyncio.run(scenario())
+
+@pytest.mark.parametrize('payload',[None,{},'bad',{'items':None},[123]])
+def test_invalid_brands_are_not_cached(monkeypatch,payload):
+ monkeypatch.setattr(vrcatalog,'_integration_get',lambda *_args:payload)
+ with pytest.raises(VrCatalogError,match='некорректный справочник'):
+  asyncio.run(vrcatalog.get_catalog_brands())
+ assert not vrcatalog.directory_cache
+
+
+def test_stale_expiry_checked_after_http_failure(monkeypatch):
+ from unittest.mock import Mock
+ clock=Mock(return_value=1000)
+ monkeypatch.setattr(vrcatalog.time,'monotonic',clock)
+ monkeypatch.setattr(vrcatalog,'_integration_get',lambda *_args:[])
+ assert asyncio.run(vrcatalog.get_catalog_tree())==[]
+ clock.return_value=1000+vrcatalog.DIRECTORY_CACHE_STALE_TTL-1
+ def failed(*_args):
+  clock.return_value+=2
+  raise TimeoutError()
+ monkeypatch.setattr(vrcatalog,'_integration_get',failed)
+ with pytest.raises(VrCatalogError):asyncio.run(vrcatalog.get_catalog_tree())
+
+
+@pytest.mark.parametrize('stale',[False,True])
+def test_concurrent_failed_refresh_is_shared_without_negative_cache(monkeypatch,stale):
+ from unittest.mock import AsyncMock
+ async def scenario():
+  started=asyncio.Event();release=asyncio.Event()
+  if stale:
+   monkeypatch.setattr(vrcatalog,'_integration_get',lambda *_args:[])
+   assert await vrcatalog.get_catalog_tree()==[]
+   key=next(iter(vrcatalog.directory_cache))
+   vrcatalog.directory_cache[key]=(time.monotonic()-301,[])
+  async def failed(*args):
+   started.set();await release.wait();raise TimeoutError('SECRET_TOKEN')
+  request=AsyncMock(side_effect=failed)
+  monkeypatch.setattr(vrcatalog.asyncio,'to_thread',request)
+  first=asyncio.create_task(vrcatalog.get_catalog_tree())
+  await started.wait()
+  others=[asyncio.create_task(vrcatalog.get_catalog_tree()) for _ in range(5)]
+  await asyncio.sleep(0);await asyncio.sleep(0)
+  release.set()
+  result=await asyncio.gather(first,*others,return_exceptions=True)
+  assert request.await_count==1
+  assert all(value==[] if stale else isinstance(value,VrCatalogError) for value in result)
+  assert not vrcatalog.directory_locks and not vrcatalog.directory_errors and not vrcatalog.directory_lock_users
+  request.side_effect=None;request.return_value=[]
+  assert await vrcatalog.get_catalog_tree()==[]
+  assert request.await_count==2  # A new request can retry, no persistent negative cache.
+ asyncio.run(scenario())
