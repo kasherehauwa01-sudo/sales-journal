@@ -1,0 +1,380 @@
+{
+  "two_overlapping_periods": {
+    "summary": [
+      {
+        "variant": "before",
+        "median_ms": 6285.849268999982,
+        "min_ms": 5747.0281889999915,
+        "max_ms": 6304.277475999981,
+        "sql_queries": 294,
+        "peak_rss_bytes": 104472576,
+        "tracemalloc_peak_bytes": 40991760
+      },
+      {
+        "variant": "500",
+        "median_ms": 2755.970015999992,
+        "min_ms": 2740.6551509999417,
+        "max_ms": 2941.667898999981,
+        "sql_queries": 74,
+        "peak_rss_bytes": 111218688,
+        "tracemalloc_peak_bytes": 45774138
+      },
+      {
+        "variant": "1000",
+        "median_ms": 1083.5872069999368,
+        "min_ms": 1069.4693050000978,
+        "max_ms": 1086.8273419999923,
+        "sql_queries": 37,
+        "peak_rss_bytes": 112861184,
+        "tracemalloc_peak_bytes": 46827012
+      }
+    ],
+    "samples": [
+      {
+        "variant": "before",
+        "traced": false,
+        "elapsed_ms": 5747.0281889999915,
+        "sql_queries": 294,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58560512,
+        "process_peak_rss_bytes": 104251392,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "before",
+        "traced": false,
+        "elapsed_ms": 6304.277475999981,
+        "sql_queries": 294,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58548224,
+        "process_peak_rss_bytes": 104423424,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "before",
+        "traced": false,
+        "elapsed_ms": 6285.849268999982,
+        "sql_queries": 294,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58540032,
+        "process_peak_rss_bytes": 104472576,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "before",
+        "traced": true,
+        "elapsed_ms": 16016.51978000001,
+        "sql_queries": 294,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 148307968,
+        "tracemalloc_peak_bytes": 40991760,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": false,
+        "elapsed_ms": 2740.6551509999417,
+        "sql_queries": 74,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 111218688,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": false,
+        "elapsed_ms": 2755.970015999992,
+        "sql_queries": 74,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58544128,
+        "process_peak_rss_bytes": 110632960,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": false,
+        "elapsed_ms": 2941.667898999981,
+        "sql_queries": 74,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58552320,
+        "process_peak_rss_bytes": 110718976,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": true,
+        "elapsed_ms": 6567.750429999933,
+        "sql_queries": 74,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58568704,
+        "process_peak_rss_bytes": 158089216,
+        "tracemalloc_peak_bytes": 45774138,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": false,
+        "elapsed_ms": 1086.8273419999923,
+        "sql_queries": 37,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58552320,
+        "process_peak_rss_bytes": 111595520,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": false,
+        "elapsed_ms": 1083.5872069999368,
+        "sql_queries": 37,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 112861184,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": false,
+        "elapsed_ms": 1069.4693050000978,
+        "sql_queries": 37,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 112545792,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": true,
+        "elapsed_ms": 6354.637212999933,
+        "sql_queries": 37,
+        "input_rows": 73412,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 160231424,
+        "tracemalloc_peak_bytes": 46827012,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      }
+    ]
+  },
+  "one_period": {
+    "summary": [
+      {
+        "variant": "before",
+        "median_ms": 2727.0740259999684,
+        "min_ms": 2723.0042009999806,
+        "max_ms": 2765.519005999977,
+        "sql_queries": 147,
+        "peak_rss_bytes": 104046592,
+        "tracemalloc_peak_bytes": 40564012
+      },
+      {
+        "variant": "500",
+        "median_ms": 2465.87810099993,
+        "min_ms": 2421.212092000019,
+        "max_ms": 2490.1987680000275,
+        "sql_queries": 74,
+        "peak_rss_bytes": 110505984,
+        "tracemalloc_peak_bytes": 45691170
+      },
+      {
+        "variant": "1000",
+        "median_ms": 934.0987189999623,
+        "min_ms": 920.2847120000115,
+        "max_ms": 943.5214400000405,
+        "sql_queries": 37,
+        "peak_rss_bytes": 111673344,
+        "tracemalloc_peak_bytes": 46368020
+      }
+    ],
+    "samples": [
+      {
+        "variant": "before",
+        "traced": false,
+        "elapsed_ms": 2727.0740259999684,
+        "sql_queries": 147,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58552320,
+        "process_peak_rss_bytes": 103620608,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "before",
+        "traced": false,
+        "elapsed_ms": 2723.0042009999806,
+        "sql_queries": 147,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58560512,
+        "process_peak_rss_bytes": 104046592,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "before",
+        "traced": false,
+        "elapsed_ms": 2765.519005999977,
+        "sql_queries": 147,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58548224,
+        "process_peak_rss_bytes": 103964672,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "before",
+        "traced": true,
+        "elapsed_ms": 7283.715953999945,
+        "sql_queries": 147,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 146739200,
+        "tracemalloc_peak_bytes": 40564012,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": false,
+        "elapsed_ms": 2421.212092000019,
+        "sql_queries": 74,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58548224,
+        "process_peak_rss_bytes": 110288896,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": false,
+        "elapsed_ms": 2465.87810099993,
+        "sql_queries": 74,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58548224,
+        "process_peak_rss_bytes": 110505984,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": false,
+        "elapsed_ms": 2490.1987680000275,
+        "sql_queries": 74,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58560512,
+        "process_peak_rss_bytes": 110297088,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "500",
+        "traced": true,
+        "elapsed_ms": 7104.5915180000065,
+        "sql_queries": 74,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58560512,
+        "process_peak_rss_bytes": 157396992,
+        "tracemalloc_peak_bytes": 45691170,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": false,
+        "elapsed_ms": 943.5214400000405,
+        "sql_queries": 37,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58548224,
+        "process_peak_rss_bytes": 111673344,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": false,
+        "elapsed_ms": 920.2847120000115,
+        "sql_queries": 37,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58552320,
+        "process_peak_rss_bytes": 111521792,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": false,
+        "elapsed_ms": 934.0987189999623,
+        "sql_queries": 37,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58556416,
+        "process_peak_rss_bytes": 111296512,
+        "tracemalloc_peak_bytes": null,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      },
+      {
+        "variant": "1000",
+        "traced": true,
+        "elapsed_ms": 5423.025958000039,
+        "sql_queries": 37,
+        "input_rows": 36706,
+        "unique_identities": 36706,
+        "result_keys": 36705,
+        "rss_before_bytes": 58552320,
+        "process_peak_rss_bytes": 159309824,
+        "tracemalloc_peak_bytes": 46368020,
+        "checksum": "775745fff07e3c8c38a49c170d205ba8fbef89c63cc69bbf46bd8d10b27c7720"
+      }
+    ]
+  }
+}

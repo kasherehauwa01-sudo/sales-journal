@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import logging
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from itertools import islice
@@ -10,7 +12,8 @@ from sqlalchemy import func, select
 from app.services.product_analytics_runtime import ensure_headroom
 from app.models import CatalogLookup, CatalogProduct, CatalogSyncState, SaleItem
 
-READ_BATCH_SIZE = 250
+READ_BATCH_SIZE = 1000
+log = logging.getLogger(__name__)
 STALE_DAYS = 30  # Diagnostic only; never silently discard successfully synced data.
 
 
@@ -70,38 +73,95 @@ def projection(lookup, product):
 
 
 async def local_catalog(rows, db):
+    """Resolve each identity once inside the caller's existing MVCC snapshot."""
+    started = time.perf_counter()
+    queries = row_count = 0
     iterator = iter(rows)
     result = {}
-    while batch := list(islice(iterator, READ_BATCH_SIZE)):
-        ensure_headroom()
-        keys = {identity(row.get("code"), row.get("article")) for row in batch}
-        records = (
-            await db.execute(
-                select(CatalogLookup, CatalogProduct)
-                .outerjoin(
-                    CatalogProduct,
-                    CatalogProduct.product_id == CatalogLookup.product_id,
+    # Keep the first result projection, not a second copy of all attributes.
+    # Its owning report key lets aliases receive independent dictionaries.
+    # Binary SHA bytes save 48 bytes per memo key versus the database hex text.
+    # SQL still uses the exact existing hexadecimal identity representation.
+    resolved = {}
+    try:
+        while batch := list(islice(iterator, READ_BATCH_SIZE)):
+            ensure_headroom()
+            keyed = [
+                (
+                    row["key"],
+                    bytes.fromhex(identity(row.get("code"), row.get("article"))),
                 )
-                .where(CatalogLookup.identity.in_(keys))
-            )
-        ).all()
-        mapped = {lookup.identity: (lookup, product) for lookup, product in records}
-        for row in batch:
-            key = row["key"]
-            pair = mapped.get(
-                identity(row.get("code"), row.get("article")), (None, None)
-            )
-            info = projection(*pair)
-            previous = result.get(key)
-            # Conflicting raw pairs collapse to the old report key: never pick an
-            # arbitrary source product. Numeric aggregation behavior is unchanged.
-            if previous is not None and (
-                previous.get("product_id"),
-                previous["catalog_status"],
-            ) != (info.get("product_id"), info["catalog_status"]):
-                info = {"catalog_status": "ambiguous", "catalog_synced_at": None}
-            result[key] = info
-    return result
+                for row in batch
+            ]
+            row_count += len(keyed)
+            pending = {}
+            for key, digest in keyed:
+                if digest not in resolved:
+                    pending.setdefault(digest, key)
+            if pending:
+                queries += 1
+                records = (
+                    await db.execute(
+                        select(
+                            CatalogLookup.identity,
+                            CatalogLookup.status,
+                            CatalogProduct.product_id,
+                            CatalogProduct.synced_at,
+                            CatalogProduct.brand,
+                            CatalogProduct.manufacturer,
+                            CatalogProduct.legacy_category,
+                            CatalogProduct.subcategory,
+                            CatalogProduct.material,
+                            CatalogProduct.horeca,
+                            CatalogProduct.category,
+                            CatalogProduct.category_id,
+                            CatalogProduct.image_url,
+                        )
+                        .select_from(CatalogLookup)
+                        .outerjoin(
+                            CatalogProduct,
+                            CatalogProduct.product_id == CatalogLookup.product_id,
+                        )
+                        .where(
+                            CatalogLookup.identity.in_(
+                                [digest.hex() for digest in pending]
+                            )
+                        )
+                    )
+                ).all()
+                for record in records:
+                    # Row attributes have the same names consumed by projection;
+                    # no ORM state or unused code/article/source timestamps.
+                    info = projection(
+                        record, record if record.product_id is not None else None
+                    )
+                    digest = bytes.fromhex(record.identity)
+                    resolved[digest] = (info, pending[digest])
+                for digest, owner in pending.items():
+                    if digest not in resolved:
+                        resolved[digest] = (projection(None, None), owner)
+            for key, digest in keyed:
+                info, owner = resolved[digest]
+                if key != owner:
+                    info = info.copy()
+                previous = result.get(key)
+                # Preserve the original conflict comparison and row order,
+                # including conflicts arriving in later pages.
+                if previous is not None and (
+                    previous.get("product_id"),
+                    previous["catalog_status"],
+                ) != (info.get("product_id"), info["catalog_status"]):
+                    info = {"catalog_status": "ambiguous", "catalog_synced_at": None}
+                result[key] = info
+        return result
+    finally:
+        fields = {
+            "local_catalog_rows": row_count,
+            "local_catalog_unique_identities": len(resolved),
+            "local_catalog_sql_queries": queries,
+            "local_catalog_elapsed_ms": (time.perf_counter() - started) * 1000,
+        }
+        log.info("local_catalog diagnostics %s", fields, extra=fields)
 
 
 def coverage(rows):
