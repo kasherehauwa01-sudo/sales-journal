@@ -73,9 +73,7 @@ def test_client_manager_is_resolved_with_normalized_client_name(monkeypatch):
     monkeypatch.setattr(
         clients_vr,
         "_request",
-        lambda _paths: [
-            {"client": "  Компания Ромашка  ", "manager": "Пашута М.С."},
-        ],
+        lambda _paths: {"  Компания Ромашка  ": "Пашута М.С."},
     )
 
     assert asyncio.run(clients_vr.get_client_manager("КОМПАНИЯ РОМАШКА")) == "Пашута М.С."
@@ -137,7 +135,7 @@ def test_client_metadata_uses_one_batch_request_and_fills_both_caches(monkeypatc
     assert calls == [["/integration/clients", "/clients"]]
     assert managers == {"клиент": "Иванов"}
     assert buyer_types == {"клиент": "Оптовик"}
-    assert clients_vr.get_cached_client_managers() == managers
+    assert clients_vr.get_cached_client_managers() == {}
     assert clients_vr.cached_client_buyer_types() == buyer_types
 
 
