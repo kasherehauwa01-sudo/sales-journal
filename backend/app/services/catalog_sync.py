@@ -5,6 +5,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
+
+from app.config import settings
+from app.services.vrcatalog import catalog_item_image_url
 
 from sqlalchemy import func, select, text, update
 from app.models import CatalogLookup, CatalogProduct, CatalogSyncState, SaleItem
@@ -92,6 +96,33 @@ async def _state(db):
     return state
 
 
+def sync_image_url(value):
+    """Normalize a link only; never fetch images or accept active URL schemes."""
+    if not value or not value.strip():
+        return None
+    value = value.strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in value) or "\\" in value:
+        return None
+    try:
+        # Reuse CatalogVR public-root normalization, then validate the result.
+        normalized = catalog_item_image_url(
+            {"image_url": value}, settings.vrcatalog_api_url
+        )
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or any(char.isspace() for char in normalized)
+        ):
+            return None
+        parsed.port  # Reject malformed ports without logging the input.
+        return normalized
+    except (ValueError, TypeError):
+        return None
+
+
 async def save_results(db, pending, results, cycle):
     """Apply a fully validated successful batch; callers commit data + checkpoint."""
     ids = {
@@ -131,6 +162,9 @@ async def save_results(db, pending, results, cycle):
             "horeca",
         ):
             setattr(product, field, getattr(incoming, field))
+        image = sync_image_url(incoming.image_url)
+        if image:
+            product.image_url = image
         product.source_updated_at = incoming.updated_at
         product.synced_at = now()
     # Flush parents before assigning FK identities (also for unrelated ORM mappers).

@@ -74,6 +74,7 @@ class LookupProduct(BaseModel):
     material: StrictStr | None
     horeca: StrictBool
     updated_at: datetime
+    image_url: StrictStr | None = None
 
     @model_validator(mode="after")
     def timestamp(self):
