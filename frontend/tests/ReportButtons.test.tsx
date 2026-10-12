@@ -20,7 +20,7 @@ vi.mock("recharts", () => {
   return {
     ResponsiveContainer: Box,
     LineChart: Box,
-    BarChart: Box,
+    BarChart: ({children, data}: PropsWithChildren<{data: unknown}>) => <div data-testid="category-bars-data" data-rows={JSON.stringify(data)}>{children}</div>,
     PieChart: Box,
     CartesianGrid: N,
     Legend: N,
@@ -147,7 +147,7 @@ function fixture(path: string): unknown {
     return {
       period,
       previous_period: period,
-      year_comparison: {period, metrics, growth_drivers: [], decline_drivers: []},
+      year_comparison: {categories: [category], period, metrics, growth_drivers: [], decline_drivers: []},
       metrics,
       categories: [category],
       category_options: ["Категория1"],
@@ -593,7 +593,7 @@ it("category comparison switches are local and Today is absent", async () => {
   expect(screen.getAllByText(/Сравнение с аналогичным периодом в прошлом году:/)).toHaveLength(5);
   expect(screen.getAllByText(/Сравнение с прошлым периодом:/)).toHaveLength(5);
   const buttons = screen.getAllByRole("button", {name:"Предыдущий год"});
-  fireEvent.click(buttons[0]);fireEvent.click(buttons[1]);
+  fireEvent.click(buttons[1]);fireEvent.click(buttons[2]);
   expect(screen.getByText("Рост прошлого года")).toBeTruthy();
   expect(screen.getByText("Падение прошлого года")).toBeTruthy();
   expect(heavy).toHaveBeenCalledTimes(1);
@@ -621,4 +621,21 @@ it("category product opens scoped sales then sale card", async () => {
   expect(decodeURIComponent(url)).toContain("code=1");
   fireEvent.click(screen.getByRole("button",{name:"Открыть продажу DOC7"}));
   await screen.findByRole("dialog",{name:"Карточка продажи"});
+});
+
+
+it("category revenue chart switches year data without new requests", async () => {
+  const base = fixture("/reports/category-analytics") as Record<string, unknown>;
+  heavy.mockResolvedValueOnce(json({...base, year_comparison:{period:{start:"2025-01-01",end:"2025-01-10"},metrics,categories:[{...category,previous_revenue:75}],growth_drivers:[],decline_drivers:[]}}));
+  render(<CategoryAnalyticsReportPage />);
+  fireEvent.click(build());await finish(1);
+  const chart = () => JSON.parse(screen.getByTestId("category-bars-data").getAttribute("data-rows")!);
+  expect(chart()[0].previous_revenue).toBe(50);
+  fireEvent.click(screen.getAllByRole("button",{name:"Предыдущий год"})[0]);
+  expect(chart()[0].previous_revenue).toBe(75);
+  expect(chart()[0].current_revenue).toBe(100);
+  expect(screen.getByText(/аналогичным периодом прошлого года:/)).toBeTruthy();
+  fireEvent.click(screen.getAllByRole("button",{name:"Предыдущий период"})[0]);
+  expect(chart()[0].previous_revenue).toBe(50);
+  expect(heavy).toHaveBeenCalledTimes(1);
 });
