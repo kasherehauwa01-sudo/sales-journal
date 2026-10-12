@@ -12,11 +12,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.category_analytics import NOT_FOUND, UNCATEGORIZED, aggregate_categories, categorized_only, chart_structure, comparable_period, report_summary
+from app.services.category_analytics import (
+    NOT_FOUND,
+    UNCATEGORIZED,
+    aggregate_categories,
+    categorized_only,
+    chart_structure,
+    comparable_period,
+    report_summary,
+)
+from app.services.report_periods import previous_year_period
+from app.services.sales_dynamics_report import previous_period
 from app.services.clients_vr import ClientsVrError
 from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import default_grouping, effective_period
-from app.services.vrcatalog import CATALOG_CATEGORY_MAP_LIMIT, VrCatalogError, get_catalog_category_map
+from app.services.vrcatalog import (
+    CATALOG_CATEGORY_MAP_LIMIT,
+    VrCatalogError,
+    get_catalog_category_map,
+)
 
 router = APIRouter(prefix="/reports/category-analytics", tags=["Отчеты"])
 
@@ -35,15 +49,49 @@ async def _clients(db: AsyncSession, manager: str | None, buyer_type: str | None
     except ClientsVrError as exc: raise HTTPException(502, str(exc)) from exc
 
 
-async def _product_keys(db: AsyncSession, start: date, end: date, previous_start: date, previous_end: date, stores: list[str], clients: list[str] | None):
-    period = or_(and_(Sale.sale_date >= start, Sale.sale_date <= end), and_(Sale.sale_date >= previous_start, Sale.sale_date <= previous_end))
+async def _product_keys(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    previous_start: date,
+    previous_end: date,
+    stores: list[str],
+    clients: list[str] | None,
+    additional_period=None,
+):
+    period = or_(
+        and_(Sale.sale_date >= start, Sale.sale_date <= end),
+        and_(Sale.sale_date >= previous_start, Sale.sale_date <= previous_end),
+    )
+    if additional_period:
+        period = or_(
+            period,
+            and_(
+                Sale.sale_date >= additional_period[0],
+                Sale.sale_date <= additional_period[1],
+            ),
+        )
     conditions = [period]
-    if stores: conditions.append(Sale.department.in_(stores))
+    if stores:
+        conditions.append(Sale.department.in_(stores))
     if clients is not None:
         names = [name.strip().casefold() for name in clients if name.strip()]
-        conditions.append(func.lower(func.trim(Sale.client)).in_(names) if names else false())
-    rows = (await db.execute(select(SaleItem.code, SaleItem.article, func.max(SaleItem.name).label("name")).join(Sale).where(*conditions).group_by(SaleItem.code, SaleItem.article))).all()
-    return [{"code": row.code, "article": row.article, "name": row.name} for row in rows]
+        conditions.append(
+            func.lower(func.trim(Sale.client)).in_(names) if names else false()
+        )
+    rows = (
+        await db.execute(
+            select(
+                SaleItem.code, SaleItem.article, func.max(SaleItem.name).label("name")
+            )
+            .join(Sale)
+            .where(*conditions)
+            .group_by(SaleItem.code, SaleItem.article)
+        )
+    ).all()
+    return [
+        {"code": row.code, "article": row.article, "name": row.name} for row in rows
+    ]
 
 
 async def _catalog_map(products: list[dict]):
@@ -103,38 +151,187 @@ async def _scope_checks(db, start, end, stores, clients):
     return int(await db.scalar(query) or 0)
 
 
-async def _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category_filter, db):
-    if date_from > date_to: raise HTTPException(422, "Дата начала не может быть позже даты окончания")
+async def _scope(
+    date_from,
+    date_to,
+    period_kind,
+    stores,
+    manager,
+    buyer_type,
+    category_filter,
+    db,
+    comparison_mode="previous_period",
+    include_year=False,
+):
+    if date_from > date_to:
+        raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
     start, end, warning = effective_period(date_from, date_to, period_kind, today)
-    if start > end: raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
-    previous_start, previous_end = comparable_period(start, end)
+    if start > end:
+        raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
+    previous_start, previous_end = (
+        previous_year_period(start, end)
+        if comparison_mode == "previous_year"
+        else previous_period(start, end, period_kind)
+    )
+    year_start, year_end = previous_year_period(start, end)
     clients = await _clients(db, manager, buyer_type)
-    products = await _product_keys(db, start, end, previous_start, previous_end, stores, clients)
+    products = await _product_keys(
+        db,
+        start,
+        end,
+        previous_start,
+        previous_end,
+        stores,
+        clients,
+        (year_start, year_end) if include_year else None,
+    )
     mapping, catalog = await _catalog_map(products)
     category_map = await _mapping_table(db, mapping)
     current = await _category_rows(db, start, end, stores, clients, category_map)
-    previous = await _category_rows(db, previous_start, previous_end, stores, clients, category_map)
+    previous = await _category_rows(
+        db, previous_start, previous_end, stores, clients, category_map
+    )
     rows = categorized_only(aggregate_categories(current, previous))
-    if category_filter: rows = [row for row in rows if row["category"].casefold() == category_filter.strip().casefold()]
     if category_filter:
-        current_checks = next((row["checks"] for row in current if row["category"].casefold() == category_filter.strip().casefold()), 0)
-        previous_checks = next((row["checks"] for row in previous if row["category"].casefold() == category_filter.strip().casefold()), 0)
+        rows = [
+            row
+            for row in rows
+            if row["category"].casefold() == category_filter.strip().casefold()
+        ]
+    if category_filter:
+        current_checks = next(
+            (
+                row["checks"]
+                for row in current
+                if row["category"].casefold() == category_filter.strip().casefold()
+            ),
+            0,
+        )
+        previous_checks = next(
+            (
+                row["checks"]
+                for row in previous
+                if row["category"].casefold() == category_filter.strip().casefold()
+            ),
+            0,
+        )
     else:
         current_checks = await _scope_checks(db, start, end, stores, clients)
-        previous_checks = await _scope_checks(db, previous_start, previous_end, stores, clients)
-    return start, end, previous_start, previous_end, warning, clients, category_map, catalog, rows, current_checks, previous_checks
+        previous_checks = await _scope_checks(
+            db, previous_start, previous_end, stores, clients
+        )
+    base = (
+        start,
+        end,
+        previous_start,
+        previous_end,
+        warning,
+        clients,
+        category_map,
+        catalog,
+        rows,
+        current_checks,
+        previous_checks,
+    )
+    if include_year:
+        year = await _category_rows(
+            db, year_start, year_end, stores, clients, category_map
+        )
+        year_rows = categorized_only(aggregate_categories(current, year))
+        year_checks = await _scope_checks(db, year_start, year_end, stores, clients)
+        return (*base, year_rows, year_checks, year_start, year_end)
+    return base
 
 
 @router.get("")
-async def report(date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, category: str | None = None, db: AsyncSession = Depends(get_db)):
-    start, end, old_start, old_end, warning, _, _, _, all_rows, checks, old_checks = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, None, db)
-    options = sorted(row["category"] for row in all_rows)
-    rows = [row for row in all_rows if not category or row["category"].casefold() == category.strip().casefold()]
+async def report(
+    date_from: date,
+    date_to: date,
+    period_kind: str = "custom",
+    stores: list[str] = Query(default=[]),
+    manager: str | None = None,
+    buyer_type: str | None = None,
+    category: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    (
+        start,
+        end,
+        old_start,
+        old_end,
+        warning,
+        _,
+        _,
+        _,
+        all_rows,
+        checks,
+        old_checks,
+        year_rows,
+        year_checks,
+        year_start,
+        year_end,
+    ) = await _scope(
+        date_from,
+        date_to,
+        period_kind,
+        stores,
+        manager,
+        buyer_type,
+        None,
+        db,
+        include_year=True,
+    )
+    year_rows = [
+        row
+        for row in year_rows
+        if not category or row["category"].casefold() == category.strip().casefold()
+    ]
     if category:
-        checks = rows[0]["current_checks"] if rows else 0; old_checks = rows[0]["previous_checks"] if rows else 0
-    public_rows = [{key: value for key, value in row.items() if key != "products"} for row in rows]
-    return {"period": {"start": start, "end": end}, "previous_period": {"start": old_start, "end": old_end}, "warning": warning, "metrics": report_summary(rows, checks, old_checks), "categories": public_rows, "category_options": options, "structure": chart_structure(rows), "growth_drivers": sorted((row for row in public_rows if row["revenue_change"] > 0), key=lambda row: row["revenue_change"], reverse=True)[:5], "decline_drivers": sorted((row for row in public_rows if row["revenue_change"] < 0), key=lambda row: row["revenue_change"])[:5]}
+        year_checks = year_rows[0]["previous_checks"] if year_rows else 0
+    options = sorted(row["category"] for row in all_rows)
+    rows = [
+        row
+        for row in all_rows
+        if not category or row["category"].casefold() == category.strip().casefold()
+    ]
+    if category:
+        checks = rows[0]["current_checks"] if rows else 0
+        old_checks = rows[0]["previous_checks"] if rows else 0
+    public_rows = [
+        {key: value for key, value in row.items() if key != "products"} for row in rows
+    ]
+    return {
+        "period": {"start": start, "end": end},
+        "previous_period": {"start": old_start, "end": old_end},
+        "warning": warning,
+        "metrics": report_summary(rows, checks, old_checks),
+        "year_comparison": {
+            "period": {"start": year_start, "end": year_end},
+            "metrics": report_summary(year_rows, checks, year_checks),
+            "growth_drivers": sorted(
+                (row for row in year_rows if row["revenue_change"] > 0),
+                key=lambda row: row["revenue_change"],
+                reverse=True,
+            )[:5],
+            "decline_drivers": sorted(
+                (row for row in year_rows if row["revenue_change"] < 0),
+                key=lambda row: row["revenue_change"],
+            )[:5],
+        },
+        "categories": public_rows,
+        "category_options": options,
+        "structure": chart_structure(rows),
+        "growth_drivers": sorted(
+            (row for row in public_rows if row["revenue_change"] > 0),
+            key=lambda row: row["revenue_change"],
+            reverse=True,
+        )[:5],
+        "decline_drivers": sorted(
+            (row for row in public_rows if row["revenue_change"] < 0),
+            key=lambda row: row["revenue_change"],
+        )[:5],
+    }
 
 
 async def _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name):
@@ -154,13 +351,72 @@ async def _product_details(db, start, end, old_start, old_end, stores, clients, 
 
 
 @router.get("/{category_name}/details")
-async def details(category_name: str, date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, group_by: str | None = Query(None, pattern="^(day|week|month)$"), db: AsyncSession = Depends(get_db)):
-    start, end, old_start, old_end, _, clients, category_map, _, rows, _, _ = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category_name, db)
-    if not rows: raise HTTPException(404, "Категория не найдена")
-    products = await _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name)
-    category_map, join, category = _mapped_items(category_map); grouping = group_by or default_grouping(start, end); bucket = func.date_trunc(grouping, Sale.sale_date).label("period")
-    points = (await db.execute(select(bucket, func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"), func.sum(SaleItem.quantity).label("units")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients), category == category_name).group_by(bucket).order_by(bucket))).all()
-    return {"category": {key: value for key, value in rows[0].items() if key != "products"}, "products": products, "group_by": grouping, "points": [{"period": row.period.date(), "revenue": float(row.revenue or 0), "units": float(row.units or 0)} for row in points]}
+async def details(
+    category_name: str,
+    date_from: date,
+    date_to: date,
+    comparison_mode: str = Query(
+        "previous_period", pattern="^(previous_period|previous_year)$"
+    ),
+    period_kind: str = "custom",
+    stores: list[str] = Query(default=[]),
+    manager: str | None = None,
+    buyer_type: str | None = None,
+    group_by: str | None = Query(None, pattern="^(day|week|month)$"),
+    db: AsyncSession = Depends(get_db),
+):
+    start, end, old_start, old_end, _, clients, category_map, _, rows, _, _ = (
+        await _scope(
+            date_from,
+            date_to,
+            period_kind,
+            stores,
+            manager,
+            buyer_type,
+            category_name,
+            db,
+            comparison_mode=comparison_mode,
+        )
+    )
+    if not rows:
+        raise HTTPException(404, "Категория не найдена")
+    products = await _product_details(
+        db, start, end, old_start, old_end, stores, clients, category_map, category_name
+    )
+    category_map, join, category = _mapped_items(category_map)
+    grouping = group_by or default_grouping(start, end)
+    bucket = func.date_trunc(grouping, Sale.sale_date).label("period")
+    points = (
+        await db.execute(
+            select(
+                bucket,
+                func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"),
+                func.sum(SaleItem.quantity).label("units"),
+            )
+            .select_from(SaleItem)
+            .join(Sale)
+            .outerjoin(category_map, join)
+            .where(
+                *_sale_conditions(start, end, stores, clients),
+                category == category_name,
+            )
+            .group_by(bucket)
+            .order_by(bucket)
+        )
+    ).all()
+    return {
+        "category": {key: value for key, value in rows[0].items() if key != "products"},
+        "products": products,
+        "group_by": grouping,
+        "points": [
+            {
+                "period": row.period.date(),
+                "revenue": float(row.revenue or 0),
+                "units": float(row.units or 0),
+            }
+            for row in points
+        ],
+    }
 
 
 def _sheet(book, title, headers, rows):
@@ -181,3 +437,75 @@ async def export(date_from: date, date_to: date, period_kind: str = "custom", st
     _sheet(book, "Категории", headers, category_rows); _sheet(book, "Драйверы роста", headers, [row for row in category_rows if row[7] > 0]); _sheet(book, "Категории с падением", headers, [row for row in category_rows if row[7] < 0]); _sheet(book, "Товары", ["Категория", "Артикул", "Код", "Наименование", "Выручка", "Прошлая выручка", "Изменение", "Продано", "Чеков", "Доля"], [[row[key] for key in ("category", "article", "code", "name", "revenue", "previous_revenue", "revenue_change", "units", "checks", "share")] for row in products])
     output = BytesIO(); book.save(output)
     return Response(output.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=category-analytics.xlsx"})
+
+
+@router.get("/product-sales/list")
+async def product_sales(
+    date_from: date,
+    date_to: date,
+    period_kind: str = "custom",
+    code: str | None = None,
+    article: str | None = None,
+    name: str | None = None,
+    stores: list[str] = Query(default=[]),
+    manager: str | None = None,
+    buyer_type: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    if date_from > date_to:
+        raise HTTPException(422, "Дата начала не может быть позже даты окончания")
+    start, end, _ = effective_period(
+        date_from,
+        date_to,
+        period_kind,
+        datetime.now(ZoneInfo(settings.autoload_timezone)).date(),
+    )
+    clients = await _clients(db, manager, buyer_type)
+    if code and code.strip():
+        product = func.lower(func.trim(SaleItem.code)) == code.strip().casefold()
+    elif article and article.strip():
+        product = and_(
+            or_(SaleItem.code.is_(None), func.trim(SaleItem.code) == ""),
+            func.lower(func.trim(SaleItem.article)) == article.strip().casefold(),
+        )
+    elif name and name.strip():
+        product = and_(
+            or_(SaleItem.code.is_(None), func.trim(SaleItem.code) == ""),
+            or_(SaleItem.article.is_(None), func.trim(SaleItem.article) == ""),
+            SaleItem.name == name,
+        )
+    else:
+        raise HTTPException(422, "Не указан товар")
+    matches = select(SaleItem.id).where(SaleItem.sale_id == Sale.id, product).exists()
+    conditions = [*_sale_conditions(start, end, stores, clients), matches]
+    total = int(
+        await db.scalar(select(func.count()).select_from(Sale).where(*conditions)) or 0
+    )
+    rows = (
+        await db.execute(
+            select(
+                Sale.id,
+                Sale.sale_date,
+                Sale.document_number,
+                Sale.client,
+                Sale.department,
+                Sale.total_amount,
+                Sale.base_amount,
+                Sale.discount_percent,
+                Sale.author,
+                Sale.price_type,
+            )
+            .where(*conditions)
+            .order_by(Sale.sale_date.desc(), Sale.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return {
+        "items": [dict(row._mapping) for row in rows],
+        "page": page,
+        "pages": max(1, (total + page_size - 1) // page_size),
+        "total": total,
+    }

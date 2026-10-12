@@ -147,6 +147,7 @@ function fixture(path: string): unknown {
     return {
       period,
       previous_period: period,
+      year_comparison: {period, metrics, growth_drivers: [], decline_drivers: []},
       metrics,
       categories: [category],
       category_options: ["Категория1"],
@@ -582,3 +583,42 @@ for (const page of pages.filter((p) => p.name !== "Динамика"))
     await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:report");
   });
+
+it("category comparison switches are local and Today is absent", async () => {
+  const base = fixture("/reports/category-analytics") as Record<string, unknown>;
+  heavy.mockResolvedValueOnce(json({...base, growth_drivers:[category], year_comparison:{period,metrics,growth_drivers:[{...category,category:"Рост прошлого года"}],decline_drivers:[{...category,category:"Падение прошлого года",revenue_change:-50}]}}));
+  render(<CategoryAnalyticsReportPage />);
+  expect(screen.queryByRole("button", {name:"Сегодня"})).toBeNull();
+  fireEvent.click(build()); await finish(1);
+  expect(screen.getAllByText(/Сравнение с аналогичным периодом в прошлом году:/)).toHaveLength(5);
+  expect(screen.getAllByText(/Сравнение с прошлым периодом:/)).toHaveLength(5);
+  const buttons = screen.getAllByRole("button", {name:"Предыдущий год"});
+  fireEvent.click(buttons[0]);fireEvent.click(buttons[1]);
+  expect(screen.getByText("Рост прошлого года")).toBeTruthy();
+  expect(screen.getByText("Падение прошлого года")).toBeTruthy();
+  expect(heavy).toHaveBeenCalledTimes(1);
+});
+
+it("category product opens scoped sales then sale card", async () => {
+  const original = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((url:string, init?:RequestInit) => {
+    if (String(url).includes("/product-sales/list")) return Promise.resolve(json({items:[{id:7,sale_date:"2026-01-05",document_number:"DOC7",department:"Магазин1",total_amount:"100",base_amount:"120",discount_percent:"10",author:"Автор",price_type:"Розничная"}],page:1,pages:1,total:1}));
+    if (String(url).endsWith("/sales/7")) return Promise.resolve(json({id:7,sale_date:"2026-01-05",document_number:"DOC7",department:"Магазин1",total_amount:"100",items:[]}));
+    return original(url,init);
+  });
+  render(<CategoryAnalyticsReportPage />);
+  await screen.findByRole("option", {name:"Менеджер1"});
+  fireEvent.change(screen.getByLabelText("Менеджер"),{target:{value:"Менеджер1"}});
+  fireEvent.click(build());await finish(1);
+  fireEvent.change(screen.getByLabelText("Менеджер"),{target:{value:"Менеджер2"}});
+  fireEvent.click(screen.getByText("Категория1",{selector:"b"}));
+  await screen.findByText("Детализация категории");
+  fireEvent.keyDown(screen.getByRole("button",{name:"Продажи товара Товар1"}),{key:"Enter"});
+  await screen.findByRole("dialog",{name:"Продажи товара"});
+  expect(screen.getByText("Базовая")).toBeTruthy();
+  const [url] = fetchMock.mock.calls.find(([url]) => String(url).includes("/product-sales/list"))!;
+  expect(decodeURIComponent(url)).toContain("manager=Менеджер1");
+  expect(decodeURIComponent(url)).toContain("code=1");
+  fireEvent.click(screen.getByRole("button",{name:"Открыть продажу DOC7"}));
+  await screen.findByRole("dialog",{name:"Карточка продажи"});
+});
