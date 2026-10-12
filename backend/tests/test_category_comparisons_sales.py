@@ -79,6 +79,8 @@ def test_two_comparisons_share_catalog_and_include_year_products(monkeypatch):
         "start": date(2026, 8, 1),
         "end": date(2026, 8, 31),
     }
+    assert result["year_comparison"]["categories"][0]["previous_revenue"] == 100
+    assert "products" not in result["year_comparison"]["categories"][0]
     assert len(periods) == 3
 
 

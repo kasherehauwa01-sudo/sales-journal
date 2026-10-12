@@ -13,7 +13,7 @@ import {date,money,number,percent} from '../utils/format';
 type PeriodKind='yesterday'|'current_week'|'previous_week'|'current_month'|'previous_month'|'custom';
 type Comparison={current:number;previous:number;difference:number;change_percent:number|null};
 type CategoryRow={category:string;current_revenue:number;previous_revenue:number;current_units:number;current_checks:number;current_average_check:number;current_share:number;previous_share:number;share_change_pp:number;revenue_change:number;revenue_change_percent:number|null;contribution_percent:number|null;contribution:string};
-type Report={period:{start:string;end:string};previous_period:{start:string;end:string};year_comparison:{period:{start:string;end:string};metrics:Record<string,Comparison>;growth_drivers:CategoryRow[];decline_drivers:CategoryRow[]};warning?:string;metrics:Record<string,Comparison>;categories:CategoryRow[];category_options:string[];structure:Array<{category:string;revenue:number;share:number}>;growth_drivers:CategoryRow[];decline_drivers:CategoryRow[]};
+type Report={period:{start:string;end:string};previous_period:{start:string;end:string};year_comparison:{categories:CategoryRow[];period:{start:string;end:string};metrics:Record<string,Comparison>;growth_drivers:CategoryRow[];decline_drivers:CategoryRow[]};warning?:string;metrics:Record<string,Comparison>;categories:CategoryRow[];category_options:string[];structure:Array<{category:string;revenue:number;share:number}>;growth_drivers:CategoryRow[];decline_drivers:CategoryRow[]};
 type Detail={category:CategoryRow;products:Array<{article?:string;code?:string;name:string;revenue:number;units:number;checks:number;share:number;revenue_change:number}>;group_by:string;points:Array<{period:string;revenue:number;units:number}>};
 const COLORS=['#2878ff','#9b6cff','#22a06b','#f59e0b','#e05263','#25a9c8','#6f7b90','#ef7d32','#58a55c','#b05cc7','#aab3c2'];
 const iso=(value:Date)=>`${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
@@ -34,6 +34,7 @@ export function CategoryAnalyticsReportPage() {
     [buyerType, setBuyerType] = useState(""),
     [category, setCategory] = useState(""),
     [chartLimit, setChartLimit] = useState("10"),
+    [chartComparison, setChartComparison] = useState("previous_period"),
     [selected, setSelected] = useState<string>(),
     [detailGroup, setDetailGroup] = useState(""),
     [growthMode, setGrowthMode] = useState("previous_period"),
@@ -96,9 +97,9 @@ export function CategoryAnalyticsReportPage() {
   const declineRows = declineMode === "previous_year" ? data?.year_comparison.decline_drivers : data?.decline_drivers;
   const comparisonButtons = (value: string, change: (mode: string) => void) => <div className="chart-granularity" aria-label="Период сравнения">{[["previous_year", "Предыдущий год"], ["previous_period", "Предыдущий период"]].map(([mode,label]) => <button key={mode} type="button" aria-pressed={value === mode} className={value === mode ? "active" : ""} onClick={() => change(mode)}>{label}</button>)}</div>;
   const compared = useMemo(() => {
-    const rows = data?.categories || [];
+    const rows = (chartComparison === "previous_year" ? data?.year_comparison.categories : data?.categories) || [];
     return chartLimit === "all" ? rows : rows.slice(0, Number(chartLimit));
-  }, [data, chartLimit]);
+  }, [data, chartLimit, chartComparison]);
   function selectPeriod(value: PeriodKind) {
     setKind(value);
     if (value !== "custom") {
@@ -279,6 +280,7 @@ export function CategoryAnalyticsReportPage() {
           <section className="panel chart category-revenue-chart">
             <div className="section-title">
               <h2>Выручка по категориям</h2>
+              {comparisonButtons(chartComparison, setChartComparison)}
               <select
                 value={chartLimit}
                 onChange={(event) => setChartLimit(event.target.value)}
@@ -288,6 +290,7 @@ export function CategoryAnalyticsReportPage() {
                 <option value="all">Все</option>
               </select>
             </div>
+            <p className="muted">Сравнение с {chartComparison === "previous_year" ? "аналогичным периодом прошлого года" : "предыдущим периодом"}: {date((chartComparison === "previous_year" ? data.year_comparison.period : data.previous_period).start)} — {date((chartComparison === "previous_year" ? data.year_comparison.period : data.previous_period).end)}</p>
             <Memo title="Сравнение периодов">
               Вертикальные столбцы сопоставляют текущую и прошлую выручку.
               Большой разрыв между столбцами сразу показывает лидеров роста и
@@ -325,7 +328,7 @@ export function CategoryAnalyticsReportPage() {
                     />
                     <Bar
                       dataKey="previous_revenue"
-                      name="Предыдущий период"
+                      name={chartComparison === "previous_year" ? "Предыдущий год" : "Предыдущий период"}
                       fill="#9b6cff"
                     />
                   </BarChart>

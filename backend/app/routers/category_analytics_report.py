@@ -309,6 +309,7 @@ async def report(
         "year_comparison": {
             "period": {"start": year_start, "end": year_end},
             "metrics": report_summary(year_rows, checks, year_checks),
+            "categories": [{key: value for key, value in row.items() if key != "products"} for row in year_rows],
             "growth_drivers": sorted(
                 (row for row in year_rows if row["revenue_change"] > 0),
                 key=lambda row: row["revenue_change"],
