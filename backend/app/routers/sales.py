@@ -12,6 +12,8 @@ from app.services.clients_vr import ClientsVrError,resolve_manager_filter
 from app.services.sale_details import load_sale_detail
 from app.services.sales_client_filters import get_sales_buyer_type_clients
 from app.services.product_analytics_cache import invalidate_product_analytics_cache
+from app.services.seasonality_worker import advisory
+from app.services.seasonality_storage import changed
 router=APIRouter(prefix="/sales",tags=["Продажи"])
 class SaleFilters(BaseModel):
  search:str|None=None;date_from:date|None=None;date_to:date|None=None;departments:list[str]|None=None;manager:str|None=None;buyer_type:str|None=None;client:str|None=None;author:str|None=None;price_type:str|None=None;promotion:str|None=None;social:bool|None=None;discount_card_percent:Decimal|None=None;min_amount:Decimal|None=None;max_amount:Decimal|None=None;min_discount:Decimal|None=None;max_discount:Decimal|None=None
@@ -35,6 +37,10 @@ async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),
  return SalePage(items=items,total=total,page=page,page_size=page_size,pages=max(1,(total+page_size-1)//page_size))
 @router.delete("")
 async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
+ async with advisory(db.bind,shared=True,wait=True):
+  return await _delete_sales(payload,db)
+
+async def _delete_sales(payload,db):
  if payload.all:
   try:filters=await resolve_manager_filter(payload.filters.model_dump())
   except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
@@ -51,6 +57,7 @@ async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
  else:
   if not payload.ids:raise HTTPException(400,"Не выбраны продажи для удаления")
   result=await db.execute(delete(Sale).where(Sale.id.in_(payload.ids)))
+ await changed(db,rebuild=True)
  await db.commit()
  invalidate_product_analytics_cache()
  return {"deleted":result.rowcount or 0}

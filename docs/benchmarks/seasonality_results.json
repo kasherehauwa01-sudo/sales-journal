@@ -1,0 +1,123 @@
+{
+  "environment": "isolated synthetic; no production DB/API; timings not SQL end-to-end",
+  "products": 27016,
+  "legacy_report_parent": {
+    "variant": "after",
+    "excel": false,
+    "rows": 27016,
+    "available": true,
+    "http_batches": 109,
+    "elapsed_ms": 9307.477070997265,
+    "rss_before_bytes": 64032768,
+    "process_peak_rss_bytes": 142729216,
+    "traced_peak_bytes": null,
+    "cache_charged_bytes": 25160205,
+    "cache_deep_bytes": 11672433,
+    "checksum": "3921e7211da0f0a7d1296984c57d1345239d7d393af592c76d795d9665b7c6b2"
+  },
+  "new_report_unavailable_profiles": {
+    "variant": "after",
+    "excel": false,
+    "rows": 27016,
+    "available": true,
+    "http_batches": 109,
+    "elapsed_ms": 9811.325948998274,
+    "rss_before_bytes": 64393216,
+    "process_peak_rss_bytes": 142876672,
+    "traced_peak_bytes": null,
+    "cache_charged_bytes": 25160205,
+    "cache_deep_bytes": 11672433,
+    "checksum": "3921e7211da0f0a7d1296984c57d1345239d7d393af592c76d795d9665b7c6b2"
+  },
+  "profiles": {
+    "products": 27016,
+    "samples": [
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 4181.613974000356,
+        "process_peak_rss_bytes": 51576832,
+        "traced_peak_bytes": null,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "cefb3911b5ad7ff95a04e8e34529a914f75791c0563d7bfad5c4d4b8ab7bc795"
+      },
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 4981.419763000304,
+        "process_peak_rss_bytes": 51572736,
+        "traced_peak_bytes": null,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "cefb3911b5ad7ff95a04e8e34529a914f75791c0563d7bfad5c4d4b8ab7bc795"
+      },
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 4588.161888001196,
+        "process_peak_rss_bytes": 51568640,
+        "traced_peak_bytes": null,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "cefb3911b5ad7ff95a04e8e34529a914f75791c0563d7bfad5c4d4b8ab7bc795"
+      },
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 18058.617322996724,
+        "process_peak_rss_bytes": 51707904,
+        "traced_peak_bytes": 14880,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "cefb3911b5ad7ff95a04e8e34529a914f75791c0563d7bfad5c4d4b8ab7bc795"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 1485.5914450017735,
+        "process_peak_rss_bytes": 81534976,
+        "traced_peak_bytes": null,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "43badca11005d65937023026912e72a43022f8edf5d177bf75b40f417e8b67ef"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 1550.745876000292,
+        "process_peak_rss_bytes": 81518592,
+        "traced_peak_bytes": null,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "43badca11005d65937023026912e72a43022f8edf5d177bf75b40f417e8b67ef"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 1844.1438279987779,
+        "process_peak_rss_bytes": 81522688,
+        "traced_peak_bytes": null,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "43badca11005d65937023026912e72a43022f8edf5d177bf75b40f417e8b67ef"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 14300.76518200076,
+        "process_peak_rss_bytes": 113025024,
+        "traced_peak_bytes": 28323824,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "43badca11005d65937023026912e72a43022f8edf5d177bf75b40f417e8b67ef"
+      }
+    ]
+  },
+  "limitations": [
+    "Full report comparison uses unavailable profiles and use_seasonality=false; ready profile annotation measured separately.",
+    "Report measurements ran concurrently and are not a controlled speed comparison.",
+    "Reader mock shares profile JSON; real driver decoding and SQL latency are excluded.",
+    "No benchmark of real 4.6 million source rows or production OOM guarantee."
+  ]
+}

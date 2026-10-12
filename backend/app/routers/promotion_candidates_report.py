@@ -1,4 +1,8 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+from app.config import settings
+from app.services.seasonality_storage import attach, metadata
+from app.services.seasonality import STATUSES
 from io import BytesIO
 from itertools import islice
 import time
@@ -70,6 +74,8 @@ class Request(BaseModel):
     manufacturer: str | None = None
     reason: str | None = None
     status: str | None = None
+    use_seasonality: bool = True
+    seasonality_status: str | None = None
     criteria: Criteria = Field(default_factory=Criteria)
 
 
@@ -228,6 +234,8 @@ def _stage(stage, started, **counts):
 
 
 async def _dataset(data, db):
+    if data.seasonality_status and data.seasonality_status not in STATUSES:
+        raise HTTPException(422, "Неизвестный статус сезонности")
     if data.date_from > data.date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     try:
@@ -278,6 +286,21 @@ async def _dataset(data, db):
             if row["stock"] is not None and row["average_price"]
             else None
         )
+    started = time.perf_counter()
+    await attach(
+        rows,
+        db,
+        criteria,
+        datetime.now(ZoneInfo(settings.autoload_timezone)).date(),
+        comparable_scope=not (data.departments or data.manager or data.buyer_type)
+        and 0
+        <= (
+            datetime.now(ZoneInfo(settings.autoload_timezone)).date() - data.date_to
+        ).days
+        <= 1,
+        analysis_end=data.date_to,
+    )
+    _stage("seasonality_read", started, rows=len(rows))
     kept = 0
     for x in rows:
         if (
@@ -289,12 +312,20 @@ async def _dataset(data, db):
             )
             and (not data.reason or data.reason in x["reasons"])
             and (not data.status or x["status"] == data.status)
+            and (
+                not data.seasonality_status
+                or x["seasonality"]["status"] == data.seasonality_status
+            )
         ):
             rows[kept] = x
             kept += 1
     del rows[kept:]
     ensure_headroom()
-    rows.sort(key=lambda x: (len(x["reasons"]), x["stock_value"] or 0), reverse=True)
+    rows.sort(
+        key=lambda x: ((x["seasonality"]["priority"],) if data.use_seasonality else ())
+        + (len(x["reasons"]), x["stock_value"] or 0),
+        reverse=True,
+    )
     _stage("classified", started, rows=len(rows))
     return rows, available
 
@@ -313,6 +344,9 @@ async def report(data: Request, db: AsyncSession = Depends(get_db)):
             "decline": sum("Продажи падают" in x["reasons"] for x in rows),
         },
         "catalog_available": available,
+        "seasonality": await metadata(
+            db, datetime.now(ZoneInfo(settings.autoload_timezone)).date()
+        ),
         "limitations": [
             "Историческое поле «Вид товара» не хранится в Sale/SaleItem; эффективность прошлых акций недоступна без изменения импорта."
         ],
@@ -357,11 +391,19 @@ def _excel(rows):
                 "Остаток",
                 "Запас, мес.",
                 "Дней без продажи",
+                "Статус сезонности",
+                "Сезонный индекс",
+                "Сезонный приоритет",
+                "Уверенность, баллы",
+                "Ожидаемый период спроса",
+                "Рекомендуемое действие",
+                "Причина рекомендации",
             ]
         )
         for index, x in enumerate(rows):
             if index % 250 == 0:
                 ensure_headroom()
+            season = x.get("seasonality") or {}
             sheet.append(
                 [
                     x["name"],
@@ -380,6 +422,16 @@ def _excel(rows):
                     x["stock"],
                     x["stock_months"],
                     x["days_without_sales"],
+                    season.get("status", "Недостаточно данных"),
+                    season.get("index"),
+                    season.get("priority", 0),
+                    season.get("confidence", 0),
+                    season.get("period", "—"),
+                    season.get("action", "Сохранить оценку по действующим критериям"),
+                    season.get(
+                        "reason",
+                        "Готовые актуальные показатели сезонности отсутствуют.",
+                    ),
                 ]
             )
         history = book.create_sheet("История акций")

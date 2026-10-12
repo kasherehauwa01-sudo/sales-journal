@@ -86,7 +86,9 @@ async def sample(variant, count, trace, excel=False):
     vrcatalog.catalog_info_cache.clear()
     vrcatalog._catalog_info_sizes.clear()
     vrcatalog._catalog_info_bytes = 0
-    request = current.Request(date_from=date(2026, 1, 1), date_to=date(2026, 9, 30))
+    request = current.Request(
+        use_seasonality=False, date_from=date(2026, 1, 1), date_to=date(2026, 9, 30)
+    )
     if trace:
         tracemalloc.start()
     rss_before = memory_snapshot()["rss_bytes"]
@@ -103,7 +105,12 @@ async def sample(variant, count, trace, excel=False):
     digest = hashlib.sha256()
     for row in rows:
         digest.update(
-            json.dumps(row, ensure_ascii=False, sort_keys=True, default=str).encode()
+            json.dumps(
+                {key: value for key, value in row.items() if key != "seasonality"},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode()
         )
     return {
         "variant": variant,

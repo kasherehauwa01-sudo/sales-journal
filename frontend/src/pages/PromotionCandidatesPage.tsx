@@ -4,8 +4,8 @@ import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitR
 import {useMemo,useState} from 'react';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {MultiSelect} from '../components/MultiSelect';import {Empty,Loading} from '../components/States';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
-type Row={key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number};
-type Report={items:Row[];total:number;table_limit:number;summary:{candidates:number;stale:number;excess:number;decline:number};catalog_available:boolean;limitations:string[]};
+type Row={key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
+type Report={items:Row[];total:number;table_limit:number;summary:{candidates:number;stale:number;excess:number;decline:number};catalog_available:boolean;seasonality?:{as_of:string;years:number[];ready:boolean;last_success?:string;scope:string};limitations:string[]};
 const iso=(value:Date)=>value.toISOString().slice(0,10);const end=new Date(),start=new Date(end.getFullYear(),end.getMonth()-6,1);
 export function PromotionCandidatesPage() {
   const [tab, setTab] = useState<"candidates" | "history">("candidates"),
@@ -21,7 +21,9 @@ export function PromotionCandidatesPage() {
     [manager, setManager] = useState(""),
     [buyerType, setBuyerType] = useState(""),
     [selected, setSelected] = useState<Row>(),
-    [sort, setSort] = useState<keyof Row>("stock_months");
+    [sort, setSort] = useState<keyof Row|"recommendation"|"seasonal_priority">("recommendation"),
+    [useSeasonality,setUseSeasonality]=useState(true),
+    [seasonalityStatus,setSeasonalityStatus]=useState("");
   const [criteria, setCriteria] = useState({
     decline_percent: -30,
     min_previous_units: 5,
@@ -49,6 +51,8 @@ export function PromotionCandidatesPage() {
     manager: manager || undefined,
     buyer_type: buyerType || undefined,
     criteria,
+    use_seasonality:useSeasonality,
+    seasonality_status:seasonalityStatus||undefined,
   };
   type Result = {
     report?: Report;
@@ -86,8 +90,8 @@ export function PromotionCandidatesPage() {
     history = result?.history;
   const rows = useMemo(
     () =>
-      [...(data?.items || [])].sort(
-        (a, b) => Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity),
+      sort==="recommendation" ? (data?.items || []) : [...(data?.items || [])].sort(
+        (a, b) => sort==="seasonal_priority" ? (b.seasonality?.priority??0)-(a.seasonality?.priority??0) : Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity),
       ),
     [data, sort],
   );
@@ -222,6 +226,14 @@ export function PromotionCandidatesPage() {
             <CatalogValueSelect field="manufacturer" label="Производитель" value={manufacturer} onChange={setManufacturer}/>
           </div>
           <label>
+            Сезонность
+            <select value={seasonalityStatus} onChange={event=>setSeasonalityStatus(event.target.value)}>
+              <option value="">Все товары</option>
+              {["Сезон сейчас","Скоро сезон","Вне сезона","Сезонность не выявлена","Недостаточно данных"].map(value=><option key={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="seasonality-toggle"><span>Учитывать сезонность</span><input type="checkbox" checked={useSeasonality} onChange={event=>setUseSeasonality(event.target.checked)}/></label>
+          <label>
             Быстрый фильтр
             <select value={reason} onChange={(e) => setReason(e.target.value)}>
               <option value="">Все кандидаты</option>
@@ -303,6 +315,7 @@ export function PromotionCandidatesPage() {
               {x}
             </div>
           ))}
+          {data.seasonality&&<p className="seasonality-note">Сезонность на {date(data.seasonality.as_of)} · история {data.seasonality.years.join("–")} · {data.seasonality.scope}. {data.seasonality.last_success?`Последний завершённый расчёт: ${date(data.seasonality.last_success)}`:"Первичный расчёт ещё не завершён."} {!data.seasonality.ready&&"Готовые актуальные показатели отсутствуют: сезонный приоритет не применяется."}</p>}
           <div className="kpis">
             {[
               ["Кандидатов", data.summary.candidates],
@@ -326,8 +339,10 @@ export function PromotionCandidatesPage() {
                 Сортировка{" "}
                 <select
                   value={sort}
-                  onChange={(e) => setSort(e.target.value as keyof Row)}
+                  onChange={(e) => setSort(e.target.value as keyof Row|"recommendation"|"seasonal_priority")}
                 >
+                  <option value="recommendation">По рекомендации</option>
+                  <option value="seasonal_priority">Сезонный приоритет</option>
                   <option value="stock_months">Запас, мес.</option>
                   <option value="units_change_percent">Падение, %</option>
                   <option value="days_without_sales">Дней без продажи</option>
@@ -345,6 +360,8 @@ export function PromotionCandidatesPage() {
                       <th>Товар</th>
                       <th>Код / артикул</th>
                       <th>Категория</th>
+                      <th>Сезонность</th>
+                      <th>Сезонный приоритет</th>
                       <th>Причины</th>
                       <th>30 дней</th>
                       <th>Пред. 30</th>
@@ -364,6 +381,8 @@ export function PromotionCandidatesPage() {
                         </td>
                         <td>{x.code || x.article || "—"}</td>
                         <td>{x.category}</td>
+                        <td><span className={`seasonality-badge ${x.seasonality?.status==="Сезон сейчас"?"season-now":x.seasonality?.status==="Скоро сезон"?"season-soon":x.seasonality?.status==="Вне сезона"?"season-off":x.seasonality?.status==="Сезонность не выявлена"?"season-none":"season-unknown"}`} title={x.seasonality?.reason}>{x.seasonality?.status||"Недостаточно данных"}</span></td>
+                        <td>{x.seasonality?.priority??0}</td>
                         <td>{x.reasons.join(", ") || "—"}</td>
                         <td>{number(x.units_30)}</td>
                         <td>{number(x.units_previous_30)}</td>
@@ -445,6 +464,12 @@ export function PromotionCandidatesPage() {
                   <b>{money(selected.revenue)}</b>
                 </div>
               </div>
+              <h3>Сезонность и рекомендация</h3>
+              <p>{selected.seasonality?.status||"Недостаточно данных"} · Приоритет: {selected.seasonality?.priority??0} / 100 · Индекс: {selected.seasonality?.index==null?"—":number(selected.seasonality.index)} · Уверенность: {selected.seasonality?.confidence??0} / 100</p>
+              <p>Ожидаемый период: {selected.seasonality?.period||"—"}</p>
+              <p><b>{selected.seasonality?.action||"Сохранить оценку по действующим критериям"}</b></p>
+              <p>{selected.seasonality?.reason||"Готовые актуальные показатели сезонности отсутствуют."}</p>
+              <p className="muted">Это сезонность наблюдаемых продаж, а не доказанный спрос. Уверенность — оценка воспроизводимости, не вероятность. Исторические остатки неизвестны.</p>
               <h3>Динамика количества</h3>
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart
