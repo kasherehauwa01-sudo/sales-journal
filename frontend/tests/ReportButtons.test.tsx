@@ -285,9 +285,9 @@ const pages = [
   {
     name: "Кандидаты",
     Component: PromotionCandidatesPage,
-    label: "Бренд",
-    value: "Бренд1",
-    next: "Бренд2",
+    label: "Категория",
+    value: "Категория1",
+    next: "Категория2",
     count: 1,
   },
   {
