@@ -130,8 +130,23 @@ async def get_client_manager(client:str|None):
  managers=await get_client_managers()
  return managers.get(normalize_client_name(client))
 
+def _lightweight_client_managers():
+ # PR Clients VR #77: complete normalized name -> last nonempty manager map.
+ # A malformed response must never become a successful empty/partial report.
+ try:
+  payload=_request(["/integration/client-managers"])
+ except HTTPError as exc:
+  raise ClientsVrError(f"API менеджеров Clients VR: HTTP {exc.code}") from None
+ except TimeoutError:
+  raise ClientsVrError("API менеджеров Clients VR: превышено время ожидания") from None
+ except Exception:
+  raise ClientsVrError("API менеджеров Clients VR недоступен или вернул некорректный JSON") from None
+ if not isinstance(payload,dict) or any(not isinstance(key,str) or not normalize_client_name(key) or not isinstance(value,str) or not value.strip() for key,value in payload.items()):
+  raise ClientsVrError("API менеджеров Clients VR вернул некорректную структуру ответа")
+ return {normalize_client_name(key):value.strip() for key,value in payload.items()}
+
 async def get_client_managers():
- return await _cached("client-managers",lambda:_client_managers(_request(["/integration/clients","/clients"])))
+ return await _cached("client-managers",_lightweight_client_managers)
 
 def get_cached_client_managers() -> dict[str,str]:
  """Возвращает только свежий локальный кеш, никогда не обращаясь в ClientsVR."""
@@ -147,7 +162,8 @@ async def get_client_metadata():
  """Одним batch-запросом загружает менеджеров и виды покупателей клиентов."""
  payload=await _cached("client-metadata-source",lambda:_request(["/integration/clients","/clients"]))
  managers=_client_managers(payload);buyer_types=_client_buyer_types(payload);now=time.monotonic()
- cache["client-managers"]=(now,managers);cache["client-buyer-types"]=(now,buyer_types)
+ # Legacy metadata remains isolated: never overwrite the lightweight map.
+ cache["client-buyer-types"]=(now,buyer_types)
  return managers,buyer_types
 
 def cached_client_buyer_types():

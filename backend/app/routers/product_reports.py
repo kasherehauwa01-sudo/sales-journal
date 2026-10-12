@@ -92,7 +92,7 @@ async def managers(data:ReportRequest,db:AsyncSession=Depends(get_db)):
  if data.manager:
   return [{"manager":data.manager,"revenue":sum(float(x[1] or 0) for x in rows),"units":sum(float(x[2] or 0) for x in rows),"checks":sum(x[3] for x in rows),"clients":sum(1 for x in rows if x[0])}] if rows else []
  try:mapping=await get_client_managers()
- except ClientsVrError:mapping={}  # продажи остаются в группе «Нет менеджера»
+ except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  totals={}
  for client,revenue,units,checks in rows:
   manager=mapping.get(_norm(client),"Нет менеджера");item=totals.setdefault(manager,{"manager":manager,"revenue":0.0,"units":0.0,"checks":0,"clients":0});item["revenue"]+=float(revenue or 0);item["units"]+=float(units or 0);item["checks"]+=checks;item["clients"]+=1 if client else 0
