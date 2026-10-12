@@ -75,8 +75,11 @@ def ensure_headroom():
 
 
 def diagnostics(stage, **counts):
-    state = _states.get(asyncio.get_running_loop())
-    fields = {'analytics_stage': stage, 'heavy_active': state['active'] if state else 0,
+    try:
+        state = _states.get(asyncio.get_running_loop())
+    except RuntimeError:
+        state = None  # Memory checks also run in guarded serialization threads.
+    fields = {'analytics_stage': stage, 'heavy_active': state['active'] if state else int(_owner.get() is not None),
               'heavy_waiters': state['waiters'] if state else 0, **memory_snapshot(), **counts}
     log.info('product_analytics runtime %s', fields, extra=fields)
 

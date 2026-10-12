@@ -284,11 +284,11 @@ def _prune_catalog_info_cache(now:float):
 async def _finish_catalog_workers(tasks):
  await asyncio.gather(*tasks,return_exceptions=True)
 
-async def get_catalog_batch_info(products):
+async def get_catalog_batch_info(products, *, project=None):
  async with heavy_operation("catalog"):
-  return await _get_catalog_batch_info(products)
+  return await _get_catalog_batch_info(products, project=project)
 
-def _prepare_catalog_batch_info(products):
+def _prepare_catalog_batch_info(products, project=None):
  global catalog_info_cache
 
  unique={(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article"))):(item.get("code"),item.get("article")) for item in products if item.get("code") or item.get("article")}
@@ -315,16 +315,17 @@ def _prepare_catalog_batch_info(products):
 
   if cached_entry_found:
    if cached is not None:
-    if code_key:result[code_key]=cached
-    if article_key:result[article_key]=cached
+    value=project(cached) if project else cached
+    if code_key:result[code_key]=value
+    if article_key:result[article_key]=value
   else:
    missing.append({"code":code,"article":article})
 
  del unique
  return now,result,missing
 
-async def _get_catalog_batch_info(products):
- now,result,missing=await run_cpu(_prepare_catalog_batch_info,products)
+async def _get_catalog_batch_info(products, *, project=None):
+ now,result,missing=await run_cpu(_prepare_catalog_batch_info,products,project)
  failed_batches=0;successful_batches=0
  consume_lock=threading.Lock()
  def consume(offset,batch,response,exc):
@@ -350,10 +351,11 @@ async def _get_catalog_batch_info(products):
       image=_absolute_image_url(image,settings.vrcatalog_api_url)
      item={**item,"image_url":image}
     keys=(_catalog_key("code",item.get("code")),_catalog_key("article",item.get("article")))
+    projected=project(item) if project else item
     item_size=_bounded_size(item,CATALOG_INFO_CACHE_MAX_BYTES)
     for key in keys:
      if key:
-      returned_keys.add(key);result[key]=item;_cache_catalog_info(key,item,now,item_size)
+      returned_keys.add(key);result[key]=projected;_cache_catalog_info(key,item,now,item_size)
 
    # Отрицательно кешируем только результат успешно выполненного пакета.
    # Товары из упавшего запроса должны быть повторно запрошены при следующем отчёте.
