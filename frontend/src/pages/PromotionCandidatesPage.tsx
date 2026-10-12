@@ -1,3 +1,4 @@
+import {CatalogValueSelect} from "../components/CatalogValueSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {useMemo,useState} from 'react';
@@ -10,6 +11,7 @@ export function PromotionCandidatesPage() {
   const [tab, setTab] = useState<"candidates" | "history">("candidates"),
     [from, setFrom] = useState(iso(start)),
     [to, setTo] = useState(iso(end)),
+    [selectedMonths, setSelectedMonths] = useState<number|null>(6),
     [departments, setDepartments] = useState<string[]>([]),
     [reason, setReason] = useState(""),
     [status, setStatus] = useState(""),
@@ -111,6 +113,7 @@ export function PromotionCandidatesPage() {
     const finish = new Date(to),
       begin = new Date(finish.getFullYear(), finish.getMonth() - months, 1);
     setFrom(iso(begin));
+    setSelectedMonths(months);
   }
   return (
     <div className="page">
@@ -148,7 +151,7 @@ export function PromotionCandidatesPage() {
         </div>
         <div className="period-picker">
           {[3, 6, 12].map((x) => (
-            <button key={x} onClick={() => preset(x)}>
+            <button key={x} type="button" className={selectedMonths===x?"active":""} aria-pressed={selectedMonths===x} onClick={() => preset(x)}>
               {x} месяцев
             </button>
           ))}
@@ -159,7 +162,7 @@ export function PromotionCandidatesPage() {
             <input
               type="date"
               value={from}
-              onChange={(e) => setFrom(e.target.value)}
+              onChange={(e) => {setFrom(e.target.value);setSelectedMonths(null)}}
             />
           </label>
           <label>
@@ -167,7 +170,7 @@ export function PromotionCandidatesPage() {
             <input
               type="date"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => {setTo(e.target.value);setSelectedMonths(null)}}
             />
           </label>
           <label>
@@ -210,17 +213,14 @@ export function PromotionCandidatesPage() {
               onChange={(e) => setCategory(e.target.value)}
             />
           </label>
-          <label>
-            Бренд
-            <input value={brand} onChange={(e) => setBrand(e.target.value)} />
-          </label>
-          <label>
-            Производитель
-            <input
-              value={manufacturer}
-              onChange={(e) => setManufacturer(e.target.value)}
-            />
-          </label>
+          <div className="report-filter">
+            <span>Бренд</span>
+            <CatalogValueSelect field="brand" label="Бренд" value={brand} onChange={setBrand}/>
+          </div>
+          <div className="report-filter">
+            <span>Производитель</span>
+            <CatalogValueSelect field="manufacturer" label="Производитель" value={manufacturer} onChange={setManufacturer}/>
+          </div>
           <label>
             Быстрый фильтр
             <select value={reason} onChange={(e) => setReason(e.target.value)}>
@@ -253,21 +253,24 @@ export function PromotionCandidatesPage() {
           <div className="report-filters">
             {(
               [
-                ["decline_percent", "Падение, %"],
-                ["min_previous_units", "Минимум продаж ранее"],
-                ["stale_days", "Дней без продажи"],
-                ["low_sales_units", "Низкие продажи, шт."],
-                ["excess_stock_months", "Избыточный запас, мес."],
-                ["min_stock", "Минимальный остаток"],
+                ["decline_percent", "Падение, %", "Изменение количества за последние 30 дней выбранного периода относительно предыдущих 30 дней. Например, −30 означает падение на 30% и более."],
+                ["min_previous_units", "Минимум продаж ранее", "Минимальное количество проданных единиц за предыдущие 30 дней для сигнала «Продажи падают». Помогает исключить случайные колебания редких продаж."],
+                ["stale_days", "Дней без продажи", "Число дней от последней продажи до конца выбранного периода. При достижении порога и положительном остатке товар считается давно не продававшимся."],
+                ["low_sales_units", "Низкие продажи, шт.", "Если за последние 30 дней продано не больше этого количества и есть остаток, появляется сигнал «Низкие продажи при наличии остатка»."],
+                ["excess_stock_months", "Избыточный запас, мес.", "На сколько месяцев продаж хватит остатка при среднем темпе с первой продажи в выбранном периоде. Запас не ниже порога считается избыточным; при нулевом темпе показатель не рассчитывается."],
+                ["min_stock", "Минимальный остаток", "Остаток ниже порога — стоп-фактор «Маленький остаток»: товар не рекомендуется для акции сейчас. Нулевой остаток даёт отдельный стоп-фактор «Нет в наличии»."],
               ] as const
-            ).map(([key, label]) => (
+            ).map(([key, label, explanation]) => (
               <label key={key}>
                 {label}
                 <input
                   type="number"
+                  aria-label={label}
+                  aria-describedby={`criterion-${key}`}
                   value={criteria[key]}
                   onChange={(e) => setCriterion(key, e.target.value)}
                 />
+                <small id={`criterion-${key}`} className="criterion-help">{explanation}</small>
               </label>
             ))}
           </div>
