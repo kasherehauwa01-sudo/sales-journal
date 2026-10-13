@@ -105,6 +105,7 @@ const metrics = Object.fromEntries(
 );
 function fixture(path: string): unknown {
   const route = path.split("?")[0];
+  if (route.includes("/sales-dynamics/client-directory")) return {items:["Клиент1","Клиент2"],next_cursor:null};
   if (route === "/filters") return { departments: ["Магазин1"], clients: ["Клиент1","Клиент2"] };
   if (route.endsWith("/managers") && !route.includes("product-sales"))
     return ["Менеджер1", "Менеджер2"];
