@@ -21,6 +21,7 @@ def test_enabled_priority_disabled_legacy_order_filters_and_excel(monkeypatch):
                 "brand": "Бренд",
                 "manufacturer": "Завод",
                 "stock": 1000 + i,
+                "aviatorov_stock": 1000 + i,
             }
             for i in range(2)
         }, True

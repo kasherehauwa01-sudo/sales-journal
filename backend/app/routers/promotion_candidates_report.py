@@ -360,6 +360,14 @@ async def _dataset(data, db):
                 not data.manufacturer
                 or x["manufacturer"].casefold() == data.manufacturer.casefold()
             )
+            and (
+                data.criteria.min_stock is None
+                or (
+                    x.get("aviatorov_stock") is not None
+                    and math.isfinite(x["aviatorov_stock"])
+                    and x["aviatorov_stock"] >= data.criteria.min_stock
+                )
+            )
             and (not data.reason or data.reason in x["reasons"])
             and (not data.status or x["status"] == data.status)
             and (
