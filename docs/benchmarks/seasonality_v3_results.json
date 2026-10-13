@@ -1,0 +1,43 @@
+{
+  "source_baseline_commit": "9a9c8958e1da71e82b999df470a214d72289c03e",
+  "environment": "isolated Codex workspace, Python 3.12, model only, no DB/network/app startup",
+  "method": "Each sample runs in a fresh subprocess after tests completed. 27016 sequential products with 10 years; one product with 100 years and tracemalloc enabled. Input monthly aggregates allocated before tracing. Single samples; no claim of production throughput or total application RSS.",
+  "samples": [
+    {
+      "algorithm_version": 2,
+      "products": 27016,
+      "years": 10,
+      "elapsed_ms": 28887.389134997647,
+      "process_peak_rss_bytes": 13627392,
+      "traced_peak_bytes": null,
+      "profile_json_bytes": 958
+    },
+    {
+      "algorithm_version": 3,
+      "products": 27016,
+      "years": 10,
+      "elapsed_ms": 35121.852856998885,
+      "process_peak_rss_bytes": 13500416,
+      "traced_peak_bytes": null,
+      "profile_json_bytes": 3860
+    },
+    {
+      "algorithm_version": 2,
+      "products": 1,
+      "years": 100,
+      "elapsed_ms": 1872.3923559991817,
+      "process_peak_rss_bytes": 27938816,
+      "traced_peak_bytes": 5265020,
+      "profile_json_bytes": 1503
+    },
+    {
+      "algorithm_version": 3,
+      "products": 1,
+      "years": 100,
+      "elapsed_ms": 3434.7510959996725,
+      "process_peak_rss_bytes": 14815232,
+      "traced_peak_bytes": 2175333,
+      "profile_json_bytes": 27667
+    }
+  ]
+}

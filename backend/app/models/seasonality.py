@@ -29,6 +29,20 @@ class SeasonalityMonth(Base):
     last_sale: Mapped[date] = mapped_column(Date)
 
 
+class SeasonalityStoreMonth(Base):
+    __tablename__ = "seasonality_store_months"
+    generation: Mapped[int] = mapped_column(Integer, primary_key=True)
+    identity: Mapped[str] = mapped_column(String(64), primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    month: Mapped[int] = mapped_column(Integer, primary_key=True)
+    store: Mapped[str] = mapped_column(Text, primary_key=True)
+    incomplete_source: Mapped[bool] = mapped_column(Boolean, default=False)
+    units: Mapped[Decimal] = mapped_column(Numeric(30, 3))
+    positive_lines: Mapped[int] = mapped_column(BigInteger)
+    first_sale: Mapped[date] = mapped_column(Date)
+    last_sale: Mapped[date] = mapped_column(Date)
+
+
 class SeasonalityProfile(Base):
     __tablename__ = "seasonality_profiles"
     __table_args__ = (

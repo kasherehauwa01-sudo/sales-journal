@@ -25,6 +25,7 @@ from app.models import (
     Sale,
     SaleItem,
     SeasonalityMonth,
+    SeasonalityStoreMonth,
     SeasonalityProfile,
     SeasonalityState,
 )
@@ -186,8 +187,10 @@ async def scan_batch(db, current, size):
     # Group raw names too: Python strip/casefold differs from SQL trim/lower
     # for tabs/Unicode. Hash merging inside this bounded batch is authoritative.
     named = SaleItem.name.label("name")
+    store = func.coalesce(Sale.department, "Без подразделения").label("store")
     query = (
         select(
+            store,
             SaleItem.code,
             SaleItem.article,
             named,
@@ -215,12 +218,13 @@ async def scan_batch(db, current, size):
         .join(Sale, Sale.id == SaleItem.sale_id)
         .outerjoin(ImportBatch, ImportBatch.id == Sale.import_id)
         .where(SaleItem.id > current.cursor, SaleItem.id <= finish)
-        .group_by(SaleItem.code, SaleItem.article, named, year, month)
+        .group_by(store, SaleItem.code, SaleItem.article, named, year, month)
     )
     records = (await db.execute(query)).all()
     products = {}
     names = {}
     monthly = {}
+    store_monthly = {}
     old_coverage = current.coverage
     for item in records:
         key = product_key(item.article, item.code, item.name)
@@ -250,6 +254,26 @@ async def scan_batch(db, current, size):
         target["positive_lines"] += int(item.positive_lines)
         target["first_sale"] = min(target["first_sale"], item.first_sale)
         target["last_sale"] = max(target["last_sale"], item.last_sale)
+        store_pk = (*pk, item.store)
+        if store_pk not in store_monthly:
+            store_monthly[store_pk] = {
+                "generation": current.generation,
+                "identity": digest,
+                "year": int(item.year),
+                "month": int(item.month),
+                "store": item.store,
+                "units": Decimal(0),
+                "positive_lines": 0,
+                "incomplete_source": False,
+                "first_sale": item.first_sale,
+                "last_sale": item.last_sale,
+            }
+        by_store = store_monthly[store_pk]
+        by_store["units"] += item.units
+        by_store["positive_lines"] += int(item.positive_lines)
+        by_store["incomplete_source"] |= bool(item.incomplete_source)
+        by_store["first_sale"] = min(by_store["first_sale"], item.first_sale)
+        by_store["last_sale"] = max(by_store["last_sale"], item.last_sale)
     # Each incoming id occurs once. Month sums and source cursor commit together.
     affected = {digest for digest, _, _ in monthly}
     product_values = list(products.items())
@@ -348,6 +372,41 @@ async def scan_batch(db, current, size):
                 },
             )
         )
+    month_values = list(store_monthly.values())
+    for offset in range(0, len(month_values), 100):
+        statement = insertion(db, SeasonalityStoreMonth).values(
+            month_values[offset : offset + 100]
+        )
+        await db.execute(
+            statement.on_conflict_do_update(
+                index_elements=["generation", "identity", "year", "month", "store"],
+                set_={
+                    "units": SeasonalityStoreMonth.units + statement.excluded.units,
+                    "incomplete_source": or_(
+                        SeasonalityStoreMonth.incomplete_source,
+                        statement.excluded.incomplete_source,
+                    ),
+                    "positive_lines": SeasonalityStoreMonth.positive_lines
+                    + statement.excluded.positive_lines,
+                    "first_sale": case(
+                        (
+                            SeasonalityStoreMonth.first_sale
+                            < statement.excluded.first_sale,
+                            SeasonalityStoreMonth.first_sale,
+                        ),
+                        else_=statement.excluded.first_sale,
+                    ),
+                    "last_sale": case(
+                        (
+                            SeasonalityStoreMonth.last_sale
+                            > statement.excluded.last_sale,
+                            SeasonalityStoreMonth.last_sale,
+                        ),
+                        else_=statement.excluded.last_sale,
+                    ),
+                },
+            )
+        )
     current.cursor = finish
     return len(ids)
 
@@ -438,6 +497,32 @@ async def calculate_batch(db, current, size, today):
 
 
 async def cleanup_batch(db, current, size):
+    store_keys = (
+        await db.execute(
+            select(
+                SeasonalityStoreMonth.generation,
+                SeasonalityStoreMonth.identity,
+                SeasonalityStoreMonth.year,
+                SeasonalityStoreMonth.month,
+                SeasonalityStoreMonth.store,
+            )
+            .where(SeasonalityStoreMonth.generation < current.active_generation - 1)
+            .limit(size)
+        )
+    ).all()
+    if store_keys:
+        await db.execute(
+            delete(SeasonalityStoreMonth).where(
+                tuple_(
+                    SeasonalityStoreMonth.generation,
+                    SeasonalityStoreMonth.identity,
+                    SeasonalityStoreMonth.year,
+                    SeasonalityStoreMonth.month,
+                    SeasonalityStoreMonth.store,
+                ).in_([tuple(row) for row in store_keys])
+            )
+        )
+        return len(store_keys)
     # Keep active and immediately previous generation; remove older data in PK
     # batches, never a massive deletion or TRUNCATE.
     rows = (

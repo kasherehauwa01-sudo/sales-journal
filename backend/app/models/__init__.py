@@ -6,5 +6,7 @@ __all__ += ['CatalogProduct', 'CatalogLookup', 'CatalogSyncState']
 
 from .catalog import CatalogSyncControl
 __all__ += ["CatalogSyncControl"]
-from .seasonality import SeasonalityMonth, SeasonalityProfile, SeasonalityState
+from .seasonality import SeasonalityStoreMonth, SeasonalityMonth, SeasonalityProfile, SeasonalityState
 __all__ += ['SeasonalityMonth','SeasonalityProfile','SeasonalityState']
+
+__all__ += ["SeasonalityStoreMonth"]

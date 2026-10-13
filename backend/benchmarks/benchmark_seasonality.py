@@ -11,7 +11,11 @@ import sys
 import time
 from types import SimpleNamespace
 import tracemalloc
-from app.services.seasonality import calculate_history as calculate, identity
+from app.services.seasonality import (
+    ALGORITHM_VERSION,
+    calculate_history as calculate,
+    identity,
+)
 from app.services.seasonality_storage import attach
 from app.models import SeasonalityState, SeasonalityProfile
 
@@ -64,7 +68,7 @@ async def sample(stage, count, trace, years=2):
                     generation=1,
                     rebuild_required=False,
                     first_year=0,
-                    algorithm_version=2,
+                    algorithm_version=ALGORITHM_VERSION,
                     phase="idle",
                     source_revision=0,
                     job_revision=0,
