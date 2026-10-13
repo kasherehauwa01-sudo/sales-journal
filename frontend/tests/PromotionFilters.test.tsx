@@ -184,6 +184,7 @@ it('selects visible rows, supports select all/clear all, and exports only the se
   render(<PromotionCandidatesPage/>);
   fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
   const first=await screen.findByRole('checkbox',{name:'Выбрать товар: Товар 1'}) as HTMLInputElement;
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Сформировать отчёт'}) as HTMLButtonElement).disabled).toBe(false));
   expect(first.checked).toBe(false);
   expect(screen.queryByRole('button',{name:/Скачать XLS/})).toBeNull();
   fireEvent.click(first);

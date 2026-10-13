@@ -105,7 +105,7 @@ const metrics = Object.fromEntries(
 );
 function fixture(path: string): unknown {
   const route = path.split("?")[0];
-  if (route === "/filters") return { departments: ["Магазин1"] };
+  if (route === "/filters") return { departments: ["Магазин1"], clients: ["Клиент1","Клиент2"] };
   if (route.endsWith("/managers") && !route.includes("product-sales"))
     return ["Менеджер1", "Менеджер2"];
   if (route.endsWith("/buyer-types")) return ["Розница"];
@@ -315,6 +315,13 @@ async function prepare(name: string) {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   else await screen.findByRole("option", { name: "Менеджер1" });
 }
+async function editFilter(page:{name:string;label:string},value:string){
+  if(page.name!=="Динамика"){fireEvent.change(screen.getByLabelText(page.label),{target:{value}});return;}
+  fireEvent.click(screen.getByRole("button",{name:"Клиент"}));
+  const clear=screen.queryByRole("button",{name:"Очистить"});if(clear)fireEvent.click(clear);
+  fireEvent.click(await screen.findByRole("checkbox",{name:value}));
+  fireEvent.mouseDown(document.body);
+}
 async function finish(count: number) {
   await waitFor(() => expect(heavy).toHaveBeenCalledTimes(count));
   await waitFor(() =>
@@ -332,9 +339,7 @@ for (const page of pages)
       );
       await prepare(page.name);
       expect(screen.getByText("Сформируйте отчёт")).toBeTruthy();
-      fireEvent.change(screen.getByLabelText(page.label), {
-        target: { value: page.value },
-      });
+      await editFilter(page,page.value);
       view.rerender(
         <StrictMode>
           <Component />
@@ -346,9 +351,7 @@ for (const page of pages)
       const { Component } = page;
       render(<Component />);
       await prepare(page.name);
-      fireEvent.change(screen.getByLabelText(page.label), {
-        target: { value: page.value },
-      });
+      await editFilter(page,page.value);
       const reply = deferred<Response>();
       heavy.mockReturnValueOnce(reply.promise);
       const b = build();
@@ -364,9 +367,7 @@ for (const page of pages)
           }) as HTMLButtonElement
         ).disabled,
       ).toBe(true);
-      fireEvent.change(screen.getByLabelText(page.label), {
-        target: { value: page.next },
-      });
+      await editFilter(page,page.next);
       await act(async () =>
         reply.resolve(json(fixture(heavy.mock.calls[0][0]))),
       );
@@ -383,15 +384,11 @@ for (const page of pages)
       const { Component } = page;
       render(<Component />);
       await prepare(page.name);
-      fireEvent.change(screen.getByLabelText(page.label), {
-        target: { value: page.value },
-      });
+      await editFilter(page,page.value);
       heavy.mockResolvedValueOnce(json({}, 503));
       fireEvent.click(build());
       await screen.findByText(/Сервер занят или недостаточно памяти/);
-      fireEvent.change(screen.getByLabelText(page.label), {
-        target: { value: page.next },
-      });
+      await editFilter(page,page.next);
       await act(async () => {
         await new Promise((r) => setTimeout(r, 350));
       });
@@ -540,14 +537,10 @@ for (const page of pages.filter((p) => p.name !== "Динамика"))
     const { Component } = page;
     render(<Component />);
     await prepare(page.name);
-    fireEvent.change(screen.getByLabelText(page.label), {
-      target: { value: page.value },
-    });
+    await editFilter(page,page.value);
     fireEvent.click(build());
     await finish(page.count);
-    fireEvent.change(screen.getByLabelText(page.label), {
-      target: { value: page.next },
-    });
+    await editFilter(page,page.next);
     const reply = deferred<Response>(),
       original = fetchMock.getMockImplementation()!;
     let first = true;

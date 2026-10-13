@@ -1,6 +1,7 @@
+import {MultiSelect} from "../components/MultiSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
-import {useEffect,useMemo,useState} from 'react';
+import {useMemo,useState} from 'react';
 import {CartesianGrid,Legend,Line,LineChart,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {query} from '../api/client';
 import {Empty,Loading} from '../components/States';
@@ -28,26 +29,17 @@ export function SalesDynamicsReportPage() {
   const [comparisonMode, setComparisonMode] = useState<
     "previous_period" | "previous_year"
   >("previous_period");
-  const [client, setClient] = useState("");
-  const [clientSearch, setClientSearch] = useState("");
+  const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [group, setGroup] = useState<Group | "">("");
   const [metric, setMetric] = useState<Metric>("revenue");
-  const { data: filters } = useApi<{ departments: string[] }>("/filters");
+  const { data: filters } = useApi<{ departments: string[]; clients?: string[] }>("/filters");
   const { data: managers } = useApi<string[]>(
     "/integrations/clients-vr/managers",
   );
   const { data: buyerTypes } = useApi<string[]>(
     "/integrations/clients-vr/buyer-types",
   );
-  useEffect(() => {
-    const timer = setTimeout(() => setClientSearch(client), 300);
-    return () => clearTimeout(timer);
-  }, [client]);
-  const { data: clientOptions } = useApi<string[]>(
-    clientSearch.trim().length >= 2
-      ? `/reports/sales-dynamics/client-options?${query({ search: clientSearch })}`
-      : "",
-  );
+  const clientOptions=useMemo(()=>[...new Map((filters?.clients||[]).filter(value=>value.trim()).map(value=>[value.trim().toLocaleLowerCase('ru-RU'),value.trim()])).values()],[filters]);
   const params = {
     date_from: dateFrom,
     date_to: dateTo,
@@ -56,7 +48,7 @@ export function SalesDynamicsReportPage() {
     department,
     manager,
     buyer_type: buyerType,
-    client,
+    clients: selectedClients,
     comparison_mode: comparisonMode,
   };
   const controller = useExplicitReport(params, (p, signal) =>
@@ -132,12 +124,16 @@ export function SalesDynamicsReportPage() {
         <div className="comparison-selector">
           <button
             className={comparisonMode === "previous_year" ? "active" : ""}
+            aria-pressed={comparisonMode === "previous_year"}
+            title="Аналогичные даты прошлого года"
             onClick={() => setComparisonMode("previous_year")}
           >
             Прошлый год
           </button>
           <button
             className={comparisonMode === "previous_period" ? "active" : ""}
+            aria-pressed={comparisonMode === "previous_period"}
+            title="Предыдущий месяц, неделя или диапазон той же длительности"
             onClick={() => setComparisonMode("previous_period")}
           >
             Предыдущий период
@@ -182,17 +178,7 @@ export function SalesDynamicsReportPage() {
           </label>
           <label>
             Клиент
-            <input
-              list="sales-dynamics-clients"
-              value={client}
-              onChange={(e) => setClient(e.target.value)}
-              placeholder="Начните вводить имя"
-            />
-            <datalist id="sales-dynamics-clients">
-              {clientOptions?.map((value) => (
-                <option key={value} value={value} />
-              ))}
-            </datalist>
+            <MultiSelect options={clientOptions} value={selectedClients} onChange={setSelectedClients} placeholder="Все клиенты" searchable />
           </label>
         </div>
         <b className="selected-period">
