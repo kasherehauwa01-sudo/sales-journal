@@ -149,6 +149,7 @@ async def report(
         "previous_period", pattern="^(previous_period|previous_year)$"
     ),
     db: AsyncSession = Depends(get_db),
+    include_both: Annotated[bool, Query()] = False,
     selected_clients: Annotated[
         list[str] | None, Query(alias="clients", max_length=500)
     ] = None,
@@ -177,26 +178,42 @@ async def report(
     current = await _metrics(
         db, effective_from, effective_to, department, clients, client
     )
-    previous = await _metrics(
-        db, previous_from, previous_to, department, clients, client
-    )
     current_points = await _chart(
         db, effective_from, effective_to, grouping, department, clients, client
     )
-    previous_points = await _chart(
-        db, previous_from, previous_to, grouping, department, clients, client
-    )
-    points = align_chart_points(current_points, previous_points)
-    return {
+    comparisons = {}
+    for mode in (
+        ("previous_period", "previous_year") if include_both else (comparison_mode,)
+    ):
+        start, end = dynamics_comparison_period(
+            effective_from, effective_to, mode, period_kind
+        )
+        previous = await _metrics(db, start, end, department, clients, client)
+        previous_points = await _chart(
+            db, start, end, grouping, department, clients, client
+        )
+        comparisons[mode] = {
+            "period": {"start": start, "end": end},
+            "metrics": {
+                key: metric_comparison(current[key], previous[key]) for key in current
+            },
+            "chart": {
+                "group_by": grouping,
+                "points": align_chart_points(current_points, previous_points),
+            },
+        }
+    primary = comparisons[comparison_mode]
+    result = {
         "period": {"start": effective_from, "end": effective_to},
         "requested_period": {"start": date_from, "end": date_to},
         "warning": warning,
-        "previous_period": {"start": previous_from, "end": previous_to},
-        "metrics": {
-            key: metric_comparison(current[key], previous[key]) for key in current
-        },
-        "chart": {"group_by": grouping, "points": points},
+        "previous_period": primary["period"],
+        "metrics": primary["metrics"],
+        "chart": primary["chart"],
     }
+    if include_both:
+        result["comparisons"] = comparisons
+    return result
 
 
 @router.get("/client-options")
