@@ -4,7 +4,7 @@ import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitR
 import {useMemo,useState} from 'react';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {MultiSelect} from '../components/MultiSelect';import {Empty,Loading} from '../components/States';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
-type Row={key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
+type Row={key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;aviatorov_stock?:number|null;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
 type Report={items:Row[];total:number;table_limit:number;summary:{candidates:number;stale:number;excess:number;decline:number};catalog_available:boolean;seasonality?:{as_of:string;years:number[];ready:boolean;last_success?:string;scope:string};limitations:string[]};
 const iso=(value:Date)=>value.toISOString().slice(0,10);const end=new Date(),start=new Date(end.getFullYear(),end.getMonth()-6,1);
 export function PromotionCandidatesPage() {
@@ -30,7 +30,7 @@ export function PromotionCandidatesPage() {
     stale_days: 30,
     low_sales_units: 2,
     excess_stock_months: 6,
-    min_stock: 1,
+    min_stock: 1 as number | null,
     recent_promotion_months: 3,
   });
   const { data: filters } = useApi<{ departments: string[] }>("/filters"),
@@ -96,7 +96,7 @@ export function PromotionCandidatesPage() {
     [data, sort],
   );
   const setCriterion = (key: keyof typeof criteria, value: string) =>
-    setCriteria({ ...criteria, [key]: Number(value) });
+    setCriteria({ ...criteria, [key]: key === "min_stock" && value.trim() === "" ? null : Number(value) });
   async function exportExcel() {
     if (!controller.snapshot) return;
     const { tab, ...payload } = controller.snapshot;
@@ -270,7 +270,7 @@ export function PromotionCandidatesPage() {
                 ["stale_days", "Дней без продажи", "Число дней от последней продажи до конца выбранного периода. При достижении порога и положительном остатке товар считается давно не продававшимся."],
                 ["low_sales_units", "Низкие продажи, шт.", "Если за последние 30 дней продано не больше этого количества и есть остаток, появляется сигнал «Низкие продажи при наличии остатка»."],
                 ["excess_stock_months", "Избыточный запас, мес.", "На сколько месяцев продаж хватит остатка при среднем темпе с первой продажи в выбранном периоде. Запас не ниже порога считается избыточным; при нулевом темпе показатель не рассчитывается."],
-                ["min_stock", "Минимальный остаток", "Остаток ниже порога — стоп-фактор «Маленький остаток»: товар не рекомендуется для акции сейчас. Нулевой остаток даёт отдельный стоп-фактор «Нет в наличии»."],
+                ["min_stock", "Минимальный остаток Авиаторов Зал+Склад", "Порог применяется только к остатку склада «Авиаторов Зал+Склад». Пустое поле отключает этот критерий. При отсутствии данных остаток показан как «Нет данных»; общий остаток не подставляется."],
               ] as const
             ).map(([key, label, explanation]) => (
               <label key={key}>
@@ -279,7 +279,7 @@ export function PromotionCandidatesPage() {
                   type="number"
                   aria-label={label}
                   aria-describedby={`criterion-${key}`}
-                  value={criteria[key]}
+                  value={criteria[key] ?? ""}
                   onChange={(e) => setCriterion(key, e.target.value)}
                 />
                 <small id={`criterion-${key}`} className="criterion-help">{explanation}</small>
@@ -347,6 +347,7 @@ export function PromotionCandidatesPage() {
                   <option value="units_change_percent">Падение, %</option>
                   <option value="days_without_sales">Дней без продажи</option>
                   <option value="stock">Остаток</option>
+                  <option value="aviatorov_stock">Остатки Авиаторов Зал+Склад</option>
                 </select>
               </label>
             </div>
@@ -368,6 +369,7 @@ export function PromotionCandidatesPage() {
                       <th>Изменение</th>
                       <th>Категория</th>
                       <th>Остаток</th>
+                      <th>Остатки Авиаторов Зал+Склад</th>
                       <th>Запас</th>
                       <th>Без продажи</th>
                       <th>Статус</th>
@@ -399,6 +401,7 @@ export function PromotionCandidatesPage() {
                         <td>
                           {x.stock == null ? "Нет данных" : number(x.stock)}
                         </td>
+                        <td>{x.aviatorov_stock == null ? "Нет данных" : number(x.aviatorov_stock)}</td>
                         <td>
                           {x.stock_months == null
                             ? "—"

@@ -41,6 +41,6 @@ def classify_candidate(row: dict, settings: dict, analysis_end: date) -> dict:
     if row.get("analysis_days",0)<90:stops.append("Недостаточно истории")
     if change is not None and change>=30:stops.append("Продажи растут без скидки")
     if row.get("stock") is not None and row["stock"]<=0:stops.append("Нет в наличии")
-    elif row.get("stock") is not None and row["stock"]<settings["min_stock"]:stops.append("Маленький остаток")
+    if settings.get("min_stock") is not None and row.get("aviatorov_stock") is not None and row["aviatorov_stock"]<settings["min_stock"]:stops.append("Маленький остаток")
     row["reasons"]=reasons;row["stop_factors"]=stops;row["status"]="Не рекомендуется сейчас" if stops else "Кандидат" if reasons else "Нет сигналов"
     return row

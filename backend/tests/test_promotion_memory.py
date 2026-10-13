@@ -18,7 +18,7 @@ from benchmarks import promotion_baseline as before
 def legacy(result):
     rows, available = result
     return [
-        {key: value for key, value in row.items() if not key.startswith("season")}
+        {key: value for key, value in row.items() if not key.startswith("season") and key != "aviatorov_stock"}
         for row in rows
     ], available
 
@@ -119,7 +119,7 @@ def test_alias_conflicts_across_5000_boundary_and_compact_warm_cache(monkeypatch
         compact, available = await router._catalog(await sales())
         assert available
         assert all(
-            set(info) == {"category", "brand", "manufacturer", "stock"}
+            set(info) == {"category", "brand", "manufacturer", "stock", "aviatorov_stock"}
             for info in compact.values()
         )
         assert _bounded_size(compact, 64 * 1024 * 1024) < 5 * 1024 * 1024
@@ -395,6 +395,7 @@ def test_projection_never_replaces_shared_full_cache(monkeypatch):
             "brand",
             "manufacturer",
             "stock",
+            "aviatorov_stock",
         }
         assert "properties" in full["code:0000001"] and "stocks" in full["code:0000001"]
         assert full["code:0000001"]["image_url"] == "https://catalog.test/0000001.jpg"

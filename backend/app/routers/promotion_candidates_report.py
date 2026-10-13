@@ -6,6 +6,7 @@ from app.services.seasonality import STATUSES
 from io import BytesIO
 from itertools import islice
 import time
+import math
 
 from app.routers.product_analytics import HeavyAnalyticsRoute
 from app.services.product_analytics_runtime import (
@@ -59,7 +60,7 @@ class Criteria(BaseModel):
     stale_days: int = 30
     low_sales_units: float = 2
     excess_stock_months: float = 6
-    min_stock: float = 1
+    min_stock: float | None = 1
     recent_promotion_months: int = 3
 
 
@@ -194,12 +195,52 @@ def _stock(info):
     return result if found else None
 
 
+def _aviatorov_stock(info):
+    """Read only the named warehouse; unknown is not an invented zero."""
+    values = (
+        info.get("stocks") or info.get("warehouse_stocks") or info.get("balances") or []
+    )
+    entries = (
+        values.items()
+        if isinstance(values, dict)
+        else ((None, item) for item in values) if isinstance(values, list) else ()
+    )
+    total = 0.0
+    found = False
+    for key, item in entries:
+        name = (
+            (item.get("warehouse") or item.get("name") or key)
+            if isinstance(item, dict)
+            else key
+        )
+        if (
+            not isinstance(name, str)
+            or " ".join(name.split()).casefold() != "авиаторов зал+склад"
+        ):
+            continue
+        raw = (
+            item.get("quantity", item.get("stock_quantity", item.get("value")))
+            if isinstance(item, dict)
+            else item
+        )
+        try:
+            quantity = float(raw)
+            if not math.isfinite(quantity):
+                continue
+            total += quantity
+            found = True
+        except (TypeError, ValueError):
+            pass
+    return total if found else None
+
+
 def _promotion_projection(info):
     return {
         "category": catalog_property(info, "category"),
         "brand": catalog_property(info, "brand"),
         "manufacturer": catalog_property(info, "manufacturer"),
         "stock": _stock(info),
+        "aviatorov_stock": _aviatorov_stock(info),
     }
 
 
@@ -263,6 +304,7 @@ async def _dataset(data, db):
             brand=info["brand"] if info else "Не заполнено",
             manufacturer=info["manufacturer"] if info else "Не заполнено",
             stock=info["stock"] if info else None,
+            aviatorov_stock=info.get("aviatorov_stock") if info else None,
         )
         if row["category"] == "Не заполнено":
             row["category"] = UNCATEGORIZED
@@ -398,6 +440,7 @@ def _excel(rows):
                 "Ожидаемый период спроса",
                 "Рекомендуемое действие",
                 "Причина рекомендации",
+                "Остатки Авиаторов Зал+Склад",
             ]
         )
         for index, x in enumerate(rows):
@@ -432,6 +475,7 @@ def _excel(rows):
                         "reason",
                         "Готовые актуальные показатели сезонности отсутствуют.",
                     ),
+                    x.get("aviatorov_stock"),
                 ]
             )
         history = book.create_sheet("История акций")

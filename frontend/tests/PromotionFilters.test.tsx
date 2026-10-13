@@ -71,7 +71,7 @@ it('supports clearing selection and Escape without triggering calculations',asyn
 it('explains every visible criterion with an associated description',()=>{
   render(<PromotionCandidatesPage/>);
   fireEvent.click(screen.getByText('Критерии отбора'));
-  for(const label of ['Падение, %','Минимум продаж ранее','Дней без продажи','Низкие продажи, шт.','Избыточный запас, мес.','Минимальный остаток']){
+  for(const label of ['Падение, %','Минимум продаж ранее','Дней без продажи','Низкие продажи, шт.','Избыточный запас, мес.','Минимальный остаток Авиаторов Зал+Склад']){
     const input=screen.getByLabelText(label),id=input.getAttribute('aria-describedby');
     expect(id).toBeTruthy();expect(document.getElementById(id!)?.textContent?.length).toBeGreaterThan(40);
   }
@@ -107,4 +107,13 @@ it('seasonality is enabled by default and filter/toggle remain explicit report p
   const payload=JSON.parse(posts()[0][1].body);
   expect(payload.use_seasonality).toBe(false);
   expect(payload.seasonality_status).toBe('Скоро сезон');
+});
+
+it('sends an empty named warehouse minimum as null only on Generate',async()=>{
+  render(<PromotionCandidatesPage/>);
+  fireEvent.change(screen.getByLabelText('Минимальный остаток Авиаторов Зал+Склад'),{target:{value:''}});
+  expect(posts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await waitFor(()=>expect(posts()).toHaveLength(1));
+  expect(JSON.parse(posts()[0][1].body).criteria.min_stock).toBeNull();
 });
