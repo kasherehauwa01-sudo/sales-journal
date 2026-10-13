@@ -13,6 +13,16 @@ from app.routers import promotion_candidates_report as router
 from app.services import product_analytics_runtime as runtime, vrcatalog
 from app.services.product_analytics_cache import _bounded_size
 from benchmarks import promotion_baseline as before
+
+
+def legacy(result):
+    rows, available = result
+    return [
+        {key: value for key, value in row.items() if not key.startswith("season")}
+        for row in rows
+    ], available
+
+
 from benchmarks.benchmark_promotion_memory import sales_rows, catalog_payload
 
 
@@ -69,7 +79,7 @@ def test_identical_filters_criteria_and_sort(monkeypatch, filters):
         original = await before._dataset(data, None)
         clear_catalog()
         optimized = await router._dataset(data, None)
-        assert optimized == original
+        assert legacy(optimized) == original
 
     asyncio.run(run())
 
@@ -93,7 +103,9 @@ def test_alias_conflicts_across_5000_boundary_and_compact_warm_cache(monkeypatch
         return catalog_payload(products)
 
     monkeypatch.setattr(vrcatalog, "_integration_batch", integration)
-    data = router.Request(date_from=date(2026, 1, 1), date_to=date(2026, 9, 30))
+    data = router.Request(
+        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30), use_seasonality=False
+    )
 
     async def run():
         old = await before._dataset(data, None)
@@ -101,7 +113,7 @@ def test_alias_conflicts_across_5000_boundary_and_compact_warm_cache(monkeypatch
         clear_catalog()
         calls.clear()
         new = await router._dataset(data, None)
-        assert new == old and len(new[0]) == 5003
+        assert legacy(new) == old and len(new[0]) == 5003
         assert calls == old_calls
         # Both cached and fresh values are projected, never full batch-info.
         compact, available = await router._catalog(await sales())
@@ -126,10 +138,14 @@ def test_catalog_unavailable_preserves_old_fallback(monkeypatch):
         monkeypatch.setattr(module, "_sales", sales, raising=False)
         monkeypatch.setattr(module, "get_sales_filter_clients", no_clients)
         monkeypatch.setattr(module, "get_catalog_batch_info", fail)
-    data = router.Request(date_from=date(2026, 1, 1), date_to=date(2026, 9, 30))
+    data = router.Request(
+        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30), use_seasonality=False
+    )
 
     async def run():
-        assert await router._dataset(data, None) == await before._dataset(data, None)
+        assert legacy(await router._dataset(data, None)) == await before._dataset(
+            data, None
+        )
 
     asyncio.run(run())
 
@@ -166,7 +182,7 @@ def test_write_only_excel_has_all_rows_and_same_values():
         assert values[-1][0] == "Товар 400"
         original = load_workbook(BytesIO(before._excel(rows).body), read_only=True)
         try:
-            assert list(original["Кандидаты"].values) == values
+            assert list(original["Кандидаты"].values) == [row[:16] for row in values]
             assert list(original["История акций"].values) == list(
                 book["История акций"].values
             )
@@ -300,7 +316,9 @@ def test_cancellation_releases_admission_and_resources(monkeypatch):
 def test_streamed_sales_match_original_sql_aggregates(monkeypatch):
     from test_catalog_directory import database
 
-    data = router.Request(date_from=date(2026, 9, 1), date_to=date(2026, 9, 30))
+    data = router.Request(
+        date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), use_seasonality=False
+    )
 
     async def run():
         async with database([("001", "A"), ("001", "A"), ("002", "B")]) as (_, factory):
@@ -344,7 +362,11 @@ def test_sales_cursor_is_closed_on_memory_error(monkeypatch):
     async def run():
         with pytest.raises(HTTPException):
             await router._sales(
-                router.Request(date_from=date(2026, 1, 1), date_to=date(2026, 9, 30)),
+                router.Request(
+                    date_from=date(2026, 1, 1),
+                    date_to=date(2026, 9, 30),
+                    use_seasonality=False,
+                ),
                 Database(),
                 None,
             )

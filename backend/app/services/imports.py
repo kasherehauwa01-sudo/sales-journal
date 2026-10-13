@@ -2,7 +2,9 @@ import json, logging, time
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy import select
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
+from app.services.seasonality_worker import advisory
+from app.services.seasonality_storage import changed
 from app.importer.parser import include_document, include_for_filename, normalize_sale, read_sales
 from app.models import ImportBatch, ImportError, Sale, SaleItem
 from app.services.import_files import with_temporary_source
@@ -46,13 +48,13 @@ async def _process_import(import_id:int,started:float)->None:
     except Exception as exc:
      await db.rollback();batch=await db.get(ImportBatch,import_id);batch.total_rows+=1;batch.error_rows+=1;batch.processed_rows+=1
      message=str(exc)[:2000];batch.log_text=(batch.log_text or "")+f"Строка {number}: {message}\n";db.add(ImportError(import_id=batch.id,row_number=number,message=message,raw_data=json.dumps(raw,ensure_ascii=False,default=str)[:10000]));await db.commit()
-   batch=await db.get(ImportBatch,import_id);batch.period_start=period_start;batch.period_end=period_end;batch.status="completed";batch.finished_at=datetime.now(timezone.utc);batch.duration_ms=int((time.monotonic()-started)*1000);batch.log_text=(batch.log_text or "")+f"Завершено: обработано {batch.processed_rows}, добавлено {batch.added_rows}, дублей {batch.duplicate_rows}, пропущено {batch.skipped_rows}, ошибок {batch.error_rows}.\n";await db.commit()
+   batch=await db.get(ImportBatch,import_id);batch.period_start=period_start;batch.period_end=period_end;batch.status="completed";batch.finished_at=datetime.now(timezone.utc);batch.duration_ms=int((time.monotonic()-started)*1000);batch.log_text=(batch.log_text or "")+f"Завершено: обработано {batch.processed_rows}, добавлено {batch.added_rows}, дублей {batch.duplicate_rows}, пропущено {batch.skipped_rows}, ошибок {batch.error_rows}.\n";await changed(db);await db.commit()
    log.info("Импорт %s завершён: добавлено %s, дублей %s, ошибок %s",import_id,batch.added_rows,batch.duplicate_rows,batch.error_rows)
   except Exception as exc:
-   await db.rollback();batch=await db.get(ImportBatch,import_id);batch.status="failed";batch.error_text=str(exc)[:10000];batch.finished_at=datetime.now(timezone.utc);batch.duration_ms=int((time.monotonic()-started)*1000);batch.log_text=(batch.log_text or "")+f"Критическая ошибка: {batch.error_text}\n";await db.commit();log.exception("Ошибка импорта %s",import_id)
+   await db.rollback();batch=await db.get(ImportBatch,import_id);batch.status="failed";batch.error_text=str(exc)[:10000];batch.finished_at=datetime.now(timezone.utc);batch.duration_ms=int((time.monotonic()-started)*1000);batch.log_text=(batch.log_text or "")+f"Критическая ошибка: {batch.error_text}\n";await changed(db);await db.commit();log.exception("Ошибка импорта %s",import_id)
 
 
-async def process_import(import_id:int):
+async def _process_import_with_source(import_id:int):
  started=time.monotonic()
  async with SessionLocal() as db:
   batch=await db.get(ImportBatch,import_id)
@@ -67,3 +69,16 @@ async def process_import(import_id:int):
   if not path.exists():
    try:await _clear_stored_path(import_id,path)
    except Exception:log.exception("Не удалось очистить stored_path импорта %s",import_id)
+
+
+async def process_import(import_id:int):
+ # Shared advisory ownership covers parsing and partial row commits. A seasonal
+ # batch cannot race with a new import, even in another backend process.
+ async with advisory(engine,shared=True,wait=True):
+  try:
+   await _process_import_with_source(import_id)
+  except BaseException:
+   async with SessionLocal() as db:
+    await changed(db)
+    await db.commit()
+   raise

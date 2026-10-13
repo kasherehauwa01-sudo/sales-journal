@@ -94,3 +94,17 @@ it('shows list loading errors and only retries after explicit reopen',async()=>{
   await screen.findByRole('option',{name:'Бренд 1'});
   expect(calls).toBe(2);
 });
+
+it('seasonality is enabled by default and filter/toggle remain explicit report parameters',async()=>{
+  render(<PromotionCandidatesPage/>);
+  const toggle=screen.getByRole('checkbox',{name:'Учитывать сезонность'}) as HTMLInputElement;
+  expect(toggle.checked).toBe(true);
+  fireEvent.change(screen.getByLabelText('Сезонность'),{target:{value:'Скоро сезон'}});
+  fireEvent.click(toggle);
+  expect(posts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await waitFor(()=>expect(posts()).toHaveLength(1));
+  const payload=JSON.parse(posts()[0][1].body);
+  expect(payload.use_seasonality).toBe(false);
+  expect(payload.seasonality_status).toBe('Скоро сезон');
+});
