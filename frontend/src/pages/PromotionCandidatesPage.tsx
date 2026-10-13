@@ -441,7 +441,7 @@ export function PromotionCandidatesPage() {
             <div className="drawer-body">
               <ProductPhoto src={selected.image_url} name={selected.name} large />
               <h3>Остатки по складам</h3>
-              {catalogError?<p role="alert">{catalogError}</p>:!catalogDetail?<p>Загрузка данных…</p>:catalogDetail.stocks?.length?<div className="catalog-values">{catalogDetail.stocks.map((stock,index)=><div key={index}><span>{stock.name}</span><b>{stock.quantity==null?"Нет данных":number(stock.quantity)}</b></div>)}</div>:<p>Нет данных об остатках</p>}
+              {catalogError?<p role="alert">{catalogError}</p>:!catalogDetail?<p>Загрузка данных…</p>:catalogDetail.stocks?.length?<div className="catalog-values promotion-warehouse-balances">{catalogDetail.stocks.map((stock,index)=><div key={index}><span>{stock.name}</span><b>{stock.quantity==null?"Нет данных":number(stock.quantity)}</b></div>)}</div>:<p>Нет данных об остатках</p>}
               <p><b>Менеджер ОЗ:</b> {catalogDetail?.oz_manager||"Нет данных"}</p>
               <h3>Почему кандидат</h3>
               <p>{selected.reasons.join(" · ") || "Сигналы не сработали"}</p>
