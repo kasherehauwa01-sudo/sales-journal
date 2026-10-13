@@ -98,7 +98,7 @@ def test_excel_contains_named_warehouse_quantity():
     book = load_workbook(BytesIO(_excel([item]).body), read_only=True)
     try:
         values = list(book["Кандидаты"].values)
-        assert values[0][-1] == "Остатки Авиаторов Зал+Склад"
-        assert values[1][-1] == 2
+        assert values[0][23] == "Остатки Авиаторов Зал+Склад"
+        assert values[1][23] == 2
     finally:
         book.close()

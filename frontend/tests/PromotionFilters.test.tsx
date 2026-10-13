@@ -199,3 +199,15 @@ it('selects visible rows, supports select all/clear all, and exports only the se
   expect(screen.queryByRole('button',{name:/Скачать XLS/})).toBeNull();
   click.mockRestore();
 });
+
+it('shows catalogue manager and preserves older column choices while adding the new column',async()=>{
+  localStorage.setItem('promotion-candidates-columns-v1',JSON.stringify(['name','status']));
+  const original=fetchMock.getMockImplementation()!;
+  const item={key:'code:001',name:'Товар',category:'Посуда',catalog_manager:'Менеджер каталога',reasons:[],stop_factors:[],status:'Кандидат',units_30:1,units_previous_30:1};
+  fetchMock.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'?Promise.resolve(response({...report,items:[item],total:1})):original(url,init));
+  render(<PromotionCandidatesPage/>);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  expect(await screen.findByText('Менеджер каталога')).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Описание: Менеджер'}).getAttribute('title')).toContain('VRCatalog');
+  expect(JSON.parse(localStorage.getItem('promotion-candidates-columns-v2')!)).toEqual(['name','status','manager']);
+});

@@ -57,7 +57,7 @@ def test_enabled_priority_disabled_legacy_order_filters_and_excel(monkeypatch):
         book = load_workbook(BytesIO(router._excel(enabled).body), read_only=True)
         try:
             values = list(book["Кандидаты"].values)
-            assert len(values[0]) == 24 and values[0][16:23] == (
+            assert len(values[0]) == 25 and values[0][16:23] == (
                 "Статус сезонности",
                 "Сезонный индекс",
                 "Сезонный приоритет",

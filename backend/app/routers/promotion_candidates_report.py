@@ -238,6 +238,7 @@ def _aviatorov_stock(info):
 
 def _promotion_projection(info):
     image = sync_image_url(vrcatalog.catalog_item_image_url(info))
+    manager = catalog_property(info, "Менеджер")
     return {
         "category": catalog_property(info, "category"),
         "brand": catalog_property(info, "brand"),
@@ -245,6 +246,7 @@ def _promotion_projection(info):
         "stock": _stock(info),
         "aviatorov_stock": _aviatorov_stock(info),
         "image_url": image,
+        "catalog_manager": None if manager == "Не заполнено" else manager,
     }
 
 
@@ -310,6 +312,7 @@ async def _dataset(data, db):
             stock=info["stock"] if info else None,
             aviatorov_stock=info.get("aviatorov_stock") if info else None,
             image_url=info.get("image_url") if info else None,
+            catalog_manager=info.get("catalog_manager") if info else None,
         )
         if row["category"] == "Не заполнено":
             row["category"] = UNCATEGORIZED
@@ -446,6 +449,7 @@ def _excel(rows):
                 "Рекомендуемое действие",
                 "Причина рекомендации",
                 "Остатки Авиаторов Зал+Склад",
+                "Менеджер",
             ]
         )
         for index, x in enumerate(rows):
@@ -481,6 +485,7 @@ def _excel(rows):
                         "Готовые актуальные показатели сезонности отсутствуют.",
                     ),
                     x.get("aviatorov_stock"),
+                    x.get("catalog_manager"),
                 ]
             )
         history = book.create_sheet("История акций")
