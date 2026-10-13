@@ -1,10 +1,11 @@
+import {ProductPhoto} from "../components/ProductPhoto";
 import {CatalogValueSelect} from "../components/CatalogValueSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {useMemo,useState} from 'react';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {MultiSelect} from '../components/MultiSelect';import {Empty,Loading} from '../components/States';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
-type Row={key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;aviatorov_stock?:number|null;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
+type Row={image_url?:string|null;key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;aviatorov_stock?:number|null;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
 type Report={items:Row[];total:number;table_limit:number;summary:{candidates:number;stale:number;excess:number;decline:number};catalog_available:boolean;seasonality?:{as_of:string;years:number[];ready:boolean;last_success?:string;scope:string};limitations:string[]};
 const iso=(value:Date)=>value.toISOString().slice(0,10);const end=new Date(),start=new Date(end.getFullYear(),end.getMonth()-6,1);
 export function PromotionCandidatesPage() {
@@ -358,6 +359,7 @@ export function PromotionCandidatesPage() {
                 <table>
                   <thead>
                     <tr>
+                      <th>Фото</th>
                       <th>Товар</th>
                       <th>Код / артикул</th>
                       <th>Категория</th>
@@ -378,6 +380,7 @@ export function PromotionCandidatesPage() {
                   <tbody>
                     {rows.map((x) => (
                       <tr key={x.key} onClick={() => setSelected(x)}>
+                        <td><ProductPhoto src={x.image_url} name={x.name} /></td>
                         <td>
                           <b>{x.name}</b>
                         </td>
@@ -430,6 +433,7 @@ export function PromotionCandidatesPage() {
               <button onClick={() => setSelected(undefined)}>Закрыть</button>
             </div>
             <div className="drawer-body">
+              <ProductPhoto src={selected.image_url} name={selected.name} large />
               <h3>Почему кандидат</h3>
               <p>{selected.reasons.join(" · ") || "Сигналы не сработали"}</p>
               {selected.stop_factors.length > 0 && (
