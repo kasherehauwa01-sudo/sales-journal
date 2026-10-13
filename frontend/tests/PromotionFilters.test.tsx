@@ -18,8 +18,8 @@ beforeEach(()=>{
   });
   vi.stubGlobal('fetch',fetchMock);
 });
-afterEach(()=>{cleanup();vi.unstubAllGlobals()});
-const posts=()=>fetchMock.mock.calls.filter(([,init])=>init?.method==='POST');
+afterEach(()=>{cleanup();localStorage.clear();vi.unstubAllGlobals()});
+const posts=()=>fetchMock.mock.calls.filter(([url,init])=>init?.method==='POST'&&!String(url).includes('/product-catalog'));
 
 it('highlights only the selected period and clears it for manual dates',()=>{
   render(<PromotionCandidatesPage/>);
@@ -132,4 +132,40 @@ it('shows the same product photo in the report and opened card with a fallback o
   fireEvent.error(screen.getAllByRole('img',{name:'Товар с фото'})[1]);
   expect(screen.getByLabelText('Нет фото: Товар с фото')).toBeTruthy();
   expect(posts()).toHaveLength(1);
+});
+
+it('persists column selection on this device and adds descriptions without recalculating',async()=>{
+  const original=fetchMock.getMockImplementation()!;
+  const item={key:'code:001',name:'Тест',category:'Посуда',reasons:[],stop_factors:[],status:'Кандидат',units_30:1,units_previous_30:1};
+  fetchMock.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'?Promise.resolve(response({...report,items:[item],total:1})):original(url,init));
+  const view=render(<PromotionCandidatesPage/>);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await screen.findByRole('button',{name:'Настройка колонок'});
+  fireEvent.click(screen.getByRole('button',{name:'Настройка колонок'}));
+  fireEvent.click(screen.getByRole('checkbox',{name:'30 дней'}));
+  expect(screen.getByRole('button',{name:'Описание: 30 дней'}).getAttribute('title')).toContain('30 дней');
+  expect(posts()).toHaveLength(1);
+  view.unmount();
+  render(<PromotionCandidatesPage/>);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await screen.findByRole('button',{name:'Настройка колонок'});
+  expect(screen.getByRole('button',{name:'Описание: 30 дней'})).toBeTruthy();
+});
+
+it('loads warehouse balances and OZ manager only when opening the product card',async()=>{
+  const original=fetchMock.getMockImplementation()!;
+  const item={key:'code:001',code:'001',name:'Товар',category:'Посуда',reasons:[],stop_factors:[],status:'Кандидат',units_30:1,units_previous_30:1,units_60_90:1};
+  fetchMock.mockImplementation((url:string,init?:RequestInit)=>{
+    if(url.includes('/product-catalog'))return Promise.resolve(response({stocks:[{name:'Склад А',quantity:7}],oz_manager:'Ответственный ОЗ'}));
+    return init?.method==='POST'?Promise.resolve(response({...report,items:[item],total:1})):original(url,init);
+  });
+  render(<PromotionCandidatesPage/>);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await screen.findByText('Товар',{selector:'b'});
+  expect(fetchMock.mock.calls.filter(([url])=>url.includes('/product-catalog'))).toHaveLength(0);
+  fireEvent.click(screen.getByText('Товар',{selector:'b'}));
+  expect(await screen.findByText('Ответственный ОЗ')).toBeTruthy();
+  expect(screen.getByText('Склад А')).toBeTruthy();
+  expect(posts()).toHaveLength(1);
+  expect(fetchMock.mock.calls.filter(([url])=>url.includes('/product-catalog'))).toHaveLength(1);
 });
