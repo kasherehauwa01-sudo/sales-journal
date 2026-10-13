@@ -79,3 +79,55 @@ def test_multiple_selected_clients_intersect_manager_for_both_periods(monkeypatc
         "start": date(2025, 9, 1),
         "end": date(2025, 9, 30),
     }
+
+
+def test_both_comparisons_share_current_calculation_and_filters(monkeypatch):
+    from datetime import date
+
+    calls = []
+
+    async def allowed(*args):
+        return ["Клиент А"]
+
+    async def metrics(db, start, end, department, clients, client):
+        calls.append(("metrics", start, end, clients))
+        value = 50 if start.year == 2025 else 20 if start.month == 8 else 100
+        return {
+            "revenue": value,
+            "sales_count": 1,
+            "items_count": 2,
+            "average_check": value,
+            "average_items_per_sale": 2,
+        }
+
+    async def chart(db, start, end, grouping, department, clients, client):
+        calls.append(("chart", start, end, clients))
+        return []
+
+    monkeypatch.setattr(sales_dynamics_report, "_client_filter", allowed)
+    monkeypatch.setattr(sales_dynamics_report, "_metrics", metrics)
+    monkeypatch.setattr(sales_dynamics_report, "_chart", chart)
+    result = asyncio.run(
+        sales_dynamics_report.report(
+            date(2026, 9, 1),
+            date(2026, 9, 30),
+            period_kind="previous_month",
+            group_by="day",
+            comparison_mode="previous_period",
+            include_both=True,
+            db=None,
+            selected_clients=["Клиент А"],
+        )
+    )
+    comparisons = result["comparisons"]
+    assert comparisons["previous_period"]["period"] == {
+        "start": date(2026, 8, 1),
+        "end": date(2026, 8, 31),
+    }
+    assert comparisons["previous_year"]["period"] == {
+        "start": date(2025, 9, 1),
+        "end": date(2025, 9, 30),
+    }
+    assert comparisons["previous_period"]["metrics"]["revenue"]["previous"] == 20
+    assert comparisons["previous_year"]["metrics"]["revenue"]["previous"] == 50
+    assert len(calls) == 6 and all(call[3] == ["клиент а"] for call in calls)

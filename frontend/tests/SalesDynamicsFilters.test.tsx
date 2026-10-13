@@ -1,7 +1,7 @@
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {SalesDynamicsReportPage} from '../src/pages/SalesDynamicsReportPage';
-vi.mock('recharts',()=>{const Box=({children}:any)=><div>{children}</div>;return {CartesianGrid:()=>null,Legend:()=>null,Line:()=>null,LineChart:Box,ResponsiveContainer:Box,Tooltip:()=>null,XAxis:()=>null,YAxis:()=>null};});
+vi.mock('recharts',()=>{const Box=({children}:any)=><div>{children}</div>;return {CartesianGrid:()=>null,Legend:()=>null,Line:({name}:any)=><span data-testid="comparison-line">{name}</span>,LineChart:Box,ResponsiveContainer:Box,Tooltip:()=>null,XAxis:()=>null,YAxis:()=>null};});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 it('selects multiple clients with search and comparison only when explicitly generating',async()=>{
   const period={start:'2026-09-01',end:'2026-09-30'},comparison={current:10,previous:5,difference:5,change_percent:100};
@@ -15,12 +15,12 @@ it('selects multiple clients with search and comparison only when explicitly gen
   fireEvent.change(screen.getByPlaceholderText('Поиск'),{target:{value:'Клиент Б'}});
   expect(screen.queryByRole('checkbox',{name:'Клиент А'})).toBeNull();
   fireEvent.click(await screen.findByRole('checkbox',{name:'Клиент Б'}));fireEvent.mouseDown(document.body);
-  fireEvent.click(screen.getByRole('button',{name:'Прошлый год'}));
-  expect(screen.getByRole('button',{name:'Прошлый год'}).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(screen.getByRole('checkbox',{name:'Прошлый год'}));
+  expect((screen.getByRole('checkbox',{name:'Прошлый год'}) as HTMLInputElement).checked).toBe(false);
   expect(reports()).toHaveLength(0);fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
   await waitFor(()=>expect(reports()).toHaveLength(1));
   const params=new URL(reports()[0][0],'http://test').searchParams;
-  expect(params.getAll('clients')).toEqual(['Клиент А','Клиент Б']);expect(params.get('comparison_mode')).toBe('previous_year');
+  expect(params.getAll('clients')).toEqual(['Клиент А','Клиент Б']);expect(params.get('include_both')).toBe('true');
 });
 
 it('searches all clients on the server and loads further pages without losing selections',async()=>{
@@ -40,23 +40,26 @@ it('searches all clients on the server and loads further pages without losing se
   expect(fetch.mock.calls.filter(([url])=>url.includes('/reports/sales-dynamics?'))).toHaveLength(0);
 });
 
-it('places the comparison toggle under filters and sends both modes only on Generate',async()=>{
+it('preloads both comparisons and switches cards/lines locally with checkboxes below Generate',async()=>{
   const period={start:'2026-09-01',end:'2026-09-30'},comparison={current:10,previous:5,difference:5,change_percent:100};
   const metrics=Object.fromEntries(['revenue','sales_count','items_count','average_check','average_items_per_sale'].map(key=>[key,comparison]));
-  const fetch=vi.fn(async(url:string)=>new Response(JSON.stringify(url.includes('/filters')?{departments:[]}:url.includes('/reports/sales-dynamics?')?{period,requested_period:period,previous_period:period,metrics,chart:{group_by:'day',points:[]}}:[])));
+  const chart={group_by:'day',points:[{index:0,period:period.start,previous_period:'2026-08-01',current:{revenue:10},previous:{revenue:5}}]};
+  const fetch=vi.fn(async(url:string)=>new Response(JSON.stringify(url.includes('/filters')?{departments:[]}:url.includes('/reports/sales-dynamics?')?{period,requested_period:period,previous_period:period,metrics,chart,comparisons:{previous_period:{period,metrics,chart},previous_year:{period,metrics,chart}}}:[])));
   vi.stubGlobal('fetch',fetch);render(<SalesDynamicsReportPage/>);
-  const toggle=screen.getByRole('group',{name:'Сравнение периодов'});
-  expect(toggle.previousElementSibling?.classList.contains('report-filters')).toBe(true);
+  const group=screen.getByRole('group',{name:'Отображать сравнения'});
+  expect(group.previousElementSibling?.classList.contains('analytics-build-actions')).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await screen.findAllByTestId('comparison-line');
   const calls=()=>fetch.mock.calls.filter(([url])=>url.includes('/reports/sales-dynamics?'));
-  fireEvent.click(screen.getByRole('button',{name:'Прошлый год'}));
-  expect(calls()).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
-  await waitFor(()=>expect(calls()).toHaveLength(1));
-  expect(new URL(calls()[0][0],'http://test').searchParams.get('comparison_mode')).toBe('previous_year');
-  await waitFor(()=>expect((screen.getByRole('button',{name:'Сформировать отчёт'}) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole('button',{name:'Предыдущий период'}));
-  expect(calls()).toHaveLength(1);
-  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
-  await waitFor(()=>expect(calls()).toHaveLength(2));
-  expect(new URL(calls()[1][0],'http://test').searchParams.get('comparison_mode')).toBe('previous_period');
+  expect(calls()).toHaveLength(1);expect(new URL(calls()[0][0],'http://test').searchParams.get('include_both')).toBe('true');
+  expect(screen.getAllByTestId('comparison-line')).toHaveLength(3);
+  fireEvent.click(screen.getByRole('checkbox',{name:'Предыдущий период'}));
+  expect(screen.queryAllByText(/^Предыдущий период:/)).toHaveLength(0);
+  expect(screen.getAllByTestId('comparison-line')).toHaveLength(2);
+  fireEvent.click(screen.getByRole('checkbox',{name:'Прошлый год'}));
+  expect(screen.queryAllByText(/^Прошлый год:/)).toHaveLength(0);
+  expect(screen.getAllByTestId('comparison-line')).toHaveLength(1);
+  fireEvent.click(screen.getByRole('checkbox',{name:'Предыдущий период'}));fireEvent.click(screen.getByRole('checkbox',{name:'Прошлый год'}));
+  expect(screen.getAllByTestId('comparison-line')).toHaveLength(3);expect(calls()).toHaveLength(1);
+  expect(screen.queryByText(/Параметры изменены/)).toBeNull();
 });

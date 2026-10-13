@@ -12,7 +12,8 @@ type PeriodKind='yesterday'|'current_week'|'previous_week'|'current_month'|'prev
 type Group='day'|'week'|'month';type Metric='revenue'|'sales_count'|'items_count'|'average_check'|'average_items_per_sale';
 type Comparison={current:number;previous:number;difference:number;change_percent:number|null};
 type Point={index:number;period?:string;previous_period?:string;current?:Record<string,number|string>;previous?:Record<string,number|string>};
-type Report={period:{start:string;end:string};requested_period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string|null;metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
+type ComparisonResult={period:{start:string;end:string};metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
+type Report={comparisons?:{previous_period:ComparisonResult;previous_year:ComparisonResult};period:{start:string;end:string};requested_period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string|null;metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
 const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {date_from:iso(from),date_to:iso(to)}}
 const periodOptions:Array<[PeriodKind,string]>=[['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Прошлая неделя'],['current_month','Текущий месяц'],['previous_month','Прошлый месяц'],['custom','Произвольный период']];
@@ -26,9 +27,7 @@ export function SalesDynamicsReportPage() {
   const [department, setDepartment] = useState("");
   const [manager, setManager] = useState("");
   const [buyerType, setBuyerType] = useState("");
-  const [comparisonMode, setComparisonMode] = useState<
-    "previous_period" | "previous_year"
-  >("previous_period");
+  const [showPrevious,setShowPrevious]=useState(true),[showYear,setShowYear]=useState(true);
   const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [group, setGroup] = useState<Group | "">("");
   const [metric, setMetric] = useState<Metric>("revenue");
@@ -48,7 +47,7 @@ export function SalesDynamicsReportPage() {
     manager,
     buyer_type: buyerType,
     clients: selectedClients,
-    comparison_mode: comparisonMode,
+    include_both: true,
   };
   const controller = useExplicitReport(params, (p, signal) =>
     reportJson<Report>(`/reports/sales-dynamics?${query(p)}`, signal),
@@ -63,15 +62,17 @@ export function SalesDynamicsReportPage() {
       setDateTo(next.date_to);
     }
   }
-  const chartData = useMemo(
-    () =>
-      (data?.chart.points || []).map((point) => ({
-        ...point,
-        currentValue: Number(point.current?.[metric] || 0),
-        previousValue: Number(point.previous?.[metric] || 0),
-      })),
-    [data, metric],
-  );
+  const previousComparison=data?.comparisons?.previous_period;
+  const yearComparison=data?.comparisons?.previous_year;
+  const chartData=useMemo(()=>{
+    const previous=data?.comparisons?.previous_period.chart.points||data?.chart.points||[],year=data?.comparisons?.previous_year.chart.points||[];
+    const currentCount=previous.filter(point=>point.current).length;
+    const count=Math.max(currentCount,showPrevious?previous.length:0,showYear?year.length:0);
+    return Array.from({length:count},(_,index)=>{
+      const current=previous[index]?.current||year[index]?.current;
+      return {index,period:previous[index]?.period||year[index]?.period,previous_period:previous[index]?.previous_period,year_period:year[index]?.previous_period,currentValue:current?Number(current[metric]):null,previousValue:previous[index]?.previous?Number(previous[index].previous![metric]):null,yearValue:year[index]?.previous?Number(year[index].previous![metric]):null};
+    });
+  },[data,metric,showPrevious,showYear]);
   const cards: Metric[] = [
     "revenue",
     "sales_count",
@@ -84,7 +85,7 @@ export function SalesDynamicsReportPage() {
       <div className="page-title">
         <div>
           <h1>Динамика продаж</h1>
-          <p>Отчеты · сравнение показателей с предыдущим периодом</p>
+          <p>Отчеты · сравнение с предыдущим периодом и прошлым годом</p>
         </div>
       </div>
       <section className="panel dynamics-filters">
@@ -162,15 +163,14 @@ export function SalesDynamicsReportPage() {
             <SalesClientSelect value={selectedClients} onChange={setSelectedClients} />
           </label>
         </div>
-        <div className="comparison-selector dynamics-comparison-toggle" role="group" aria-label="Сравнение периодов">
-          <button type="button" className={comparisonMode === "previous_period" ? "active" : ""} aria-pressed={comparisonMode === "previous_period"} onClick={() => setComparisonMode("previous_period")}>Предыдущий период</button>
-          <button type="button" className={comparisonMode === "previous_year" ? "active" : ""} aria-pressed={comparisonMode === "previous_year"} onClick={() => setComparisonMode("previous_year")}>Прошлый год</button>
-        </div>
-        <small className="dynamics-comparison-help">{comparisonMode === "previous_year" ? "Сравнение с аналогичными датами прошлого года." : "Сравнение с предыдущим месяцем, неделей или диапазоном той же длительности."} Режим применяется при нажатии «Сформировать отчёт».</small>
         <b className="selected-period">
           Выбранный период: {date(dateFrom)} — {date(dateTo)}
         </b>
         <ReportActions report={controller} />
+        <div className="dynamics-comparison-checkboxes" role="group" aria-label="Отображать сравнения">
+          <label><input type="checkbox" checked={showPrevious} onChange={event=>setShowPrevious(event.target.checked)}/>Предыдущий период</label>
+          <label><input type="checkbox" checked={showYear} onChange={event=>setShowYear(event.target.checked)}/>Прошлый год</label>
+        </div>
       </section>
       <ReportEmpty show={!data && !loading} />
       {!loading && data?.warning && (
@@ -191,18 +191,10 @@ export function SalesDynamicsReportPage() {
                 <div className="kpi" key={key}>
                   <span>{label}</span>
                   <strong>{formatMetric(key, item.current)}</strong>
-                  <small>
-                    Предыдущий период: {formatMetric(key, item.previous)}
-                  </small>
-                  <small className={item.difference >= 0 ? "up" : "down"}>
-                    {item.difference >= 0 ? "+" : ""}
-                    {formatMetric(key, item.difference)}
-                  </small>
-                  <small>
-                    {item.change_percent == null
-                      ? "Нет данных для сравнения"
-                      : `${item.change_percent >= 0 ? "+" : ""}${percent(item.change_percent)} к предыдущему периоду`}
-                  </small>
+                  {[[showPrevious,"Предыдущий период",previousComparison?.metrics[key]||item],[showYear,"Прошлый год",yearComparison?.metrics[key]]].map(([show,title,comparison])=>{
+                    const compared=comparison as Comparison|undefined;if(!show||!compared)return null;
+                    return <div className="dynamics-card-comparison" key={String(title)}><small>{String(title)}: {formatMetric(key,compared.previous)}</small><small className={compared.difference>=0?"up":"down"}>{compared.difference>=0?"+":""}{formatMetric(key,compared.difference)} · {compared.change_percent==null?"Нет данных для сравнения":percent(compared.change_percent)}</small></div>;
+                  })}
                 </div>
               );
             })}
@@ -213,8 +205,9 @@ export function SalesDynamicsReportPage() {
                 <h2>Динамика продаж</h2>
                 <p>
                   {date(data.period.start)} — {date(data.period.end)} ·
-                  {controller.snapshot?.comparison_mode === "previous_year" ? "сравнение с прошлым годом:" : "сравнение с предыдущим периодом:"} {date(data.previous_period.start)} —{" "}
-                  {date(data.previous_period.end)}
+                  {showPrevious&&<>Предыдущий период: {date(previousComparison?.period.start||data.previous_period.start)} — {date(previousComparison?.period.end||data.previous_period.end)} </>}
+                  {showYear&&yearComparison&&<>Прошлый год: {date(yearComparison.period.start)} — {date(yearComparison.period.end)}</>}
+
                 </p>
               </div>
               <div className="dynamics-controls">
@@ -262,21 +255,8 @@ export function SalesDynamicsReportPage() {
                   />
                   <YAxis width={110} tickFormatter={number} />
                   <Tooltip
-                    labelFormatter={(_, items) => {
-                      const row = items?.[0]?.payload;
-                      return `${date(row?.period)} / ${date(row?.previous_period)}`;
-                    }}
-                    formatter={(value, name, item) => {
-                      const row = item.payload;
-                      const current = Number(row.currentValue),
-                        previous = Number(row.previousValue),
-                        difference = current - previous,
-                        pct = previous ? (difference / previous) * 100 : null;
-                      return [
-                        `${formatMetric(metric, Number(value))}${name === "Текущий период" ? ` · Δ ${formatMetric(metric, difference)} · ${pct == null ? "нет сравнения" : percent(pct)}` : ""}`,
-                        String(name),
-                      ];
-                    }}
+                    labelFormatter={(_,items)=>date(items?.[0]?.payload?.period)}
+                    formatter={(value,name,item)=>[`${formatMetric(metric,Number(value))} · ${date(name==="Прошлый год"?item.payload.year_period:name==="Предыдущий период"?item.payload.previous_period:item.payload.period)}`,String(name)]}
                   />
                   <Legend />
                   <Line
@@ -286,14 +266,15 @@ export function SalesDynamicsReportPage() {
                     stroke="#2878ff"
                     strokeWidth={3}
                   />
-                  <Line
+                  {showPrevious&&(<Line
                     type="monotone"
                     dataKey="previousValue"
                     name="Предыдущий период"
                     stroke="#9b6cff"
                     strokeDasharray="6 4"
                     strokeWidth={2}
-                  />
+                  />)}
+                  {showYear&&<Line type="monotone" dataKey="yearValue" name="Прошлый год" stroke="#10a087" strokeDasharray="3 3" strokeWidth={2}/>}
                 </LineChart>
               </ResponsiveContainer>
             ) : (
