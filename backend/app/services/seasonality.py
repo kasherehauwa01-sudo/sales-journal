@@ -252,7 +252,11 @@ def recommend(
     if (
         stock is None
         or not math.isfinite(stock)
-        or stock < criteria["min_stock"]
+        or (
+            criteria.get("min_stock") is not None
+            and row.get("aviatorov_stock") is not None
+            and row["aviatorov_stock"] < criteria["min_stock"]
+        )
         or stock <= 0
     ):
         result.update(
