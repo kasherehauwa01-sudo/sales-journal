@@ -49,21 +49,26 @@ def test_selected_workbook_all_columns_and_embedded_photo(monkeypatch):
         assert sheet["B2"].value == "=1+1" and sheet["B2"].data_type == "s"
         assert sheet["C2"].value == "001" and sheet["M2"].value == 2
         assert len(sheet._images) == 1
+        assert book.sheetnames == ["Выбранные товары"]
+        assert sheet["B2"].alignment.wrap_text is True
+        assert sheet["B1"].font.bold is True
+        assert sheet.column_dimensions["B"].width <= 70
     finally:
         book.close()
     assert calls == ["https://catalog.test/a.png"]
 
 
-def test_missing_photo_preserves_public_link(monkeypatch):
+def test_missing_photo_is_not_replaced_by_link(monkeypatch):
     monkeypatch.setattr(export, "thumbnail", lambda *args: None)
     monkeypatch.setattr(export, "ensure_headroom", lambda: None)
-    result = export.excel_selected(
-        export.SelectedExport(rows=[row(), row(key="code:002", image_url=None)])
-    )
+    with pytest.raises(HTTPException) as error:
+        export.excel_selected(export.SelectedExport(rows=[row()]))
+    assert error.value.status_code == 502
+    result = export.excel_selected(export.SelectedExport(rows=[row(image_url=None)]))
     book = load_workbook(BytesIO(result.body), read_only=True)
     try:
-        assert book["Выбранные товары"]["A2"].value == "https://catalog.test/a.png"
-        assert book["Выбранные товары"]["A3"].value == "Нет фото"
+        assert book.sheetnames == ["Выбранные товары"]
+        assert book["Выбранные товары"]["A2"].value == "Нет фото"
     finally:
         book.close()
 
@@ -90,7 +95,10 @@ def test_untrusted_origin_and_expired_budget_never_download(monkeypatch, tmp_pat
         is None
     )
     assert export.trusted_image_url("https://user:secret@catalog.test/a.jpg") is None
-    assert export.trusted_image_url("https://other.test/a.jpg") is None
+    assert (
+        export.trusted_image_url("https://other.test/a.jpg")
+        == "https://other.test/a.jpg"
+    )
 
 
 def test_selection_limits_and_memory_rejection(monkeypatch):
@@ -119,6 +127,7 @@ def test_thumbnail_download_is_bounded_and_resized(monkeypatch, tmp_path):
         def open(self, *args, **kwargs):
             return BytesIO(data.getvalue())
 
+    monkeypatch.setattr(export, "public_address", lambda url: ("93.184.216.34", 443))
     monkeypatch.setattr(export, "build_opener", lambda *args: Opener())
     path = export.thumbnail(
         "https://catalog.test/a.png", tmp_path, 2, time.perf_counter() + 10
@@ -142,7 +151,9 @@ def test_endpoint_exports_snapshot_without_dataset_query(monkeypatch):
     monkeypatch.setattr(router, "_dataset", reject)
     monkeypatch.setattr(export, "thumbnail", lambda *args: None)
     monkeypatch.setattr(export, "ensure_headroom", lambda: None)
-    result = asyncio.run(router.export_selected(export.SelectedExport(rows=[row()])))
+    result = asyncio.run(
+        router.export_selected(export.SelectedExport(rows=[row(image_url=None)]))
+    )
     assert result.status_code == 200
 
 
@@ -169,6 +180,7 @@ def test_redirect_and_oversized_dimensions_are_rejected(monkeypatch, tmp_path):
         def open(self, *args, **kwargs):
             return BytesIO(data.getvalue())
 
+    monkeypatch.setattr(export, "public_address", lambda url: ("93.184.216.34", 443))
     monkeypatch.setattr(export, "build_opener", lambda *args: Opener())
     monkeypatch.setattr(export, "MAX_IMAGE_PIXELS", 100)
     assert (
@@ -178,3 +190,84 @@ def test_redirect_and_oversized_dimensions_are_rejected(monkeypatch, tmp_path):
         is None
     )
     assert not list(tmp_path.iterdir())
+
+
+def test_widths_name_wrapping_and_single_sheet(monkeypatch):
+    monkeypatch.setattr(export, "ensure_headroom", lambda: None)
+    monkeypatch.setattr(export, "thumbnail", lambda *args: None)
+    data = export.SelectedExport(
+        rows=[row(name="Название " * 30, category="Длинная категория", image_url=None)]
+    )
+    result = export.excel_selected(data)
+    book = load_workbook(BytesIO(result.body))
+    try:
+        sheet = book["Выбранные товары"]
+        assert book.sheetnames == ["Выбранные товары"]
+        assert sheet.column_dimensions["B"].width == 70
+        assert sheet["B2"].alignment.wrap_text
+        assert sheet.row_dimensions[2].height > 24
+        assert sheet.column_dimensions["D"].width >= len("Длинная категория") + 2
+        assert sheet["H2"].number_format == "#,##0.##"
+        assert sheet["A2"].value == "Нет фото"
+    finally:
+        book.close()
+
+
+def test_private_dns_rejected_and_valid_address_pinned(monkeypatch):
+    monkeypatch.setattr(
+        export.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
+    )
+    with pytest.raises(ValueError):
+        export.public_address("https://cdn.test/a.png")
+    monkeypatch.setattr(
+        export.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    assert export.public_address("https://cdn.test/a.png") == ("93.184.216.34", 443)
+    connected = []
+    monkeypatch.setattr(
+        export.socket,
+        "create_connection",
+        lambda address, *args: connected.append(address),
+    )
+    handler = export.PinnedHTTPS(("93.184.216.34", 443))
+
+    def open_connection(factory, request, **kwargs):
+        connection = factory("cdn.test", timeout=3, context=None)
+        assert connection.host == "cdn.test"
+        connection._create_connection(("127.0.0.1", 443), 3)
+
+    monkeypatch.setattr(handler, "do_open", open_connection)
+    handler.https_open(export.Request("https://cdn.test/a.png"))
+    assert connected == [("93.184.216.34", 443)]
+
+
+def test_public_redirect_is_followed_without_credentials(monkeypatch):
+    from urllib.error import HTTPError
+
+    monkeypatch.setattr(export, "public_address", lambda url: ("93.184.216.34", 443))
+    calls = []
+
+    class Opener:
+        def open(self, request, **kwargs):
+            assert not request.has_header("Authorization")
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                raise HTTPError(
+                    request.full_url,
+                    302,
+                    "redirect",
+                    {"Location": "https://cdn.test/a.png"},
+                    BytesIO(),
+                )
+            return BytesIO(b"image")
+
+    monkeypatch.setattr(export, "build_opener", lambda *args: Opener())
+    with export.image_response(
+        "https://catalog.test/a.png", time.perf_counter() + 10
+    ) as result:
+        assert result.read() == b"image"
+    assert calls == ["https://catalog.test/a.png", "https://cdn.test/a.png"]
