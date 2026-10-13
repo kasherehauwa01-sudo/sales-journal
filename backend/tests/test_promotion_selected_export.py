@@ -52,7 +52,7 @@ def test_selected_workbook_all_columns_and_embedded_photo(monkeypatch):
         assert book.sheetnames == ["Выбранные товары"]
         assert sheet["B2"].alignment.wrap_text is True
         assert sheet["B1"].font.bold is True
-        assert sheet.column_dimensions["B"].width <= 70
+        assert sheet.column_dimensions["B"].width <= 50
     finally:
         book.close()
     assert calls == ["https://catalog.test/a.png"]
@@ -203,10 +203,10 @@ def test_widths_name_wrapping_and_single_sheet(monkeypatch):
     try:
         sheet = book["Выбранные товары"]
         assert book.sheetnames == ["Выбранные товары"]
-        assert sheet.column_dimensions["B"].width == 70
+        assert sheet.column_dimensions["B"].width == 50
         assert sheet["B2"].alignment.wrap_text
         assert sheet.row_dimensions[2].height > 24
-        assert sheet.column_dimensions["D"].width >= len("Длинная категория") + 2
+        assert sheet.column_dimensions["D"].width == 13
         assert sheet["H2"].number_format == "#,##0.##"
         assert sheet["A2"].value == "Нет фото"
     finally:
@@ -271,3 +271,39 @@ def test_public_redirect_is_followed_without_credentials(monkeypatch):
     ) as result:
         assert result.read() == b"image"
     assert calls == ["https://catalog.test/a.png", "https://cdn.test/a.png"]
+
+
+def test_export_width_caps_wrapped_reasons_and_unfilled_rows(monkeypatch):
+    monkeypatch.setattr(export, "ensure_headroom", lambda: None)
+    data = export.SelectedExport(
+        rows=[
+            row(
+                name="Название " * 30,
+                category="Категория длинная",
+                reasons=["Причина " * 30],
+                image_url=None,
+            ),
+            row(key="code:002", image_url=None),
+        ]
+    )
+    book = load_workbook(BytesIO(export.excel_selected(data).body))
+    try:
+        sheet = book["Выбранные товары"]
+        for column, width in {
+            "B": 50,
+            "G": 50,
+            "D": 13,
+            "K": 13,
+            "M": 13,
+            "O": 13,
+        }.items():
+            assert sheet.column_dimensions[column].width <= width
+        assert sheet["G2"].alignment.wrap_text
+        assert sheet["B2"].value == "Название " * 30
+        assert sheet["G2"].value == "Причина " * 30
+        assert sheet.row_dimensions[2].height > 24
+        assert sheet.row_dimensions[1].height > 26
+        for values in sheet.iter_rows(min_row=2):
+            assert all(cell.fill.patternType is None for cell in values)
+    finally:
+        book.close()

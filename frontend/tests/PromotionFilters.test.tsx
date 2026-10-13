@@ -187,6 +187,9 @@ it('selects visible rows, supports select all/clear all, and exports only the se
   expect(screen.queryByRole('button',{name:/Скачать XLS/})).toBeNull();
   fireEvent.click(first);
   expect(screen.queryByText('Остатки по складам')).toBeNull();
+  const download=screen.getByRole('button',{name:'Скачать XLS (1)'});
+  expect(download.closest('.page-title')).toBeNull();
+  expect(download.closest('.promotion-selected-download')).toBeTruthy();
   fireEvent.click(screen.getByRole('button',{name:'Скачать XLS (1)'}));
   fireEvent.click(screen.getByRole('button',{name:'Скачать XLS (1)'}));
   await waitFor(()=>expect(fetchMock.mock.calls.filter(([url])=>url.includes('/export-selected'))).toHaveLength(1));

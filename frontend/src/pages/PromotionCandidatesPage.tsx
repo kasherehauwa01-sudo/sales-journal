@@ -153,13 +153,12 @@ export function PromotionCandidatesPage() {
     setSelectedMonths(months);
   }
   return (
-    <div className="page">
+    <div className={`page ${checkedRows.length>0&&tab==="candidates"?"promotion-has-selection":""}`}>
       <div className="page-title">
         <div>
           <h1>Кандидаты в акцию</h1>
           <p>Объяснимые сигналы для маркетолога, а не автоматическое решение</p>
         </div>
-        {checkedRows.length>0&&tab==="candidates"&&<button className="primary" disabled={controller.busy} onClick={exportSelected}>Скачать XLS ({checkedRows.length})</button>}
         <button
           className="primary"
           disabled={
@@ -441,6 +440,7 @@ export function PromotionCandidatesPage() {
           </section>
         </>
       )}
+      {checkedRows.length>0&&tab==="candidates"&&<div className="promotion-selected-download"><button className="primary" disabled={controller.busy} onClick={exportSelected}>Скачать XLS ({checkedRows.length})</button></div>}
       {selected && (
         <>
           <div className="backdrop" onClick={() => setSelected(undefined)} />

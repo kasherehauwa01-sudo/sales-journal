@@ -302,7 +302,9 @@ def excel_selected(data):
                         + 2,
                     )
             widths[0] = 15  # 96-pixel photograph.
-            widths[1] = min(70, widths[1])
+            limits = {1: 50, 6: 50, 3: 13, 10: 13, 12: 13, 14: 13}
+            for column, limit in limits.items():
+                widths[column] = min(limit, widths[column])
             for index, width in enumerate(widths, 1):
                 sheet.column_dimensions[get_column_letter(index)].width = min(
                     255, width
@@ -313,9 +315,17 @@ def excel_selected(data):
                 cell = safe_cell(sheet, value)
                 cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
                 cell.fill = PatternFill("solid", fgColor="243451")
-                cell.alignment = Alignment(vertical="center")
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
                 headers.append(cell)
-            sheet.row_dimensions[1].height = 26
+            sheet.row_dimensions[1].height = max(
+                26,
+                max(
+                    len(wrap(header, width=max(1, int(widths[column]) - 2)))
+                    for column, header in enumerate(HEADERS)
+                )
+                * 15
+                + 8,
+            )
             sheet.append(headers)
             deadline = time.perf_counter() + IMAGE_BUDGET_SECONDS
             images = {}
@@ -331,14 +341,17 @@ def excel_selected(data):
                         502,
                         "Не удалось встроить фото в Excel. Повторите выгрузку или выберите меньше товаров.",
                     )
-                name_lines = sum(
-                    max(1, len(wrap(line, width=max(1, int(widths[1]) - 2))))
-                    for line in row.name.split("\n")
-                )
-                sheet.row_dimensions[index].height = max(
-                    56 if path else 24, 15 * name_lines + 8
-                )
                 values = row_values(row)
+                wrapped_lines = max(
+                    sum(
+                        max(1, len(wrap(line, width=max(1, int(widths[column]) - 2))))
+                        for line in display(values[column]).split("\n")
+                    )
+                    for column in limits
+                )
+                sheet.row_dimensions[index].height = min(
+                    409, max(56 if path else 24, 15 * wrapped_lines + 8)
+                )
                 if path:
                     sheet.add_image(ExcelImage(path), f"A{index}")
                 else:
@@ -348,15 +361,12 @@ def excel_selected(data):
                     cell = safe_cell(sheet, value)
                     cell.font = Font(name="Calibri", size=11)
                     cell.border = border
-                    cell.fill = PatternFill(
-                        "solid", fgColor="F3F6FA" if index % 2 == 0 else "FFFFFF"
-                    )
                     cell.alignment = Alignment(
                         vertical="center",
                         horizontal=(
                             "right" if isinstance(value, (float, int)) else "left"
                         ),
-                        wrap_text=column == 1,
+                        wrap_text=column in limits,
                     )
                     if isinstance(value, (float, int)):
                         cell.number_format = "#,##0.##"
