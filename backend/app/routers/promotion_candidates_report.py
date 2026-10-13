@@ -16,6 +16,7 @@ from app.services.product_analytics_runtime import (
     ensure_headroom,
     run_cpu,
 )
+from app.services.promotion_selected_export import SelectedExport, excel_selected
 from app.services import vrcatalog
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -567,3 +568,8 @@ async def product_catalog(data: ProductCatalogRequest):
     if info is None:
         raise HTTPException(502, "Данные товара не получены от VRCatalog")
     return info
+
+
+@router.post("/export-selected")
+async def export_selected(data: SelectedExport):
+    return await run_cpu(excel_selected, data)
