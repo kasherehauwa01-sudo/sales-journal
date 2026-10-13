@@ -120,24 +120,6 @@ export function SalesDynamicsReportPage() {
             </label>
           </div>
         )}
-        <div className="comparison-selector">
-          <button
-            className={comparisonMode === "previous_year" ? "active" : ""}
-            aria-pressed={comparisonMode === "previous_year"}
-            title="Аналогичные даты прошлого года"
-            onClick={() => setComparisonMode("previous_year")}
-          >
-            Прошлый год
-          </button>
-          <button
-            className={comparisonMode === "previous_period" ? "active" : ""}
-            aria-pressed={comparisonMode === "previous_period"}
-            title="Предыдущий месяц, неделя или диапазон той же длительности"
-            onClick={() => setComparisonMode("previous_period")}
-          >
-            Предыдущий период
-          </button>
-        </div>
         <div className="report-filters">
           <label>
             Подразделение
@@ -180,6 +162,11 @@ export function SalesDynamicsReportPage() {
             <SalesClientSelect value={selectedClients} onChange={setSelectedClients} />
           </label>
         </div>
+        <div className="comparison-selector dynamics-comparison-toggle" role="group" aria-label="Сравнение периодов">
+          <button type="button" className={comparisonMode === "previous_period" ? "active" : ""} aria-pressed={comparisonMode === "previous_period"} onClick={() => setComparisonMode("previous_period")}>Предыдущий период</button>
+          <button type="button" className={comparisonMode === "previous_year" ? "active" : ""} aria-pressed={comparisonMode === "previous_year"} onClick={() => setComparisonMode("previous_year")}>Прошлый год</button>
+        </div>
+        <small className="dynamics-comparison-help">{comparisonMode === "previous_year" ? "Сравнение с аналогичными датами прошлого года." : "Сравнение с предыдущим месяцем, неделей или диапазоном той же длительности."} Режим применяется при нажатии «Сформировать отчёт».</small>
         <b className="selected-period">
           Выбранный период: {date(dateFrom)} — {date(dateTo)}
         </b>
@@ -226,7 +213,7 @@ export function SalesDynamicsReportPage() {
                 <h2>Динамика продаж</h2>
                 <p>
                   {date(data.period.start)} — {date(data.period.end)} ·
-                  сравнение с {date(data.previous_period.start)} —{" "}
+                  {controller.snapshot?.comparison_mode === "previous_year" ? "сравнение с прошлым годом:" : "сравнение с предыдущим периодом:"} {date(data.previous_period.start)} —{" "}
                   {date(data.previous_period.end)}
                 </p>
               </div>

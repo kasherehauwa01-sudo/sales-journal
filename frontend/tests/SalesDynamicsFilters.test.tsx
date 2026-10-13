@@ -39,3 +39,24 @@ it('searches all clients on the server and loads further pages without losing se
   expect(screen.getByRole('button',{name:'Клиент'}).textContent).toContain('Выбрано: 1');
   expect(fetch.mock.calls.filter(([url])=>url.includes('/reports/sales-dynamics?'))).toHaveLength(0);
 });
+
+it('places the comparison toggle under filters and sends both modes only on Generate',async()=>{
+  const period={start:'2026-09-01',end:'2026-09-30'},comparison={current:10,previous:5,difference:5,change_percent:100};
+  const metrics=Object.fromEntries(['revenue','sales_count','items_count','average_check','average_items_per_sale'].map(key=>[key,comparison]));
+  const fetch=vi.fn(async(url:string)=>new Response(JSON.stringify(url.includes('/filters')?{departments:[]}:url.includes('/reports/sales-dynamics?')?{period,requested_period:period,previous_period:period,metrics,chart:{group_by:'day',points:[]}}:[])));
+  vi.stubGlobal('fetch',fetch);render(<SalesDynamicsReportPage/>);
+  const toggle=screen.getByRole('group',{name:'Сравнение периодов'});
+  expect(toggle.previousElementSibling?.classList.contains('report-filters')).toBe(true);
+  const calls=()=>fetch.mock.calls.filter(([url])=>url.includes('/reports/sales-dynamics?'));
+  fireEvent.click(screen.getByRole('button',{name:'Прошлый год'}));
+  expect(calls()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await waitFor(()=>expect(calls()).toHaveLength(1));
+  expect(new URL(calls()[0][0],'http://test').searchParams.get('comparison_mode')).toBe('previous_year');
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Сформировать отчёт'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'Предыдущий период'}));
+  expect(calls()).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await waitFor(()=>expect(calls()).toHaveLength(2));
+  expect(new URL(calls()[1][0],'http://test').searchParams.get('comparison_mode')).toBe('previous_period');
+});
