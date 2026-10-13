@@ -52,6 +52,7 @@ HEADERS = [
     "Запас, мес.",
     "Без продажи, дней",
     "Статус",
+    "Менеджер",
 ]
 
 
@@ -67,6 +68,7 @@ class SelectedRow(BaseModel):
     code: str | None = Field(default=None, max_length=500)
     article: str | None = Field(default=None, max_length=500)
     category: str = Field(default="", max_length=1000)
+    catalog_manager: str | None = Field(default=None, max_length=1000)
     image_url: str | None = Field(default=None, max_length=2048)
     seasonality: Season | None = None
     reasons: list[Annotated[str, Field(max_length=1000)]] = Field(
@@ -269,6 +271,7 @@ def row_values(row):
         row.stock_months,
         row.days_without_sales,
         row.status,
+        row.catalog_manager,
     ]
 
 
@@ -359,7 +362,9 @@ def excel_selected(data):
                         cell.number_format = "#,##0.##"
                     cells.append(cell)
                 sheet.append(cells)
-            sheet.auto_filter.ref = f"A1:P{len(data.rows)+1}"
+            sheet.auto_filter.ref = (
+                f"A1:{get_column_letter(len(HEADERS))}{len(data.rows)+1}"
+            )
             output = BytesIO()
             ensure_headroom()
             book.save(output)
