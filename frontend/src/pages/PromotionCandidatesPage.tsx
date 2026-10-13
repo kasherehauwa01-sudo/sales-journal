@@ -154,7 +154,7 @@ export function PromotionCandidatesPage() {
   }
   return (
     <div className="page">
-      <div className="page-title promotion-sticky-title">
+      <div className="page-title">
         <div>
           <h1>Кандидаты в акцию</h1>
           <p>Объяснимые сигналы для маркетолога, а не автоматическое решение</p>
@@ -363,7 +363,7 @@ export function PromotionCandidatesPage() {
               </div>
             ))}
           </div>
-          <section className="panel table-panel">
+          <section className="panel table-panel promotion-table-panel">
             <div className="table-meta">
               <b>
                 Показано: {rows.length} из {data.total} (лимит{" "}

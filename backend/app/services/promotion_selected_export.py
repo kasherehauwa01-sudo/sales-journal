@@ -1,18 +1,31 @@
 """Bounded export of the already displayed/selected report snapshot."""
 
 import tempfile
+import ipaddress
+import socket
+from http.client import HTTPConnection, HTTPSConnection
+from textwrap import wrap
 import time
 from io import BytesIO
 from pathlib import Path
 from typing import Annotated
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlsplit, urljoin
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
-from fastapi import Response
+from fastapi import Response, HTTPException
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from app.config import settings
@@ -83,16 +96,109 @@ def trusted_image_url(value):
     url = sync_image_url(value)
     if not url:
         return None
-    parsed, source = urlsplit(url), urlsplit(settings.vrcatalog_api_url)
-    # Request payload is untrusted. Fetch only the configured catalogue origin,
-    # without credentials, redirects or arbitrary third-party destinations.
-    if (parsed.scheme, parsed.hostname, parsed.port) != (
-        source.scheme,
-        source.hostname,
-        source.port,
+    parsed = urlsplit(url)
+    if (
+        parsed.port not in (None, 80, 443)
+        or parsed.hostname == "localhost"
+        or parsed.hostname.endswith(".localhost")
     ):
         return None
+    try:
+        if not ipaddress.ip_address(parsed.hostname).is_global:
+            return None
+    except ValueError:
+        pass  # DNS names are checked and pinned immediately before connecting.
     return url
+
+
+def public_address(url):
+    parsed = urlsplit(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    addresses = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+    if not addresses or any(
+        not ipaddress.ip_address(item[4][0]).is_global for item in addresses
+    ):
+        raise ValueError("non_public_image_address")
+    return addresses[0][4][0], port
+
+
+class PinnedHTTP(HTTPHandler):
+    def __init__(self, address):
+        super().__init__()
+        self.address = address
+
+    def http_open(self, request):
+        def connection(host, **kwargs):
+            result = HTTPConnection(host, **kwargs)
+            result._create_connection = (
+                lambda _, timeout, source=None: socket.create_connection(
+                    self.address, timeout, source
+                )
+            )
+            return result
+
+        return self.do_open(connection, request)
+
+
+class PinnedHTTPS(HTTPSHandler):
+    def __init__(self, address):
+        super().__init__()
+        self.address = address
+
+    def https_open(self, request):
+        def connection(host, **kwargs):
+            result = HTTPSConnection(host, **kwargs)
+            result._create_connection = (
+                lambda _, timeout, source=None: socket.create_connection(
+                    self.address, timeout, source
+                )
+            )
+            return result
+
+        # HTTPSConnection still checks the certificate and uses the original
+        # hostname for SNI; only the already-validated connection IP is pinned.
+        return self.do_open(
+            connection,
+            request,
+            context=self._context,
+        )
+
+
+def image_response(url, deadline):
+    for attempt in range(4):
+        url = trusted_image_url(url)
+        if not url or time.perf_counter() >= deadline:
+            raise ValueError("image_unavailable")
+        address = public_address(url)
+        timeout = min(3, max(0.1, deadline - time.perf_counter()))
+        request = Request(
+            url,
+            headers={"Accept": "image/*", "User-Agent": "SalesJournal-selected-export"},
+        )
+        try:
+            return build_opener(
+                ProxyHandler({}),
+                PinnedHTTP(address),
+                PinnedHTTPS(address),
+                NoRedirect(),
+            ).open(request, timeout=timeout)
+        except HTTPError as error:
+            location = error.headers.get("Location") if error.headers else None
+            error.close()
+            if (
+                error.code not in (301, 302, 303, 307, 308)
+                or not location
+                or attempt == 3
+            ):
+                raise
+            redirected = urljoin(url, location)
+            if (
+                urlsplit(url).scheme == "https"
+                and urlsplit(redirected).scheme != "https"
+            ):
+                raise ValueError("image_redirect_downgrade")
+            url = redirected
+    raise ValueError("image_redirect_limit")
 
 
 def thumbnail(value, directory, index, deadline):
@@ -102,14 +208,7 @@ def thumbnail(value, directory, index, deadline):
     raw_path = Path(directory) / "source-image"
     target = Path(directory) / f"image-{index}.png"
     try:
-        request = Request(
-            url,
-            headers={"Accept": "image/*", "User-Agent": "SalesJournal-selected-export"},
-        )
-        timeout = min(3, max(0.1, deadline - time.perf_counter()))
-        with build_opener(NoRedirect()).open(
-            request, timeout=timeout
-        ) as response, raw_path.open("wb") as output:
+        with image_response(url, deadline) as response, raw_path.open("wb") as output:
             size = 0
             while True:
                 ensure_headroom()
@@ -151,6 +250,36 @@ def safe_cell(sheet, value):
     return cell
 
 
+def row_values(row):
+    season = row.seasonality or Season()
+    return [
+        "",
+        row.name,
+        row.code or row.article or "—",
+        row.category,
+        season.status,
+        season.priority,
+        ", ".join(row.reasons),
+        row.units_30,
+        row.units_previous_30,
+        row.units_change_percent,
+        row.category_change_percent,
+        row.stock,
+        row.aviatorov_stock,
+        row.stock_months,
+        row.days_without_sales,
+        row.status,
+    ]
+
+
+def display(value):
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:,.2f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
 def excel_selected(data):
     ensure_headroom()
     book = Workbook(write_only=True)
@@ -158,12 +287,35 @@ def excel_selected(data):
         with tempfile.TemporaryDirectory(prefix="promotion-selected-") as directory:
             sheet = book.create_sheet("Выбранные товары")
             sheet.freeze_panes = "D2"
-            sheet.column_dimensions["A"].width = 15
-            sheet.column_dimensions["B"].width = 35
-            sheet.append([safe_cell(sheet, value) for value in HEADERS])
+            widths = [len(header) + 2 for header in HEADERS]
+            for row in data.rows:
+                for index, value in enumerate(row_values(row)):
+                    widths[index] = max(
+                        widths[index],
+                        max(
+                            (len(line) for line in display(value).splitlines()),
+                            default=0,
+                        )
+                        + 2,
+                    )
+            widths[0] = 15  # 96-pixel photograph.
+            widths[1] = min(70, widths[1])
+            for index, width in enumerate(widths, 1):
+                sheet.column_dimensions[get_column_letter(index)].width = min(
+                    255, width
+                )
+            border = Border(bottom=Side(style="thin", color="DCE2EC"))
+            headers = []
+            for value in HEADERS:
+                cell = safe_cell(sheet, value)
+                cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="243451")
+                cell.alignment = Alignment(vertical="center")
+                headers.append(cell)
+            sheet.row_dimensions[1].height = 26
+            sheet.append(headers)
             deadline = time.perf_counter() + IMAGE_BUDGET_SECONDS
             images = {}
-            missing = 0
             for index, row in enumerate(data.rows, 2):
                 ensure_headroom()
                 if row.image_url not in images:
@@ -171,51 +323,43 @@ def excel_selected(data):
                         row.image_url, directory, index, deadline
                     )
                 path = images[row.image_url]
+                if row.image_url and not path:
+                    raise HTTPException(
+                        502,
+                        "Не удалось встроить фото в Excel. Повторите выгрузку или выберите меньше товаров.",
+                    )
+                name_lines = sum(
+                    max(1, len(wrap(line, width=max(1, int(widths[1]) - 2))))
+                    for line in row.name.split("\n")
+                )
+                sheet.row_dimensions[index].height = max(
+                    56 if path else 24, 15 * name_lines + 8
+                )
+                values = row_values(row)
                 if path:
-                    sheet.row_dimensions[index].height = 56
-                    image = ExcelImage(path)
-                    sheet.add_image(image, f"A{index}")
-                    photo = ""
+                    sheet.add_image(ExcelImage(path), f"A{index}")
                 else:
-                    photo = sync_image_url(row.image_url) or "Нет фото"
-                    missing += 1
-                season = row.seasonality or Season()
-                values = [
-                    photo,
-                    row.name,
-                    row.code or row.article or "—",
-                    row.category,
-                    season.status,
-                    season.priority,
-                    ", ".join(row.reasons),
-                    row.units_30,
-                    row.units_previous_30,
-                    row.units_change_percent,
-                    row.category_change_percent,
-                    row.stock,
-                    row.aviatorov_stock,
-                    row.stock_months,
-                    row.days_without_sales,
-                    row.status,
-                ]
-                sheet.append([safe_cell(sheet, value) for value in values])
+                    values[0] = "Нет фото"
+                cells = []
+                for column, value in enumerate(values):
+                    cell = safe_cell(sheet, value)
+                    cell.font = Font(name="Calibri", size=11)
+                    cell.border = border
+                    cell.fill = PatternFill(
+                        "solid", fgColor="F3F6FA" if index % 2 == 0 else "FFFFFF"
+                    )
+                    cell.alignment = Alignment(
+                        vertical="center",
+                        horizontal=(
+                            "right" if isinstance(value, (float, int)) else "left"
+                        ),
+                        wrap_text=column == 1,
+                    )
+                    if isinstance(value, (float, int)):
+                        cell.number_format = "#,##0.##"
+                    cells.append(cell)
+                sheet.append(cells)
             sheet.auto_filter.ref = f"A1:P{len(data.rows)+1}"
-            notes = book.create_sheet("Информация")
-            notes.append(
-                [
-                    "Экспорт выбранных строк из последнего сформированного отчёта; все колонки независимо от настройки видимости."
-                ]
-            )
-            notes.append(
-                [
-                    f"Строк без встроенного фото: {missing}. Если фото не загрузилось, в столбце сохранена публичная ссылка или «Нет фото»."
-                ]
-            )
-            notes.append(
-                [
-                    "Фото: последовательные загрузки, до 2 МБ/4 млн пикселей, общий бюджет 15 секунд; сторонние origin и redirect не загружаются."
-                ]
-            )
             output = BytesIO()
             ensure_headroom()
             book.save(output)
