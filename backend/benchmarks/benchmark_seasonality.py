@@ -11,12 +11,12 @@ import sys
 import time
 from types import SimpleNamespace
 import tracemalloc
-from app.services.seasonality import calculate, identity
+from app.services.seasonality import calculate_history as calculate, identity
 from app.services.seasonality_storage import attach
 from app.models import SeasonalityState, SeasonalityProfile
 
 
-def observations():
+def observations(years=2):
     return [
         {
             "year": year,
@@ -26,7 +26,7 @@ def observations():
             "first_sale": date(year, month, 1),
             "last_sale": date(year, month, 28),
         }
-        for year in (2024, 2025)
+        for year in range(2026 - years, 2026)
         for month, units in enumerate([10] * 9 + [70, 90, 70], 1)
     ]
 
@@ -43,7 +43,7 @@ def rows(count):
         }
 
 
-async def sample(stage, count, trace):
+async def sample(stage, count, trace, years=2):
     if trace:
         tracemalloc.start()
     started = time.perf_counter()
@@ -52,10 +52,10 @@ async def sample(stage, count, trace):
     max_batch = 0
     if stage == "calculate":
         for index in range(count):
-            result = calculate(observations(), 2024)
+            result = calculate(observations(years), date(2026, 10, 12))
             digest.update(json.dumps(result, sort_keys=True).encode())
     else:
-        profile = calculate(observations(), 2024)
+        profile = calculate(observations(years), date(2026, 10, 12))
 
         class Database:
             async def get(self, model, key):
@@ -63,12 +63,12 @@ async def sample(stage, count, trace):
                     active_generation=1,
                     generation=1,
                     rebuild_required=False,
-                    first_year=2024,
-                    algorithm_version=1,
+                    first_year=0,
+                    algorithm_version=2,
                     phase="idle",
                     source_revision=0,
                     job_revision=0,
-                    coverage=(1 << 24) - 1,
+                    coverage=((2026 * 12 + 10) << 12) | 4095,
                     last_success=None,
                 )
 
@@ -105,6 +105,7 @@ async def sample(stage, count, trace):
     return {
         "stage": stage,
         "products": count,
+        "history_years": years,
         "elapsed_ms": elapsed,
         "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         * 1024,
@@ -121,11 +122,16 @@ def main():
     parser.add_argument("--products", type=int, default=27016)
     parser.add_argument("--stage", choices=["calculate", "attach"])
     parser.add_argument("--trace", action="store_true")
+    parser.add_argument("--years", type=int, default=2)
     args = parser.parse_args()
-    if not args.run or not 1 <= args.products <= 80000:
+    if not args.run or not 1 <= args.products <= 80000 or not 1 <= args.years <= 100:
         parser.error("Explicit --run, bounded --products required")
     if args.stage:
-        print(json.dumps(asyncio.run(sample(args.stage, args.products, args.trace))))
+        print(
+            json.dumps(
+                asyncio.run(sample(args.stage, args.products, args.trace, args.years))
+            )
+        )
         return
     result = []
     for stage in ("calculate", "attach"):
@@ -136,6 +142,8 @@ def main():
                 "--run",
                 "--products",
                 str(args.products),
+                "--years",
+                str(args.years),
                 "--stage",
                 stage,
             ] + (["--trace"] if trace else [])

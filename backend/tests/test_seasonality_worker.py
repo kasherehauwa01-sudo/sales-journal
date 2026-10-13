@@ -175,10 +175,11 @@ def test_delete_and_calendar_roll_rebuild_without_publishing_partial_results():
             await finish(factory, engine, date(2027, 1, 10))
             async with factory() as db:
                 current = await state(db)
-                assert current.active_generation == 3 and current.first_year == 2025
+                assert current.active_generation == 2 and current.first_year == 0
+                assert current.coverage >> 12 == 2027 * 12 + 1
                 assert (
-                    await db.get(SeasonalityProfile, (3, identity("code:001")))
-                ).data["pattern"] == "insufficient"
+                    await db.get(SeasonalityProfile, (2, identity("code:001")))
+                ).data["pattern"] == "confirmed"
 
     asyncio.run(run())
 
@@ -418,7 +419,7 @@ def test_unknown_or_insufficient_memory_does_not_advance(monkeypatch):
             monkeypatch.setattr(worker, "available_memory", lambda: None)
             with pytest.raises(worker.SeasonalityBusy):
                 await worker.run_batch(factory, engine, date(2026, 10, 12))
-            monkeypatch.setattr(worker, "available_memory", lambda: 1024 ** 3)
+            monkeypatch.setattr(worker, "available_memory", lambda: 1024**3)
 
             def reject():
                 raise HTTPException(503, "memory_headroom")
@@ -429,5 +430,76 @@ def test_unknown_or_insufficient_memory_does_not_advance(monkeypatch):
             assert error.value.status_code == 503
             async with factory() as db:
                 assert (await state(db)).cursor == 0
+
+    asyncio.run(operation())
+
+
+def test_all_history_worker_keeps_years_older_than_previous_two():
+    async def operation():
+        async with fixture() as (engine, factory):
+            async with factory() as db:
+                for sale in (await db.scalars(select(Sale))).all():
+                    sale.sale_date = sale.sale_date.replace(
+                        year=sale.sale_date.year - 6
+                    )
+                await db.commit()
+            await finish(factory, engine)
+            async with factory() as db:
+                current = await state(db)
+                profile = await db.get(
+                    SeasonalityProfile,
+                    (current.active_generation, identity("code:001")),
+                )
+                assert profile.data["years"] == [2018, 2019]
+                assert profile.data["pattern"] == "confirmed"
+                rows = [
+                    {
+                        "key": "code:001",
+                        "stock": 100,
+                        "units_30": 1,
+                        "reasons": [],
+                        "stop_factors": [],
+                    }
+                ]
+                result = await attach(rows, db, {"min_stock": 1}, date(2026, 10, 12))
+                assert (
+                    result["ready"]
+                    and rows[0]["seasonality"]["status"] == "Сезон сейчас"
+                )
+
+    asyncio.run(operation())
+
+
+def test_algorithm_upgrade_builds_new_history_generation_and_resumes():
+    async def operation():
+        async with fixture() as (engine, factory):
+            await finish(factory, engine)
+            async with factory() as db:
+                current = await state(db)
+                current.algorithm_version = 1
+                current.first_year = 2024
+                await db.commit()
+            await worker.run_batch(factory, engine, date(2026, 10, 12), scan_size=7)
+            async with factory() as db:
+                current = await state(db)
+                assert (
+                    current.generation == 2
+                    and current.active_generation == 1
+                    and current.cursor == 7
+                )
+            await worker.run_batch(factory, engine, date(2026, 10, 12), scan_size=7)
+            async with factory() as db:
+                assert (await state(db)).cursor == 14
+            await finish(factory, engine)
+            async with factory() as db:
+                current = await state(db)
+                profile = await db.get(
+                    SeasonalityProfile,
+                    (current.active_generation, identity("code:001")),
+                )
+                assert (
+                    current.active_generation == 2
+                    and profile.data["history_scope"] == "all"
+                )
 
     asyncio.run(operation())

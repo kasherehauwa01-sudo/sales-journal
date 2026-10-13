@@ -54,7 +54,8 @@ async def attach(
         and generation == current.generation
         and not current.rebuild_required
         and current.algorithm_version == ALGORITHM_VERSION
-        and current.first_year == today.year - 2
+        and current.first_year == 0
+        and current.coverage >> 12 == today.year * 12 + today.month
         and current.phase in ("idle", "calculate", "cleanup")
         and current.source_revision == current.job_revision
     )
@@ -93,7 +94,7 @@ async def attach(
                 if record.product_key == keys[record.identity]
                 and isinstance(record.data, dict)
                 and record.data.get("version") == ALGORITHM_VERSION
-                and record.data.get("years") == [today.year - 2, today.year - 1]
+                and record.data.get("history_scope") == "all"
             }
         articles = {
             catalog_identity(None, key.split(":", 1)[1]): digest
@@ -132,7 +133,8 @@ async def attach(
             row["seasonality"] = info
     return {
         "as_of": today,
-        "years": [today.year - 2, today.year - 1],
+        "years": [],
+        "history_scope": "all",
         "ready": valid,
         "last_success": current.last_success if current else None,
         "phase": current.phase if current else "not_initialized",
@@ -147,7 +149,8 @@ async def metadata(db, today):
     )
     return {
         "as_of": today,
-        "years": [today.year - 2, today.year - 1],
+        "years": [],
+        "history_scope": "all",
         "last_success": current.last_success if current else None,
         "phase": current.phase if current else "not_initialized",
         "ready": bool(
@@ -156,7 +159,8 @@ async def metadata(db, today):
             and current.active_generation
             and current.active_generation == current.generation
             and current.algorithm_version == ALGORITHM_VERSION
-            and current.first_year == today.year - 2
+            and current.first_year == 0
+            and current.coverage >> 12 == today.year * 12 + today.month
             and not current.rebuild_required
             and current.source_revision == current.job_revision
             and current.phase in ("idle", "calculate", "cleanup")

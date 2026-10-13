@@ -152,11 +152,11 @@ it('persists column selection on this device and adds descriptions without recal
   expect(screen.getByRole('button',{name:'Описание: 30 дней'})).toBeTruthy();
 });
 
-it('loads warehouse balances and OZ manager only when opening the product card',async()=>{
+it('loads warehouse balances and catalogue manager only when opening the product card',async()=>{
   const original=fetchMock.getMockImplementation()!;
   const item={key:'code:001',code:'001',name:'Товар',category:'Посуда',reasons:[],stop_factors:[],status:'Кандидат',units_30:1,units_previous_30:1,units_60_90:1};
   fetchMock.mockImplementation((url:string,init?:RequestInit)=>{
-    if(url.includes('/product-catalog'))return Promise.resolve(response({stocks:[{name:'Склад А',quantity:7}],oz_manager:'Ответственный ОЗ'}));
+    if(url.includes('/product-catalog'))return Promise.resolve(response({stocks:[{name:'Склад А',quantity:7}],manager:'Ответственный ОЗ'}));
     return init?.method==='POST'?Promise.resolve(response({...report,items:[item],total:1})):original(url,init);
   });
   render(<PromotionCandidatesPage/>);
@@ -165,6 +165,7 @@ it('loads warehouse balances and OZ manager only when opening the product card',
   expect(fetchMock.mock.calls.filter(([url])=>url.includes('/product-catalog'))).toHaveLength(0);
   fireEvent.click(screen.getByText('Товар',{selector:'b'}));
   expect(await screen.findByText('Ответственный ОЗ')).toBeTruthy();
+  expect(screen.getByText('Менеджер:',{selector:'b'})).toBeTruthy();
   expect(screen.getByText('Склад А')).toBeTruthy();
   expect(posts()).toHaveLength(1);
   expect(fetchMock.mock.calls.filter(([url])=>url.includes('/product-catalog'))).toHaveLength(1);

@@ -36,13 +36,12 @@ from app.services.product_analytics_runtime import (
     ensure_headroom,
     diagnostics,
 )
-from app.services.seasonality import ALGORITHM_VERSION, calculate, identity
+from app.services.seasonality import ALGORITHM_VERSION, calculate_history, identity
 from app.services.seasonality_storage import state
 
 SOURCE_LOCK = 734190220
 WORKER_LOCK = 734190221
 CATALOG_LOCK = 734190117
-COMPLETE = (1 << 24) - 1
 
 
 class SeasonalityBusy(RuntimeError):
@@ -125,7 +124,7 @@ async def limits(db):
 
 async def _begin(db, current, today):
     upper = int(await db.scalar(select(func.max(SaleItem.id))) or 0)
-    first_year = today.year - 2
+    first_year = 0  # v2: all-history scope marker, not a calendar boundary
     rebuild = (
         current.rebuild_required
         or current.algorithm_version != ALGORITHM_VERSION
@@ -149,11 +148,14 @@ async def _begin(db, current, today):
             + 1
         )
         current.cursor = 0
-        current.coverage = 0
+        current.coverage = (today.year * 12 + today.month) << 12
         current.calculated = 0
     else:
         current.generation = current.active_generation
         current.cursor = current.source_cursor
+    current.coverage = ((today.year * 12 + today.month) << 12) | (
+        current.coverage & 4095
+    )
     current.algorithm_version = ALGORITHM_VERSION
     current.first_year = first_year
     current.upper_id = upper
@@ -177,8 +179,8 @@ async def scan_batch(db, current, size):
         current.phase = "calculate"
         return 0
     finish = ids[-1]
-    # All years register identities; CASE keeps only the selected two years in
-    # numerical aggregates. No detailed history is returned to Python.
+    # Aggregate all recorded years in this bounded PK batch; no detailed sales
+    # history is returned to Python.
     year = func.extract("year", Sale.sale_date).label("year")
     month = func.extract("month", Sale.sale_date).label("month")
     # Group raw names too: Python strip/casefold differs from SQL trim/lower
@@ -228,11 +230,7 @@ async def scan_batch(db, current, size):
             fingerprint = identity((item.name or "").strip().casefold())
             low, high = names.get(digest, (fingerprint, fingerprint))
             names[digest] = (min(low, fingerprint), max(high, fingerprint))
-        if not current.first_year <= int(item.year) <= current.first_year + 1:
-            continue
-        current.coverage |= 1 << (
-            (int(item.year) - current.first_year) * 12 + int(item.month) - 1
-        )
+        current.coverage |= 1 << (int(item.month) - 1)
         pk = (digest, int(item.year), int(item.month))
         if pk not in monthly:
             monthly[pk] = {
@@ -376,27 +374,6 @@ async def calculate_batch(db, current, size, today):
         current.phase = "cleanup"
         return 0
     keys = [p.identity for p in profiles]
-    records = (
-        await db.scalars(
-            select(SeasonalityMonth).where(
-                SeasonalityMonth.generation == current.generation,
-                SeasonalityMonth.identity.in_(keys),
-            )
-        )
-    ).all()
-    grouped = {key: [] for key in keys}
-    for row in records:
-        grouped[row.identity].append(
-            {
-                "year": row.year,
-                "month": row.month,
-                "units": row.units,
-                "positive_lines": row.positive_lines,
-                "incomplete_source": row.incomplete_source,
-                "first_sale": row.first_sale,
-                "last_sale": row.last_sale,
-            }
-        )
     article_keys = {
         catalog_identity(None, p.product_key.split(":", 1)[1]): p.identity
         for p in profiles
@@ -419,16 +396,37 @@ async def calculate_batch(db, current, size, today):
         ambiguous = {article_keys[key] for key in lookups}
     for profile in profiles:
         ensure_headroom()
-        profile.data = calculate(
-            grouped[profile.identity],
-            current.first_year,
-            complete_history=current.coverage == COMPLETE,
+        items = []
+        cursor = await db.stream_scalars(
+            select(SeasonalityMonth)
+            .where(
+                SeasonalityMonth.generation == current.generation,
+                SeasonalityMonth.identity == profile.identity,
+            )
+            .order_by(SeasonalityMonth.year, SeasonalityMonth.month)
+            .execution_options(yield_per=250)
         )
+        try:
+            async for record in cursor:
+                if len(items) % 250 == 0:
+                    ensure_headroom()
+                items.append(
+                    {
+                        "year": record.year,
+                        "month": record.month,
+                        "units": record.units,
+                        "positive_lines": record.positive_lines,
+                        "incomplete_source": record.incomplete_source,
+                    }
+                )
+        finally:
+            await cursor.close()
+        profile.data = calculate_history(items, today)
         if profile.product_key.startswith("unknown:") or (
             profile.product_key.startswith("article:")
             and (profile.name_min != profile.name_max or profile.identity in ambiguous)
         ):
-            profile.data = calculate([], current.first_year, complete_history=False)
+            profile.data = calculate_history([], today)
             profile.data["reason"] = (
                 "Нет надёжного кода или артикул неоднозначен: сезонная история не сопоставляется случайным выбором товара."
             )
@@ -508,10 +506,13 @@ async def run_batch(factory, engine, today, *, scan_size=1000, profile_size=100)
             if (
                 current.phase == "idle"
                 or current.rebuild_required
-                or current.first_year != today.year - 2
+                or current.first_year != 0
                 or current.algorithm_version != ALGORITHM_VERSION
             ):
                 await _begin(db, current, today)
+            current.coverage = ((today.year * 12 + today.month) << 12) | (
+                current.coverage & 4095
+            )
             # Imports/deletions can happen between batches. Never publish before
             # catching the new source tail; deletion triggers a new generation.
             if current.source_revision != current.job_revision:
