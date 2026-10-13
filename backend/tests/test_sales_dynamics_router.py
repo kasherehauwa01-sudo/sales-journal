@@ -131,3 +131,48 @@ def test_both_comparisons_share_current_calculation_and_filters(monkeypatch):
     assert comparisons["previous_period"]["metrics"]["revenue"]["previous"] == 20
     assert comparisons["previous_year"]["metrics"]["revenue"]["previous"] == 50
     assert len(calls) == 6 and all(call[3] == ["клиент а"] for call in calls)
+
+
+def test_preloaded_groupings_share_three_daily_chart_queries(monkeypatch):
+    from datetime import date
+
+    calls = []
+
+    async def allowed(*args):
+        return None
+
+    async def metrics(*args):
+        return {"revenue": 30, "sales_count": 2, "items_count": 4}
+
+    async def chart(
+        db, start, end, grouping, department, clients, client, all_groupings=False
+    ):
+        assert all_groupings is True
+        calls.append(start)
+        return {
+            key: [{"period": start, "revenue": 30}] for key in ("day", "week", "month")
+        }
+
+    monkeypatch.setattr(sales_dynamics_report, "_client_filter", allowed)
+    monkeypatch.setattr(sales_dynamics_report, "_metrics", metrics)
+    monkeypatch.setattr(sales_dynamics_report, "_chart", chart)
+    result = asyncio.run(
+        sales_dynamics_report.report(
+            date(2026, 9, 1),
+            date(2026, 9, 30),
+            period_kind="custom",
+            group_by="day",
+            comparison_mode="previous_period",
+            include_both=True,
+            include_groupings=True,
+            db=None,
+        )
+    )
+    assert len(calls) == 3
+    for comparison in result["comparisons"].values():
+        assert set(comparison["chart_groupings"]) == {"day", "week", "month"}
+        assert (
+            comparison["chart_groupings"]["week"]["points"][0]["current"]["revenue"]
+            == 30
+        )
+    assert result["chart_groupings"]["day"] == result["chart"]

@@ -445,7 +445,7 @@ it("RFM pagination/history/Excel use the displayed report rather than draft filt
   expect(exports).toHaveLength(1);
   expect(decodeURIComponent(exports[0][0])).toContain("search=Клиент1");
 });
-it("dynamics grouping is draft and metric switching is local", async () => {
+it("dynamics grouping and metric switching are local", async () => {
   render(<SalesDynamicsReportPage />);
   fireEvent.click(build());
   await finish(1);
@@ -456,7 +456,8 @@ it("dynamics grouping is draft and metric switching is local", async () => {
   expect(heavy).toHaveBeenCalledTimes(1);
   fireEvent.click(build());
   await finish(2);
-  expect(heavy.mock.calls[1][0]).toContain("group_by=week");
+  expect(heavy.mock.calls[1][0]).toContain("include_groupings=true");
+  expect(heavy.mock.calls[1][0]).not.toContain("group_by=");
 });
 it("product-sales grouping waits for the button and its five requests are sequential", async () => {
   render(<ProductSalesReportPage />);
