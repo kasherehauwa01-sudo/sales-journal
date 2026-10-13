@@ -2,7 +2,7 @@ import {ProductPhoto} from "../components/ProductPhoto";
 import {CatalogValueSelect} from "../components/CatalogValueSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
-import {useEffect,useMemo,useState} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {MultiSelect} from '../components/MultiSelect';import {Empty,Loading} from '../components/States';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
 type Row={image_url?:string|null;key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;aviatorov_stock?:number|null;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
@@ -17,6 +17,8 @@ export function PromotionCandidatesPage() {
     return defaultColumns;
   });
   const [columnSettings,setColumnSettings]=useState(false);
+  const [checkedKeys,setCheckedKeys]=useState<Set<string>>(()=>new Set());
+  const allCheckbox=useRef<HTMLInputElement>(null);
   const toggleColumn=(key:string)=>setVisibleColumns(current=>{const next=current.includes(key)?current.filter(x=>x!==key):[...current,key];if(!next.length)return current;try{localStorage.setItem(columnStorage,JSON.stringify(next));}catch{}return next;});
   const [catalogDetail,setCatalogDetail]=useState<{stocks:{name:string;quantity:number|null}[];oz_manager:string|null}|null>(null);
   const [catalogError,setCatalogError]=useState("");
@@ -117,6 +119,15 @@ export function PromotionCandidatesPage() {
       ),
     [data, sort],
   );
+  useEffect(()=>setCheckedKeys(new Set()),[data,tab]);
+  const checkedRows=rows.filter(row=>checkedKeys.has(row.key));
+  const allChecked=rows.length>0&&checkedRows.length===rows.length;
+  useEffect(()=>{if(allCheckbox.current)allCheckbox.current.indeterminate=checkedRows.length>0&&!allChecked;},[checkedRows.length,allChecked]);
+  const checkRow=(key:string)=>setCheckedKeys(current=>{const next=new Set(current);if(next.has(key))next.delete(key);else next.add(key);return next;});
+  async function exportSelected(){
+    if(!checkedRows.length)return;
+    await controller.perform("export",signal=>reportDownload("/reports/promotion-candidates/export-selected","promotion-candidates-selected.xlsx",signal,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rows:checkedRows})}));
+  }
   const setCriterion = (key: keyof typeof criteria, value: string) =>
     setCriteria({ ...criteria, [key]: key === "min_stock" && value.trim() === "" ? null : Number(value) });
   async function exportExcel() {
@@ -143,11 +154,12 @@ export function PromotionCandidatesPage() {
   }
   return (
     <div className="page">
-      <div className="page-title">
+      <div className="page-title promotion-sticky-title">
         <div>
           <h1>Кандидаты в акцию</h1>
           <p>Объяснимые сигналы для маркетолога, а не автоматическое решение</p>
         </div>
+        {checkedRows.length>0&&tab==="candidates"&&<button className="primary" disabled={controller.busy} onClick={exportSelected}>Скачать XLS ({checkedRows.length})</button>}
         <button
           className="primary"
           disabled={
@@ -381,11 +393,12 @@ export function PromotionCandidatesPage() {
               <div className="table-wrap promotion-table-wrap">
                 <table className="promotion-fit-table">
                   <thead>
-                    <tr>{columns.filter(c=>visibleColumns.includes(c[0])).map(([key,label,help])=><th key={key}>{label} <button type="button" className="column-info" title={help} aria-label={`Описание: ${label}`}>i</button></th>)}</tr>
+                    <tr><th className="promotion-select-column"><input ref={allCheckbox} type="checkbox" aria-label={allChecked?"Снять все":"Выделить все"} title="Все строки текущей таблицы" checked={allChecked} onChange={()=>setCheckedKeys(allChecked?new Set():new Set(rows.map(row=>row.key)))}/></th>{columns.filter(c=>visibleColumns.includes(c[0])).map(([key,label,help])=><th key={key}>{label} <button type="button" className="column-info" title={help} aria-label={`Описание: ${label}`}>i</button></th>)}</tr>
                   </thead>
                   <tbody>
                     {rows.map((x) => (
                       <tr key={x.key} onClick={() => setSelected(x)}>
+                        <td className="promotion-select-column"><input type="checkbox" aria-label={`Выбрать товар: ${x.name}`} checked={checkedKeys.has(x.key)} onClick={event=>event.stopPropagation()} onChange={()=>checkRow(x.key)}/></td>
                         {visibleColumns.includes("photo") && (<td><ProductPhoto src={x.image_url} name={x.name} /></td>)}
                         {visibleColumns.includes("name") && (<td>
                           <b>{x.name}</b>

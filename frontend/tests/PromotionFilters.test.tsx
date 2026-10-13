@@ -169,3 +169,33 @@ it('loads warehouse balances and OZ manager only when opening the product card',
   expect(posts()).toHaveLength(1);
   expect(fetchMock.mock.calls.filter(([url])=>url.includes('/product-catalog'))).toHaveLength(1);
 });
+
+it('selects visible rows, supports select all/clear all, and exports only the selected snapshot',async()=>{
+  const original=fetchMock.getMockImplementation()!;
+  const items=[1,2].map(i=>({key:`code:00${i}`,code:`00${i}`,name:`Товар ${i}`,category:'Посуда',reasons:[],stop_factors:[],status:'Кандидат',units_30:1,units_previous_30:1}));
+  fetchMock.mockImplementation((url:string,init?:RequestInit)=>{
+    if(url.includes('/export-selected'))return Promise.resolve(new Response(new Blob(['xlsx'])));
+    return init?.method==='POST'?Promise.resolve(response({...report,items,total:2})):original(url,init);
+  });
+  const create=vi.fn(()=> 'blob:export'),revoke=vi.fn();
+  vi.stubGlobal('URL',Object.assign(URL,{createObjectURL:create,revokeObjectURL:revoke}));
+  const click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{});
+  render(<PromotionCandidatesPage/>);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  const first=await screen.findByRole('checkbox',{name:'Выбрать товар: Товар 1'}) as HTMLInputElement;
+  expect(first.checked).toBe(false);
+  expect(screen.queryByRole('button',{name:/Скачать XLS/})).toBeNull();
+  fireEvent.click(first);
+  expect(screen.queryByText('Остатки по складам')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Скачать XLS (1)'}));
+  fireEvent.click(screen.getByRole('button',{name:'Скачать XLS (1)'}));
+  await waitFor(()=>expect(fetchMock.mock.calls.filter(([url])=>url.includes('/export-selected'))).toHaveLength(1));
+  const selectedCall=fetchMock.mock.calls.find(([url])=>url.includes('/export-selected'))!;
+  expect(JSON.parse(selectedCall[1].body).rows.map((row:any)=>row.code)).toEqual(['001']);
+  await waitFor(()=>expect(create).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('checkbox',{name:'Выделить все'}));
+  expect(screen.getByRole('button',{name:'Скачать XLS (2)'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('checkbox',{name:'Снять все'}));
+  expect(screen.queryByRole('button',{name:/Скачать XLS/})).toBeNull();
+  click.mockRestore();
+});
