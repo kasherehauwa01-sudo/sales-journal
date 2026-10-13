@@ -451,7 +451,9 @@ def test_all_history_worker_keeps_years_older_than_previous_two():
                     (current.active_generation, identity("code:001")),
                 )
                 assert profile.data["years"] == [2018, 2019]
-                assert profile.data["pattern"] == "confirmed"
+                assert profile.data["pattern"] == "insufficient"
+                assert profile.data["historical_windows"]
+                assert profile.data["confidence"] < 60
                 rows = [
                     {
                         "key": "code:001",
@@ -464,7 +466,7 @@ def test_all_history_worker_keeps_years_older_than_previous_two():
                 result = await attach(rows, db, {"min_stock": 1}, date(2026, 10, 12))
                 assert (
                     result["ready"]
-                    and rows[0]["seasonality"]["status"] == "Сезон сейчас"
+                    and rows[0]["seasonality"]["status"] == "Недостаточно данных"
                 )
 
     asyncio.run(operation())
