@@ -218,3 +218,26 @@ async def client_options(
         .limit(limit)
     )
     return list((await db.scalars(query)).all())
+
+
+@router.get("/client-directory")
+async def client_directory(
+    search: Annotated[str, Query(max_length=200)] = "",
+    after: Annotated[str | None, Query(max_length=500)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    key = func.lower(func.trim(Sale.client))
+    query = select(
+        key.label("key"), func.min(func.trim(Sale.client)).label("name")
+    ).where(Sale.client.is_not(None), func.trim(Sale.client) != "")
+    if search.strip():
+        query = query.where(key.contains(search.strip().lower(), autoescape=True))
+    if after:
+        query = query.where(key > after)
+    rows = (await db.execute(query.group_by(key).order_by(key).limit(limit + 1))).all()
+    page = rows[:limit]
+    return {
+        "items": [row.name for row in page],
+        "next_cursor": page[-1].key if len(rows) > limit else None,
+    }

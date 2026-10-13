@@ -1,4 +1,4 @@
-import {MultiSelect} from "../components/MultiSelect";
+import {SalesClientSelect} from "../components/SalesClientSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {useMemo,useState} from 'react';
@@ -39,7 +39,6 @@ export function SalesDynamicsReportPage() {
   const { data: buyerTypes } = useApi<string[]>(
     "/integrations/clients-vr/buyer-types",
   );
-  const clientOptions=useMemo(()=>[...new Map((filters?.clients||[]).filter(value=>value.trim()).map(value=>[value.trim().toLocaleLowerCase('ru-RU'),value.trim()])).values()],[filters]);
   const params = {
     date_from: dateFrom,
     date_to: dateTo,
@@ -178,7 +177,7 @@ export function SalesDynamicsReportPage() {
           </label>
           <label>
             Клиент
-            <MultiSelect options={clientOptions} value={selectedClients} onChange={setSelectedClients} placeholder="Все клиенты" searchable />
+            <SalesClientSelect value={selectedClients} onChange={setSelectedClients} />
           </label>
         </div>
         <b className="selected-period">
