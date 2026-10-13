@@ -2,6 +2,8 @@ from datetime import date, datetime
 from io import BytesIO
 from zoneinfo import ZoneInfo
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -12,7 +14,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
 from app.services.clients_vr import ClientsVrError
-from app.services.report_periods import comparison_period
+from app.services.sales_dynamics_report import dynamics_comparison_period as comparison_period
 from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import default_grouping, effective_period
 from app.services.store_analytics_report import METRIC_KEYS, calculated_store_metrics, compare_metrics, merge_store_rows
@@ -115,9 +117,18 @@ async def _scope(date_from: date, date_to: date, period_kind: str, comparison_mo
 
 
 @router.get("")
-async def report(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period",pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
-    start, end, previous_start, previous_end, warning, _, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db)
-    return {"period": {"start": start, "end": end}, "previous_period": {"start": previous_start, "end": previous_end}, "warning": warning, "metrics": compare_metrics(_total(current), _total(previous)), "stores": merge_store_rows(current, previous)}
+async def report(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period", pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db), include_both: Annotated[bool, Query()] = False):
+    start, end, previous_start, previous_end, warning, clients, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db)
+    def comparison(first, last, rows):
+        return {"period": {"start": first, "end": last}, "metrics": compare_metrics(_total(current), _total(rows)), "stores": merge_store_rows(current, rows)}
+    primary = comparison(previous_start, previous_end, previous)
+    result = {"period": {"start": start, "end": end}, "previous_period": primary["period"], "warning": warning, "metrics": primary["metrics"], "stores": primary["stores"]}
+    if include_both:
+        other_mode = "previous_year" if comparison_mode == "previous_period" else "previous_period"
+        other_start, other_end = comparison_period(start, end, other_mode, period_kind)
+        other = previous if (other_start, other_end) == (previous_start, previous_end) else await _aggregates(db, other_start, other_end, stores, clients)
+        result["comparisons"] = {comparison_mode: primary, other_mode: comparison(other_start, other_end, other)}
+    return result
 
 
 @router.get("/stores/{store}/dynamics")

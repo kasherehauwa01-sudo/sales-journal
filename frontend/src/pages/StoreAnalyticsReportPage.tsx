@@ -10,9 +10,9 @@ import {useApi} from '../hooks/useApi';
 import type {Sale} from '../types';
 import {date,money,number,percent} from '../utils/format';
 
-type PeriodKind='today'|'yesterday'|'current_week'|'previous_week'|'current_month'|'previous_month'|'custom';type Metric='revenue'|'checks'|'average_check'|'items'|'items_per_check'|'average_discount';type Comparison={current:number;previous:number;difference:number;change_percent:number|null};type StoreRow={store:string;metrics:Record<Metric,Comparison>};type Report={period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string;metrics:Record<Metric,Comparison>;stores:StoreRow[]};type DetailSale={id:number;sale_date:string;document_number:string;client?:string;total_amount:number;items:number;discount:number};
-const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {from:iso(from),to:iso(to)}}
-const periods:Array<[PeriodKind,string]>=[['today','Сегодня'],['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Предыдущая неделя'],['current_month','Текущий месяц'],['previous_month','Предыдущий месяц'],['custom','Произвольный период']];const labels:Record<Metric,string>={revenue:'Выручка',checks:'Количество чеков',average_check:'Средний чек',items:'Продано товаров',items_per_check:'Товаров в чеке',average_discount:'Средняя скидка'};const format=(key:Metric,value:number)=>key==='revenue'||key==='average_check'?money(value):key==='average_discount'?percent(value):number(value);const change=(value:number|null)=>value==null?'—':`${value>0?'+':''}${percent(value)} ${value>0?'↑':value<0?'↓':'→'}`;
+type PeriodKind='today'|'yesterday'|'current_week'|'previous_week'|'current_month'|'previous_month'|'year'|'custom';type Metric='revenue'|'checks'|'average_check'|'items'|'items_per_check'|'average_discount';type Comparison={current:number;previous:number;difference:number;change_percent:number|null};type StoreRow={store:string;metrics:Record<Metric,Comparison>};type StoreComparison={period:{start:string;end:string};metrics:Record<Metric,Comparison>;stores:StoreRow[]};type Report={comparisons?:{previous_period:StoreComparison;previous_year:StoreComparison};period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string;metrics:Record<Metric,Comparison>;stores:StoreRow[]};type DetailSale={id:number;sale_date:string;document_number:string;client?:string;total_amount:number;items:number;discount:number};
+const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='year')from.setMonth(0,1);if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {from:iso(from),to:iso(to)}}
+const periods:Array<[PeriodKind,string]>=[['today','Сегодня'],['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Предыдущая неделя'],['current_month','Текущий месяц'],['previous_month','Предыдущий месяц'],['year','Год'],['custom','Произвольный период']];const labels:Record<Metric,string>={revenue:'Выручка',checks:'Количество чеков',average_check:'Средний чек',items:'Продано товаров',items_per_check:'Товаров в чеке',average_discount:'Средняя скидка'};const format=(key:Metric,value:number)=>key==='revenue'||key==='average_check'?money(value):key==='average_discount'?percent(value):number(value);const change=(value:number|null)=>value==null?'—':`${value>0?'+':''}${percent(value)} ${value>0?'↑':value<0?'↓':'→'}`;
 export function StoreAnalyticsReportPage() {
   const initial = dates("current_month");
   const [periodKind, setPeriodKind] = useState<PeriodKind>("current_month");
@@ -21,9 +21,7 @@ export function StoreAnalyticsReportPage() {
   const [stores, setStores] = useState<string[]>([]);
   const [manager, setManager] = useState("");
   const [buyerType, setBuyerType] = useState("");
-  const [comparisonMode, setComparisonMode] = useState<
-    "previous_period" | "previous_year"
-  >("previous_period");
+  const [showPrevious,setShowPrevious]=useState(true),[showYear,setShowYear]=useState(true);
   const [sort, setSort] = useState("revenue");
   const [descending, setDescending] = useState(true);
   const [selected, setSelected] = useState<StoreRow>();
@@ -46,7 +44,7 @@ export function StoreAnalyticsReportPage() {
     stores,
     manager,
     buyer_type: buyerType,
-    comparison_mode: comparisonMode,
+    include_both: true,
   };
   const controller = useExplicitReport(params, (p, signal) => {setSelected(undefined);return reportJson<Report>(`/reports/store-analytics?${query(p)}`, signal)},
   );
@@ -107,22 +105,27 @@ export function StoreAnalyticsReportPage() {
       setDescending(true);
     }
   }
+  const visibleComparisons = [
+    ...(showPrevious ? [{label:"Предыдущий период", value:data?.comparisons?.previous_period || (data ? {period:data.previous_period,metrics:data.metrics,stores:data.stores} : undefined)}] : []),
+    ...(showYear ? [{label:"Прошлый год",value:data?.comparisons?.previous_year}] : []),
+  ].filter(item=>item.value);
+  const comparisonsForStore=(store:string,key:Metric)=>visibleComparisons.map(item=>({label:item.label,metric:item.value?.stores.find(row=>row.store===store)?.metrics[key]}));
   const rows = useMemo(
     () =>
-      [...(data?.stores || [])].sort((a, b) => {
+      [...(data ? Array.from(new Map([...(data.comparisons?.previous_year.stores || []), ...(data.stores || [])].map(row=>[row.store,row])).values()) : [])].sort((a, b) => {
         const changeSort = sort.endsWith("_change"),
           metric = sort.replace("_change", "") as Metric,
           av =
             sort === "store"
               ? a.store
               : changeSort
-                ? (a.metrics[metric]?.change_percent ?? -Infinity)
+                ? (data?.comparisons?.[showPrevious ? "previous_period" : "previous_year"].stores.find(row=>row.store===a.store)?.metrics[metric]?.change_percent ?? a.metrics[metric]?.change_percent ?? -Infinity)
                 : a.metrics[metric]?.current || 0,
           bv =
             sort === "store"
               ? b.store
               : changeSort
-                ? (b.metrics[metric]?.change_percent ?? -Infinity)
+                ? (data?.comparisons?.[showPrevious ? "previous_period" : "previous_year"].stores.find(row=>row.store===b.store)?.metrics[metric]?.change_percent ?? b.metrics[metric]?.change_percent ?? -Infinity)
                 : b.metrics[metric]?.current || 0;
         return (
           (typeof av === "string"
@@ -130,7 +133,7 @@ export function StoreAnalyticsReportPage() {
             : Number(av) - Number(bv)) * (descending ? -1 : 1)
         );
       }),
-    [data, sort, descending],
+    [data, sort, descending, showPrevious],
   );
   async function openSale(id: number) {
     try {
@@ -195,20 +198,6 @@ export function StoreAnalyticsReportPage() {
             </label>
           </div>
         )}
-        <div className="comparison-selector">
-          <button
-            className={comparisonMode === "previous_year" ? "active" : ""}
-            onClick={() => setComparisonMode("previous_year")}
-          >
-            Прошлый год
-          </button>
-          <button
-            className={comparisonMode === "previous_period" ? "active" : ""}
-            onClick={() => setComparisonMode("previous_period")}
-          >
-            Предыдущий период
-          </button>
-        </div>
         <div className="report-filters">
           <label>
             Магазин
@@ -248,6 +237,10 @@ export function StoreAnalyticsReportPage() {
           </label>
         </div>
         <ReportActions report={controller} />
+        <div className="dynamics-comparison-checkboxes" role="group" aria-label="Отображать сравнения">
+          <label><input type="checkbox" checked={showPrevious} onChange={e=>setShowPrevious(e.target.checked)}/> Предыдущий период</label>
+          <label><input type="checkbox" checked={showYear} onChange={e=>setShowYear(e.target.checked)}/> Прошлый год</label>
+        </div>
       </section>
       <ReportEmpty show={!data && !loading} />
       {data?.warning && <div className="report-warning">{data.warning}</div>}
@@ -262,12 +255,7 @@ export function StoreAnalyticsReportPage() {
                 <div className="kpi" key={key}>
                   <span>{labels[key]}</span>
                   <strong>{format(key, item.current)}</strong>
-                  <small>Прошлый период: {format(key, item.previous)}</small>
-                  <small
-                    className={(item.change_percent || 0) >= 0 ? "up" : "down"}
-                  >
-                    {change(item.change_percent)}
-                  </small>
+                  {visibleComparisons.map(({label,value})=><small key={label} className={(value!.metrics[key].change_percent || 0)>=0?"up":"down"}>{label}: {format(key,value!.metrics[key].previous)} · {change(value!.metrics[key].change_percent)}</small>)}
                 </div>
               );
             })}
@@ -281,29 +269,29 @@ export function StoreAnalyticsReportPage() {
                   <div>
                     <h2>Выручка по магазинам</h2>
                     <p>
-                      {date(data.period.start)} — {date(data.period.end)} и{" "}
-                      {date(data.previous_period.start)} —{" "}
-                      {date(data.previous_period.end)}
+                      {date(data.period.start)} — {date(data.period.end)}
+                      {visibleComparisons.map(item=><span key={item.label}> · {item.label}: {date(item.value!.period.start)} — {date(item.value!.period.end)}</span>)}
                     </p>
                   </div>
                 </div>
                 <div className="store-chart">
                   <ResponsiveContainer
                     width="100%"
-                    height={Math.max(300, rows.length * 34)}
+                    height={360}
                   >
                     <BarChart
                       data={rows.map((x) => ({
                         store: x.store,
                         current: x.metrics.revenue.current,
-                        previous: x.metrics.revenue.previous,
+                        previous: data.comparisons?.previous_period.stores.find(row=>row.store===x.store)?.metrics.revenue.previous ?? (data.comparisons ? 0 : x.metrics.revenue.previous),
+                        year: data.comparisons?.previous_year.stores.find(row=>row.store===x.store)?.metrics.revenue.previous ?? 0,
                       }))}
-                      layout="vertical"
+                      layout="horizontal"
                       margin={{ left: 24, right: 24 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" tickFormatter={number} />
-                      <YAxis type="category" dataKey="store" width={170} />
+                      <XAxis type="category" dataKey="store" interval={0} angle={-25} textAnchor="end" height={85} />
+                      <YAxis type="number" tickFormatter={number} width={95} />
                       <Tooltip formatter={(v) => money(Number(v))} />
                       <Legend />
                       <Bar
@@ -311,11 +299,12 @@ export function StoreAnalyticsReportPage() {
                         name="Текущий период"
                         fill="#2878ff"
                       />
-                      <Bar
+                      {showPrevious && <Bar
                         dataKey="previous"
                         name="Предыдущий период"
                         fill="#9b6cff"
-                      />
+                      />}
+                      {showYear && <Bar dataKey="year" name="Прошлый год" fill="#10a877" />}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -354,13 +343,8 @@ export function StoreAnalyticsReportPage() {
                               </td>
                               <td
                                 key={`${key}-c`}
-                                className={
-                                  (row.metrics[key].change_percent || 0) >= 0
-                                    ? "trend-up"
-                                    : "trend-down"
-                                }
                               >
-                                {change(row.metrics[key].change_percent)}
+                                {comparisonsForStore(row.store,key).map(item=><div key={item.label} className={(item.metric?.change_percent || 0)>=0?"trend-up":"trend-down"}>{item.label}: {change(item.metric?.change_percent ?? null)}</div>)}
                               </td>
                             </>
                           ))}
@@ -374,7 +358,7 @@ export function StoreAnalyticsReportPage() {
                               {format(key, data.metrics[key].current)}
                             </td>
                             <td key={`${key}-c`}>
-                              {change(data.metrics[key].change_percent)}
+                              {visibleComparisons.map(item=><div key={item.label}>{item.label}: {change(item.value!.metrics[key].change_percent)}</div>)}
                             </td>
                           </>
                         ))}
@@ -407,7 +391,7 @@ export function StoreAnalyticsReportPage() {
                       {format(key, selected.metrics[key].current)}
                     </strong>
                     <small>
-                      {change(selected.metrics[key].change_percent)}
+                      {comparisonsForStore(selected.store,key).map(item=><span key={item.label}>{item.label}: {change(item.metric?.change_percent ?? null)} </span>)}
                     </small>
                   </div>
                 ))}
