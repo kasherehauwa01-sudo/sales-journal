@@ -7,6 +7,7 @@ from io import BytesIO
 from itertools import islice
 import time
 import math
+from app.services.catalog_sync import sync_image_url
 
 from app.routers.product_analytics import HeavyAnalyticsRoute
 from app.services.product_analytics_runtime import (
@@ -235,12 +236,14 @@ def _aviatorov_stock(info):
 
 
 def _promotion_projection(info):
+    image = sync_image_url(vrcatalog.catalog_item_image_url(info))
     return {
         "category": catalog_property(info, "category"),
         "brand": catalog_property(info, "brand"),
         "manufacturer": catalog_property(info, "manufacturer"),
         "stock": _stock(info),
         "aviatorov_stock": _aviatorov_stock(info),
+        "image_url": image,
     }
 
 
@@ -305,6 +308,7 @@ async def _dataset(data, db):
             manufacturer=info["manufacturer"] if info else "Не заполнено",
             stock=info["stock"] if info else None,
             aviatorov_stock=info.get("aviatorov_stock") if info else None,
+            image_url=info.get("image_url") if info else None,
         )
         if row["category"] == "Не заполнено":
             row["category"] = UNCATEGORIZED

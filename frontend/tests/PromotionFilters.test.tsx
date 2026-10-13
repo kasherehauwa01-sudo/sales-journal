@@ -117,3 +117,19 @@ it('sends an empty named warehouse minimum as null only on Generate',async()=>{
   await waitFor(()=>expect(posts()).toHaveLength(1));
   expect(JSON.parse(posts()[0][1].body).criteria.min_stock).toBeNull();
 });
+
+it('shows the same product photo in the report and opened card with a fallback on error',async()=>{
+  const original=fetchMock.getMockImplementation()!;
+  const item={key:'code:001',code:'001',name:'Товар с фото',category:'Посуда',image_url:'https://catalog.test/photo.jpg',reasons:[],stop_factors:[],status:'Кандидат',units:1,units_30:1,units_previous_30:1,units_60_90:1,revenue:10,stock:2,monthly_units:1};
+  fetchMock.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'?Promise.resolve(response({...report,items:[item],total:1})):original(url,init));
+  render(<PromotionCandidatesPage/>);
+  fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  const photo=await screen.findByRole('img',{name:'Товар с фото'});
+  expect(photo.getAttribute('src')).toBe(item.image_url);
+  expect(photo.getAttribute('loading')).toBe('lazy');
+  fireEvent.click(screen.getByText('Товар с фото'));
+  expect(screen.getAllByRole('img',{name:'Товар с фото'})).toHaveLength(2);
+  fireEvent.error(screen.getAllByRole('img',{name:'Товар с фото'})[1]);
+  expect(screen.getByLabelText('Нет фото: Товар с фото')).toBeTruthy();
+  expect(posts()).toHaveLength(1);
+});
