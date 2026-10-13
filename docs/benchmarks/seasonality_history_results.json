@@ -1,0 +1,99 @@
+{
+  "two_year_fixture": {
+    "products": 27016,
+    "samples": [
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 3375.6273349990806,
+        "process_peak_rss_bytes": 53964800,
+        "traced_peak_bytes": null,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "0d7363722a93b247a6536633e9cde1cc7854980f0c7cfec811cd8bfa2d095677"
+      },
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 3463.857699998698,
+        "process_peak_rss_bytes": 53952512,
+        "traced_peak_bytes": null,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "0d7363722a93b247a6536633e9cde1cc7854980f0c7cfec811cd8bfa2d095677"
+      },
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 3243.686298999819,
+        "process_peak_rss_bytes": 53948416,
+        "traced_peak_bytes": null,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "0d7363722a93b247a6536633e9cde1cc7854980f0c7cfec811cd8bfa2d095677"
+      },
+      {
+        "stage": "calculate",
+        "products": 27016,
+        "elapsed_ms": 40604.633818000366,
+        "process_peak_rss_bytes": 55136256,
+        "traced_peak_bytes": 2180014,
+        "sql_queries": 0,
+        "max_read_batch": 0,
+        "checksum": "0d7363722a93b247a6536633e9cde1cc7854980f0c7cfec811cd8bfa2d095677"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 2068.8386909987457,
+        "process_peak_rss_bytes": 83312640,
+        "traced_peak_bytes": null,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "6acf76c9375bea3045c7b4e6b1257d85ed0deef6b62991f413bd24e267aa3098"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 1679.3318839991116,
+        "process_peak_rss_bytes": 83197952,
+        "traced_peak_bytes": null,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "6acf76c9375bea3045c7b4e6b1257d85ed0deef6b62991f413bd24e267aa3098"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 1475.2303690002009,
+        "process_peak_rss_bytes": 83189760,
+        "traced_peak_bytes": null,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "6acf76c9375bea3045c7b4e6b1257d85ed0deef6b62991f413bd24e267aa3098"
+      },
+      {
+        "stage": "attach",
+        "products": 27016,
+        "elapsed_ms": 24657.022901001255,
+        "process_peak_rss_bytes": 113295360,
+        "traced_peak_bytes": 28436484,
+        "sql_queries": 109,
+        "max_read_batch": 250,
+        "checksum": "6acf76c9375bea3045c7b4e6b1257d85ed0deef6b62991f413bd24e267aa3098"
+      }
+    ]
+  },
+  "ten_year_fixture": {
+    "stage": "calculate",
+    "products": 27016,
+    "history_years": 10,
+    "elapsed_ms": 34680.53487900033,
+    "process_peak_rss_bytes": 53997568,
+    "traced_peak_bytes": null,
+    "sql_queries": 0,
+    "max_read_batch": 0,
+    "checksum": "1b876244efb44dd4c73208e372d398abf26c2cbbdd40418dfa926d51b1c34e0d"
+  },
+  "limitations": "Synthetic aggregates and mocked profile reader, not SQL/source history production; 10-year sample one fresh process, no timing distribution."
+}

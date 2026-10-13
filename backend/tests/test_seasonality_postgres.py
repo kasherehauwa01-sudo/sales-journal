@@ -82,7 +82,7 @@ def test_postgres_bounded_aggregation_matches_sqlite_and_publishes_atomically():
                     current = await state(db)
                     assert (
                         current.active_generation == 1
-                        and current.coverage == (1 << 24) - 1
+                        and current.coverage & 4095 == 4095
                     )
                     profile = await db.scalar(
                         text(

@@ -559,17 +559,17 @@ def _product_card_projection(info):
         except (TypeError, ValueError):
             quantity = None
         stocks.append({"name": name.strip(), "quantity": quantity})
-    manager = catalog_property(info, "Менеджер ОЗ")
+    manager = catalog_property(info, "Менеджер")
     return {
         "stocks": stocks,
-        "oz_manager": None if manager == "Не заполнено" else manager,
+        "manager": None if manager == "Не заполнено" else manager,
     }
 
 
 @router.post("/product-catalog")
 async def product_catalog(data: ProductCatalogRequest):
     if not (data.code and data.code.strip() or data.article and data.article.strip()):
-        return {"stocks": [], "oz_manager": None}
+        return {"stocks": [], "manager": None}
     ensure_headroom()
     try:
         result = await get_catalog_batch_info(

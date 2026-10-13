@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import hashlib
 import math
 
-ALGORITHM_VERSION = 1
+ALGORITHM_VERSION = 2
 MIN_YEAR_UNITS = 120
 MIN_ACTIVE_MONTHS = 6
 MIN_POSITIVE_LINES = 20
@@ -56,7 +56,7 @@ def calculate(months, first_year, *, complete_history=True):
                     date.fromisoformat(value) if isinstance(value, str) else value
                 )
     base = {
-        "version": ALGORITHM_VERSION,
+        "version": 1,
         "years": [first_year, first_year + 1],
         "pattern": "insufficient",
         "indices": [0.0] * 12,
@@ -286,6 +286,8 @@ def recommend(
     expected = 0.0
     for offset in range(30):
         observed_day = end_of_observations - timedelta(days=offset)
+        if profile["indices"][observed_day.month - 1] is None:
+            comparable_scope = False
         expected += (
             profile["expected_units"][observed_day.month - 1]
             / monthrange(observed_day.year, observed_day.month)[1]
@@ -338,3 +340,163 @@ def recommend(
             + "Приближается или продолжается сезонный спрос; оснований для скидки по действующим критериям нет.",
         )
     return result
+
+
+def calculate_history(months, today):
+    """All recorded years; compare only common closed-month observation windows."""
+    from itertools import combinations
+    from statistics import median
+
+    base = calculate([], today.year - 2, complete_history=False)
+    base.update(
+        version=ALGORITHM_VERSION,
+        history_scope="all",
+        years=[],
+        compared_pairs=0,
+        observed_months=[],
+        indices=[None] * 12,
+    )
+    base["reason"] = (
+        "Недостаточно повторных наблюдений: нужны минимум два года с шестью общими завершёнными месяцами, 120 единицами и 20 положительными строками продаж в каждом году. Исторические остатки неизвестны."
+    )
+    annual = {}
+    for item in months:
+        year, month = int(item["year"]), int(item["month"])
+        if not 1 <= month <= 12 or (year, month) >= (today.year, today.month):
+            continue
+        units = float(item["units"])
+        group = annual.setdefault(
+            year, {"values": [0.0] * 12, "lines": 0, "active": set(), "bad": False}
+        )
+        group["values"][month - 1] += units
+        group["lines"] += int(item.get("positive_lines", 0))
+        group["bad"] |= (
+            bool(item.get("incomplete_source")) or not math.isfinite(units) or units < 0
+        )
+        if units > 0:
+            group["active"].add(month - 1)
+    base["years"] = sorted(annual)
+    eligible = {
+        year: group
+        for year, group in annual.items()
+        if not group["bad"]
+        and sum(group["values"]) >= MIN_YEAR_UNITS
+        and group["lines"] >= MIN_POSITIVE_LINES
+        and len(group["active"]) >= 4
+    }
+    votes, samples = [[] for _ in range(12)], [[] for _ in range(12)]
+    pairs, correlations, compared = [], [], 0
+    for (year_a, a), (year_b, b) in combinations(sorted(eligible.items()), 2):
+        common = list(
+            range(
+                max(min(a["active"]), min(b["active"])),
+                min(max(a["active"]), max(b["active"])) + 1,
+            )
+        )
+        if len(common) < 6:
+            continue
+        totals = [sum(group["values"][i] for i in common) for group in (a, b)]
+        if min(totals) <= 0:
+            continue
+        compared += 1
+        normalized = [
+            [group["values"][i] / (total / len(common)) for i in common]
+            for group, total in zip((a, b), totals)
+        ]
+        va, vb = [sum((x - 1) ** 2 for x in profile) for profile in normalized]
+        corr = (
+            sum((x - 1) * (y - 1) for x, y in zip(*normalized)) / math.sqrt(va * vb)
+            if va * vb
+            else 0
+        )
+        valid = (
+            min(va, vb) >= len(common) * 0.35**2
+            and corr >= MIN_CORRELATION
+            and all(max(profile) / sum(profile) <= 0.5 for profile in normalized)
+        )
+        peaks = [
+            common[max(range(len(common)), key=lambda i: profile[i])]
+            for profile in normalized
+        ]
+        valid &= min((peaks[0] - peaks[1]) % 12, (peaks[1] - peaks[0]) % 12) <= 1
+        if valid:
+            correlations.append(corr)
+        high = set()
+        for position, month in enumerate(common):
+            value = (normalized[0][position] + normalized[1][position]) / 2
+            samples[month].append(value)
+            supported = (
+                valid
+                and min(normalized[0][position], normalized[1][position]) >= HIGH_INDEX
+            )
+            votes[month].append(supported)
+            if supported:
+                high.add(month)
+        pairs.append((high, peaks))
+    base["compared_pairs"] = compared
+    if not compared:
+        return base
+    base.update(
+        pattern="none",
+        indices=[median(items) if items else None for items in samples],
+        observed_months=[i + 1 for i, items in enumerate(samples) if items],
+    )
+    base["reason"] = (
+        "Во всей доступной истории не подтверждён повторяющийся рост в соседних месяцах. Нулевые продажи не доказывают отсутствие спроса без исторических остатков."
+    )
+    high = [bool(items) and sum(items) / len(items) >= 2 / 3 for items in votes]
+    starts = [i for i in range(12) if high[i] and not high[(i - 1) % 12]]
+    windows = []
+    for start in starts:
+        season = []
+        for offset in range(12):
+            month = (start + offset) % 12
+            if not high[month]:
+                break
+            season.append(month)
+        # One spike is insufficient. At least one pair must support the whole
+        # window: never assemble unrelated months from different year pairs.
+        if 2 <= len(season) <= 8 and any(
+            set(season) <= supported and all(peak in season for peak in peaks)
+            for supported, peaks in pairs
+        ):
+            windows.append(
+                {
+                    "start_month": start + 1,
+                    "peak_month": max(season, key=lambda i: base["indices"][i]) + 1,
+                    "end_month": season[-1] + 1,
+                    "months": [i + 1 for i in season],
+                }
+            )
+    if not windows:
+        return base
+    primary = max(
+        windows,
+        key=lambda window: sum(base["indices"][i - 1] for i in window["months"])
+        / len(window["months"]),
+    )
+    partial = any(len(group["active"]) < 12 for group in eligible.values()) or any(
+        group["bad"] for group in annual.values()
+    )
+    confidence = min(
+        75 if partial else 85,
+        round(50 * median(correlations) + 20 + 10 * min(1, (len(eligible) - 1) / 2)),
+    )
+    latest = eligible[max(eligible)]
+    baseline = sum(latest["values"]) / (
+        max(latest["active"]) - min(latest["active"]) + 1
+    )
+    base.update(
+        pattern="confirmed",
+        confidence=confidence,
+        start_month=primary["start_month"],
+        peak_month=primary["peak_month"],
+        end_month=primary["end_month"],
+        windows=windows,
+        season_months=sorted({i for window in windows for i in window["months"]}),
+        expected_units=[baseline * (value or 0) for value in base["indices"]],
+    )
+    base["reason"] = (
+        f"Повторяющийся сезон подтверждён по всей истории: {len(eligible)} лет, {compared} сопоставлений. Сравниваются только общие завершённые месяцы; наличие товара исторически неизвестно."
+    )
+    return base
