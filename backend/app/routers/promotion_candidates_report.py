@@ -508,3 +508,62 @@ def _excel(rows):
             except (OSError, ValueError):
                 pass
         book.close()
+
+
+class ProductCatalogRequest(BaseModel):
+    code: str | None = Field(default=None, max_length=500)
+    article: str | None = Field(default=None, max_length=500)
+
+
+def _product_card_projection(info):
+    values = (
+        info.get("stocks") or info.get("warehouse_stocks") or info.get("balances") or []
+    )
+    entries = (
+        values.items()
+        if isinstance(values, dict)
+        else ((None, item) for item in values) if isinstance(values, list) else ()
+    )
+    stocks = []
+    for key, item in entries:
+        name = (
+            (item.get("warehouse") or item.get("name") or key)
+            if isinstance(item, dict)
+            else key
+        )
+        if not isinstance(name, str) or not name.strip():
+            continue
+        raw = (
+            item.get("quantity", item.get("stock_quantity", item.get("value")))
+            if isinstance(item, dict)
+            else item
+        )
+        try:
+            quantity = float(raw)
+            if not math.isfinite(quantity):
+                quantity = None
+        except (TypeError, ValueError):
+            quantity = None
+        stocks.append({"name": name.strip(), "quantity": quantity})
+    manager = catalog_property(info, "Менеджер ОЗ")
+    return {
+        "stocks": stocks,
+        "oz_manager": None if manager == "Не заполнено" else manager,
+    }
+
+
+@router.post("/product-catalog")
+async def product_catalog(data: ProductCatalogRequest):
+    if not (data.code and data.code.strip() or data.article and data.article.strip()):
+        return {"stocks": [], "oz_manager": None}
+    ensure_headroom()
+    try:
+        result = await get_catalog_batch_info(
+            [data.model_dump()], project=_product_card_projection
+        )
+    except VrCatalogError:
+        raise HTTPException(502, "Не удалось загрузить данные VRCatalog") from None
+    info = result.get(product_key(data.article, data.code, ""))
+    if info is None:
+        raise HTTPException(502, "Данные товара не получены от VRCatalog")
+    return info

@@ -2,13 +2,25 @@ import {ProductPhoto} from "../components/ProductPhoto";
 import {CatalogValueSelect} from "../components/CatalogValueSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
-import {useMemo,useState} from 'react';
+import {useEffect,useMemo,useState} from 'react';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {MultiSelect} from '../components/MultiSelect';import {Empty,Loading} from '../components/States';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
 type Row={image_url?:string|null;key:string;name:string;code?:string;article?:string;category:string;brand:string;manufacturer:string;reasons:string[];stop_factors:string[];status:string;revenue:number;units:number;checks:number;average_price:number;units_30:number;units_previous_30:number;units_60_90:number;units_change_percent?:number;category_change_percent?:number;category_deviation_pp?:number;stock?:number;aviatorov_stock?:number|null;stock_months?:number;stock_value?:number;days_without_sales?:number;last_sale?:string;monthly_units:number;seasonality?:{status:string;priority:number;index:number|null;confidence:number;start_month?:number;peak_month?:number;end_month?:number;action:string;reason:string;period:string}};
 type Report={items:Row[];total:number;table_limit:number;summary:{candidates:number;stale:number;excess:number;decline:number};catalog_available:boolean;seasonality?:{as_of:string;years:number[];ready:boolean;last_success?:string;scope:string};limitations:string[]};
+const columns=[["photo", "Фото", "Фотография товара из VRCatalog."], ["name", "Товар", "Наименование товара."], ["code", "Код / артикул", "Код товара; если его нет — артикул."], ["category", "Категория", "Текущая категория товара."], ["season", "Сезонность", "Повторяющийся спрос по двум полным годам продаж."], ["priority", "Сезонный приоритет", "Приоритет от 0 до 100; сезонность сама по себе не означает скидку."], ["reasons", "Причины", "Сработавшие критерии попадания в кандидаты."], ["units", "30 дней", "Проданные единицы за последние 30 дней выбранного периода."], ["previous", "Пред. 30", "Проданные единицы за предыдущие 30 дней."], ["change", "Изменение", "Изменение количества между двумя 30-дневными периодами, в процентах."], ["category_change", "Изменение категории", "Изменение продаж категории за те же периоды, в процентах."], ["stock", "Остаток", "Суммарный текущий остаток по всем складам."], ["aviatorov", "Остатки Авиаторов Зал+Склад", "Текущий остаток только склада Авиаторов Зал+Склад."], ["months", "Запас", "На сколько месяцев продаж хватит общего остатка при среднем темпе продаж."], ["days", "Без продажи", "Дней от последней продажи до конца выбранного периода."], ["status", "Статус", "Результат действующих критериев и стоп-факторов."]] as const;
+const columnStorage="promotion-candidates-columns-v1";
+const defaultColumns=["photo","name","season","priority","reasons","aviatorov","status"];
 const iso=(value:Date)=>value.toISOString().slice(0,10);const end=new Date(),start=new Date(end.getFullYear(),end.getMonth()-6,1);
 export function PromotionCandidatesPage() {
+  const [visibleColumns,setVisibleColumns]=useState<string[]>(()=>{
+    try {const saved=JSON.parse(localStorage.getItem(columnStorage)||"null");if(Array.isArray(saved)){const valid=saved.filter((x:unknown)=>typeof x==='string'&&columns.some(c=>c[0]===x));if(valid.length)return valid;}}catch{}
+    return defaultColumns;
+  });
+  const [columnSettings,setColumnSettings]=useState(false);
+  const toggleColumn=(key:string)=>setVisibleColumns(current=>{const next=current.includes(key)?current.filter(x=>x!==key):[...current,key];if(!next.length)return current;try{localStorage.setItem(columnStorage,JSON.stringify(next));}catch{}return next;});
+  const [catalogDetail,setCatalogDetail]=useState<{stocks:{name:string;quantity:number|null}[];oz_manager:string|null}|null>(null);
+  const [catalogError,setCatalogError]=useState("");
+
   const [tab, setTab] = useState<"candidates" | "history">("candidates"),
     [from, setFrom] = useState(iso(start)),
     [to, setTo] = useState(iso(end)),
@@ -25,6 +37,15 @@ export function PromotionCandidatesPage() {
     [sort, setSort] = useState<keyof Row|"recommendation"|"seasonal_priority">("recommendation"),
     [useSeasonality,setUseSeasonality]=useState(true),
     [seasonalityStatus,setSeasonalityStatus]=useState("");
+  useEffect(()=>{
+    setCatalogDetail(null);setCatalogError("");
+    if(!selected)return;
+    const abort=new AbortController();
+    reportJson<{stocks:{name:string;quantity:number|null}[];oz_manager:string|null}>("/reports/promotion-candidates/product-catalog",abort.signal,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:selected.code,article:selected.article})})
+      .then(value=>{if(!abort.signal.aborted)setCatalogDetail(value);})
+      .catch(()=>{if(!abort.signal.aborted)setCatalogError("Не удалось загрузить данные VRCatalog");});
+    return ()=>abort.abort();
+  },[selected]);
   const [criteria, setCriteria] = useState({
     decline_percent: -30,
     min_previous_units: 5,
@@ -355,68 +376,53 @@ export function PromotionCandidatesPage() {
             {!rows.length ? (
               <Empty text="Кандидаты не найдены" />
             ) : (
-              <div className="table-wrap">
-                <table>
+              <><div className="promotion-column-controls"><button type="button" aria-expanded={columnSettings} onClick={()=>setColumnSettings(!columnSettings)}>Настройка колонок</button>
+              {columnSettings&&<div className="promotion-column-options">{columns.map(([key,label])=><label key={key}><input type="checkbox" checked={visibleColumns.includes(key)} onChange={()=>toggleColumn(key)}/>{label}</label>)}</div>}</div>
+              <div className="table-wrap promotion-table-wrap">
+                <table className="promotion-fit-table">
                   <thead>
-                    <tr>
-                      <th>Фото</th>
-                      <th>Товар</th>
-                      <th>Код / артикул</th>
-                      <th>Категория</th>
-                      <th>Сезонность</th>
-                      <th>Сезонный приоритет</th>
-                      <th>Причины</th>
-                      <th>30 дней</th>
-                      <th>Пред. 30</th>
-                      <th>Изменение</th>
-                      <th>Категория</th>
-                      <th>Остаток</th>
-                      <th>Остатки Авиаторов Зал+Склад</th>
-                      <th>Запас</th>
-                      <th>Без продажи</th>
-                      <th>Статус</th>
-                    </tr>
+                    <tr>{columns.filter(c=>visibleColumns.includes(c[0])).map(([key,label,help])=><th key={key}>{label} <button type="button" className="column-info" title={help} aria-label={`Описание: ${label}`}>i</button></th>)}</tr>
                   </thead>
                   <tbody>
                     {rows.map((x) => (
                       <tr key={x.key} onClick={() => setSelected(x)}>
-                        <td><ProductPhoto src={x.image_url} name={x.name} /></td>
-                        <td>
+                        {visibleColumns.includes("photo") && (<td><ProductPhoto src={x.image_url} name={x.name} /></td>)}
+                        {visibleColumns.includes("name") && (<td>
                           <b>{x.name}</b>
-                        </td>
-                        <td>{x.code || x.article || "—"}</td>
-                        <td>{x.category}</td>
-                        <td><span className={`seasonality-badge ${x.seasonality?.status==="Сезон сейчас"?"season-now":x.seasonality?.status==="Скоро сезон"?"season-soon":x.seasonality?.status==="Вне сезона"?"season-off":x.seasonality?.status==="Сезонность не выявлена"?"season-none":"season-unknown"}`} title={x.seasonality?.reason}>{x.seasonality?.status||"Недостаточно данных"}</span></td>
-                        <td>{x.seasonality?.priority??0}</td>
-                        <td>{x.reasons.join(", ") || "—"}</td>
-                        <td>{number(x.units_30)}</td>
-                        <td>{number(x.units_previous_30)}</td>
-                        <td>
+                        </td>)}
+                        {visibleColumns.includes("code") && (<td>{x.code || x.article || "—"}</td>)}
+                        {visibleColumns.includes("category") && (<td>{x.category}</td>)}
+                        {visibleColumns.includes("season") && (<td><span className={`seasonality-badge ${x.seasonality?.status==="Сезон сейчас"?"season-now":x.seasonality?.status==="Скоро сезон"?"season-soon":x.seasonality?.status==="Вне сезона"?"season-off":x.seasonality?.status==="Сезонность не выявлена"?"season-none":"season-unknown"}`} title={x.seasonality?.reason}>{x.seasonality?.status||"Недостаточно данных"}</span></td>)}
+                        {visibleColumns.includes("priority") && (<td>{x.seasonality?.priority??0}</td>)}
+                        {visibleColumns.includes("reasons") && (<td>{x.reasons.join(", ") || "—"}</td>)}
+                        {visibleColumns.includes("units") && (<td>{number(x.units_30)}</td>)}
+                        {visibleColumns.includes("previous") && (<td>{number(x.units_previous_30)}</td>)}
+                        {visibleColumns.includes("change") && (<td>
                           {x.units_change_percent == null
                             ? "—"
                             : percent(x.units_change_percent)}
-                        </td>
-                        <td>
+                        </td>)}
+                        {visibleColumns.includes("category_change") && (<td>
                           {x.category_change_percent == null
                             ? "—"
                             : percent(x.category_change_percent)}
-                        </td>
-                        <td>
+                        </td>)}
+                        {visibleColumns.includes("stock") && (<td>
                           {x.stock == null ? "Нет данных" : number(x.stock)}
-                        </td>
-                        <td>{x.aviatorov_stock == null ? "Нет данных" : number(x.aviatorov_stock)}</td>
-                        <td>
+                        </td>)}
+                        {visibleColumns.includes("aviatorov") && (<td>{x.aviatorov_stock == null ? "Нет данных" : number(x.aviatorov_stock)}</td>)}
+                        {visibleColumns.includes("months") && (<td>
                           {x.stock_months == null
                             ? "—"
                             : number(x.stock_months)}
-                        </td>
-                        <td>{x.days_without_sales ?? "—"}</td>
-                        <td>{x.status}</td>
+                        </td>)}
+                        {visibleColumns.includes("days") && (<td>{x.days_without_sales ?? "—"}</td>)}
+                        {visibleColumns.includes("status") && (<td>{x.status}</td>)}
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </div></>
             )}
           </section>
         </>
@@ -434,6 +440,9 @@ export function PromotionCandidatesPage() {
             </div>
             <div className="drawer-body">
               <ProductPhoto src={selected.image_url} name={selected.name} large />
+              <h3>Остатки по складам</h3>
+              {catalogError?<p role="alert">{catalogError}</p>:!catalogDetail?<p>Загрузка данных…</p>:catalogDetail.stocks?.length?<div className="catalog-values">{catalogDetail.stocks.map((stock,index)=><div key={index}><span>{stock.name}</span><b>{stock.quantity==null?"Нет данных":number(stock.quantity)}</b></div>)}</div>:<p>Нет данных об остатках</p>}
+              <p><b>Менеджер ОЗ:</b> {catalogDetail?.oz_manager||"Нет данных"}</p>
               <h3>Почему кандидат</h3>
               <p>{selected.reasons.join(" · ") || "Сигналы не сработали"}</p>
               {selected.stop_factors.length > 0 && (
