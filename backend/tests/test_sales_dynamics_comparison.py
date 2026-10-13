@@ -52,3 +52,36 @@ def test_previous_year_leap_day():
     assert dynamics_comparison_period(
         date(2024, 2, 1), date(2024, 2, 29), "previous_year", "custom"
     ) == (date(2023, 2, 1), date(2023, 2, 28))
+
+
+def test_chart_groupings_preserve_totals_and_weighted_averages():
+    from datetime import datetime
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from app.services.sales_dynamics_report import chart_groupings
+
+    rows = [
+        SimpleNamespace(
+            period=datetime(2025, 12, 31),
+            revenue=Decimal("0.10"),
+            sales_count=1,
+            items_count=Decimal("2"),
+        ),
+        SimpleNamespace(
+            period=datetime(2026, 1, 1),
+            revenue=Decimal("0.20"),
+            sales_count=2,
+            items_count=Decimal("4"),
+        ),
+    ]
+    charts = chart_groupings(rows)
+    assert len(charts["day"]) == 2
+    assert len(charts["week"]) == 1
+    assert len(charts["month"]) == 2
+    week = charts["week"][0]
+    assert week["period"].isoformat() == "2025-12-29"
+    assert week["revenue"] == 0.3
+    assert week["sales_count"] == 3
+    assert week["average_check"] == 0.3 / 3
+    assert week["average_items_per_sale"] == 2
+    assert chart_groupings([]) == {"day": [], "week": [], "month": []}

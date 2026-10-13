@@ -12,8 +12,9 @@ type PeriodKind='yesterday'|'current_week'|'previous_week'|'current_month'|'prev
 type Group='day'|'week'|'month';type Metric='revenue'|'sales_count'|'items_count'|'average_check'|'average_items_per_sale';
 type Comparison={current:number;previous:number;difference:number;change_percent:number|null};
 type Point={index:number;period?:string;previous_period?:string;current?:Record<string,number|string>;previous?:Record<string,number|string>};
-type ComparisonResult={period:{start:string;end:string};metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
-type Report={comparisons?:{previous_period:ComparisonResult;previous_year:ComparisonResult};period:{start:string;end:string};requested_period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string|null;metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
+type Charts=Partial<Record<Group,{group_by:Group;points:Point[]}>>;
+type ComparisonResult={chart_groupings?:Charts;period:{start:string;end:string};metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
+type Report={chart_groupings?:Charts;comparisons?:{previous_period:ComparisonResult;previous_year:ComparisonResult};period:{start:string;end:string};requested_period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string|null;metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
 const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {date_from:iso(from),date_to:iso(to)}}
 const periodOptions:Array<[PeriodKind,string]>=[['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Прошлая неделя'],['current_month','Текущий месяц'],['previous_month','Прошлый месяц'],['custom','Произвольный период']];
@@ -42,7 +43,7 @@ export function SalesDynamicsReportPage() {
     date_from: dateFrom,
     date_to: dateTo,
     period_kind: periodKind,
-    group_by: group || undefined,
+    include_groupings: true,
     department,
     manager,
     buyer_type: buyerType,
@@ -65,14 +66,15 @@ export function SalesDynamicsReportPage() {
   const previousComparison=data?.comparisons?.previous_period;
   const yearComparison=data?.comparisons?.previous_year;
   const chartData=useMemo(()=>{
-    const previous=data?.comparisons?.previous_period.chart.points||data?.chart.points||[],year=data?.comparisons?.previous_year.chart.points||[];
+    const grouping=group || data?.chart.group_by || "day";
+    const previous=data?.comparisons?.previous_period.chart_groupings?.[grouping]?.points||data?.chart_groupings?.[grouping]?.points||data?.comparisons?.previous_period.chart.points||data?.chart.points||[],year=data?.comparisons?.previous_year.chart_groupings?.[grouping]?.points||data?.comparisons?.previous_year.chart.points||[];
     const currentCount=previous.filter(point=>point.current).length;
     const count=Math.max(currentCount,showPrevious?previous.length:0,showYear?year.length:0);
     return Array.from({length:count},(_,index)=>{
       const current=previous[index]?.current||year[index]?.current;
       return {index,period:previous[index]?.period||year[index]?.period,previous_period:previous[index]?.previous_period,year_period:year[index]?.previous_period,currentValue:current?Number(current[metric]):null,previousValue:previous[index]?.previous?Number(previous[index].previous![metric]):null,yearValue:year[index]?.previous?Number(year[index].previous![metric]):null};
     });
-  },[data,metric,showPrevious,showYear]);
+  },[data,group,metric,showPrevious,showYear]);
   const cards: Metric[] = [
     "revenue",
     "sales_count",

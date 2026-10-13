@@ -14,6 +14,7 @@ from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import dynamics_comparison_period
 from app.services.sales_dynamics_report import (
     align_chart_points,
+    chart_groupings,
     calculated_metrics,
     default_grouping,
     effective_period,
@@ -104,9 +105,12 @@ async def _chart(
     department: str | None,
     clients: list[str] | None,
     client: str | None = None,
+    all_groupings: bool = False,
 ):
     sales = _sales_rows(start, end, department, clients, client)
-    bucket = func.date_trunc(group_by, sales.c.sale_date).label("period")
+    bucket = func.date_trunc(
+        "day" if all_groupings else group_by, sales.c.sale_date
+    ).label("period")
     rows = (
         await db.execute(
             select(
@@ -119,6 +123,8 @@ async def _chart(
             .order_by(bucket)
         )
     ).all()
+    if all_groupings:
+        return chart_groupings(rows)
     return [
         {
             "period": row.period.date(),
@@ -150,6 +156,7 @@ async def report(
     ),
     db: AsyncSession = Depends(get_db),
     include_both: Annotated[bool, Query()] = False,
+    include_groupings: Annotated[bool, Query()] = False,
     selected_clients: Annotated[
         list[str] | None, Query(alias="clients", max_length=500)
     ] = None,
@@ -179,7 +186,14 @@ async def report(
         db, effective_from, effective_to, department, clients, client
     )
     current_points = await _chart(
-        db, effective_from, effective_to, grouping, department, clients, client
+        db,
+        effective_from,
+        effective_to,
+        grouping,
+        department,
+        clients,
+        client,
+        **({"all_groupings": True} if include_groupings else {}),
     )
     comparisons = {}
     for mode in (
@@ -190,7 +204,14 @@ async def report(
         )
         previous = await _metrics(db, start, end, department, clients, client)
         previous_points = await _chart(
-            db, start, end, grouping, department, clients, client
+            db,
+            start,
+            end,
+            grouping,
+            department,
+            clients,
+            client,
+            **({"all_groupings": True} if include_groupings else {}),
         )
         comparisons[mode] = {
             "period": {"start": start, "end": end},
@@ -199,9 +220,22 @@ async def report(
             },
             "chart": {
                 "group_by": grouping,
-                "points": align_chart_points(current_points, previous_points),
+                "points": align_chart_points(
+                    current_points[grouping] if include_groupings else current_points,
+                    previous_points[grouping] if include_groupings else previous_points,
+                ),
             },
         }
+        if include_groupings:
+            comparisons[mode]["chart_groupings"] = {
+                key: {
+                    "group_by": key,
+                    "points": align_chart_points(
+                        current_points[key], previous_points[key]
+                    ),
+                }
+                for key in ("day", "week", "month")
+            }
     primary = comparisons[comparison_mode]
     result = {
         "period": {"start": effective_from, "end": effective_to},
@@ -211,6 +245,8 @@ async def report(
         "metrics": primary["metrics"],
         "chart": primary["chart"],
     }
+    if include_groupings:
+        result["chart_groupings"] = primary["chart_groupings"]
     if include_both:
         result["comparisons"] = comparisons
     return result

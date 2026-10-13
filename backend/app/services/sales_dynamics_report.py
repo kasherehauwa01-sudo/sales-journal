@@ -119,3 +119,31 @@ def dynamics_comparison_period(start, end, mode, period_kind):
         ):
             return comparison_period(start, end, mode, "month")
     return comparison_period(start, end, mode, period_kind)
+
+
+def chart_groupings(rows):
+    """Aggregate daily SQL totals before float conversion; never average averages."""
+    result = {}
+    for grouping in ("day", "week", "month"):
+        buckets = {}
+        for row in rows:
+            day = row.period.date()
+            bucket = (
+                day - timedelta(days=day.weekday())
+                if grouping == "week"
+                else day.replace(day=1) if grouping == "month" else day
+            )
+            totals = buckets.setdefault(bucket, [0, 0, 0])
+            totals[0] += row.revenue or 0
+            totals[1] += row.sales_count or 0
+            totals[2] += row.items_count or 0
+        result[grouping] = [
+            {
+                "period": bucket,
+                **calculated_metrics(
+                    float(values[0]), int(values[1]), float(values[2])
+                ),
+            }
+            for bucket, values in sorted(buckets.items())
+        ]
+    return result
