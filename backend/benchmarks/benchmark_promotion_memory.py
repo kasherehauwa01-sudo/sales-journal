@@ -53,7 +53,7 @@ def catalog_payload(products):
             "brand": "Бренд",
             "manufacturer": "Завод",
             "category": f"Категория {int(p['code']) % 12}",
-            "stocks": [{"quantity": 20, "warehouse": f"Склад {j}"} for j in range(5)],
+            "stocks": [{"quantity": 20, "warehouse": "Авиаторов Зал+Склад" if j == 0 else f"Склад {j}"} for j in range(5)],
             "prices": [{"price": j, "name": f"Цена {j}"} for j in range(8)],
             "properties": [
                 {"name": f"Свойство {j}", "value": f"{p['code']}-{j}-" + "x" * 100}

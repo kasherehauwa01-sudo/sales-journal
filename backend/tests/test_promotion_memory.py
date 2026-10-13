@@ -18,7 +18,12 @@ from benchmarks import promotion_baseline as before
 def legacy(result):
     rows, available = result
     return [
-        {key: value for key, value in row.items() if not key.startswith("season") and key not in ("aviatorov_stock", "image_url", "catalog_manager")}
+        {
+            key: value
+            for key, value in row.items()
+            if not key.startswith("season")
+            and key not in ("aviatorov_stock", "image_url", "catalog_manager")
+        }
         for row in rows
     ], available
 
@@ -119,7 +124,16 @@ def test_alias_conflicts_across_5000_boundary_and_compact_warm_cache(monkeypatch
         compact, available = await router._catalog(await sales())
         assert available
         assert all(
-            set(info) == {"category", "brand", "manufacturer", "stock", "aviatorov_stock", "image_url", "catalog_manager"}
+            set(info)
+            == {
+                "category",
+                "brand",
+                "manufacturer",
+                "stock",
+                "aviatorov_stock",
+                "image_url",
+                "catalog_manager",
+            }
             for info in compact.values()
         )
         assert _bounded_size(compact, 64 * 1024 * 1024) < 5 * 1024 * 1024
@@ -143,7 +157,11 @@ def test_catalog_unavailable_preserves_old_fallback(monkeypatch):
     )
 
     async def run():
-        assert legacy(await router._dataset(data, None)) == await before._dataset(
+        assert (await router._dataset(data, None))[0] == []
+        disabled = data.model_copy(
+            update={"criteria": data.criteria.model_copy(update={"min_stock": None})}
+        )
+        assert legacy(await router._dataset(disabled, None)) == await before._dataset(
             data, None
         )
 
