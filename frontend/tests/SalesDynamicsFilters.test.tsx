@@ -1,0 +1,24 @@
+import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {afterEach,expect,it,vi} from 'vitest';
+import {SalesDynamicsReportPage} from '../src/pages/SalesDynamicsReportPage';
+vi.mock('recharts',()=>{const Box=({children}:any)=><div>{children}</div>;return {CartesianGrid:()=>null,Legend:()=>null,Line:()=>null,LineChart:Box,ResponsiveContainer:Box,Tooltip:()=>null,XAxis:()=>null,YAxis:()=>null};});
+afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+it('selects multiple clients with search and comparison only when explicitly generating',async()=>{
+  const period={start:'2026-09-01',end:'2026-09-30'},comparison={current:10,previous:5,difference:5,change_percent:100};
+  const metrics=Object.fromEntries(['revenue','sales_count','items_count','average_check','average_items_per_sale'].map(key=>[key,comparison]));
+  const fetch=vi.fn(async(url:string)=>new Response(JSON.stringify(url.includes('/filters')?{departments:[],clients:['Клиент А','Клиент Б']}:url.includes('/reports/sales-dynamics?')?{period,requested_period:period,previous_period:period,metrics,chart:{group_by:'day',points:[]}}:[])));
+  vi.stubGlobal('fetch',fetch);render(<SalesDynamicsReportPage/>);
+  const reports=()=>fetch.mock.calls.filter(([url])=>url.includes('/reports/sales-dynamics?'));
+  expect(reports()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button',{name:'Клиент'}));
+  fireEvent.click(await screen.findByRole('checkbox',{name:'Клиент А'}));
+  fireEvent.change(screen.getByPlaceholderText('Поиск'),{target:{value:'Клиент Б'}});
+  expect(screen.queryByRole('checkbox',{name:'Клиент А'})).toBeNull();
+  fireEvent.click(screen.getByRole('checkbox',{name:'Клиент Б'}));fireEvent.mouseDown(document.body);
+  fireEvent.click(screen.getByRole('button',{name:'Прошлый год'}));
+  expect(screen.getByRole('button',{name:'Прошлый год'}).getAttribute('aria-pressed')).toBe('true');
+  expect(reports()).toHaveLength(0);fireEvent.click(screen.getByRole('button',{name:'Сформировать отчёт'}));
+  await waitFor(()=>expect(reports()).toHaveLength(1));
+  const params=new URL(reports()[0][0],'http://test').searchParams;
+  expect(params.getAll('clients')).toEqual(['Клиент А','Клиент Б']);expect(params.get('comparison_mode')).toBe('previous_year');
+});

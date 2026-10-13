@@ -1,17 +1,29 @@
 from datetime import date, timedelta
 
 
-def effective_period(date_from: date, date_to: date, period_kind: str, today: date) -> tuple[date, date, str | None]:
+def effective_period(
+    date_from: date, date_to: date, period_kind: str, today: date
+) -> tuple[date, date, str | None]:
     """Исключает сегодняшний день: данные продаж поступают только на следующий день."""
     if period_kind in {"current_week", "current_month", "custom"} and date_to >= today:
         effective_to = today - timedelta(days=1)
         if effective_to < date_from:
-            return date_from, effective_to, "За сегодняшний день данных нет. В выбранном периоде пока нет загруженных данных."
-        return date_from, effective_to, f"За сегодняшний день данных нет. Отчет построен за период {date_from:%d.%m.%Y} — {effective_to:%d.%m.%Y}."
+            return (
+                date_from,
+                effective_to,
+                "За сегодняшний день данных нет. В выбранном периоде пока нет загруженных данных.",
+            )
+        return (
+            date_from,
+            effective_to,
+            f"За сегодняшний день данных нет. Отчет построен за период {date_from:%d.%m.%Y} — {effective_to:%d.%m.%Y}.",
+        )
     return date_from, date_to, None
 
 
-def previous_period(date_from: date, date_to: date, period_kind: str) -> tuple[date, date]:
+def previous_period(
+    date_from: date, date_to: date, period_kind: str
+) -> tuple[date, date]:
     """Возвращает календарный период сравнения для выбранного быстрого периода."""
     if period_kind == "current_week":
         return date_from - timedelta(days=7), date_to - timedelta(days=7)
@@ -46,7 +58,9 @@ def metric_comparison(current: float, previous: float) -> dict:
     }
 
 
-def calculated_metrics(revenue: float, sales_count: int, items_count: float) -> dict[str, float]:
+def calculated_metrics(
+    revenue: float, sales_count: int, items_count: float
+) -> dict[str, float]:
     return {
         "revenue": revenue,
         "sales_count": sales_count,
@@ -56,16 +70,52 @@ def calculated_metrics(revenue: float, sales_count: int, items_count: float) -> 
     }
 
 
-def align_chart_points(current_points: list[dict], previous_points: list[dict]) -> list[dict]:
+def align_chart_points(
+    current_points: list[dict], previous_points: list[dict]
+) -> list[dict]:
     """Сопоставляет предыдущие точки только с фактическими точками текущего периода."""
     result = []
     for index, current in enumerate(current_points):
         previous = previous_points[index] if index < len(previous_points) else None
-        result.append({
-            "index": index + 1,
-            "period": current["period"],
-            "previous_period": previous["period"] if previous else None,
-            "current": current,
-            "previous": previous,
-        })
+        result.append(
+            {
+                "index": index + 1,
+                "period": current["period"],
+                "previous_period": previous["period"] if previous else None,
+                "current": current,
+                "previous": previous,
+            }
+        )
     return result
+
+
+def dynamics_comparison_period(start, end, mode, period_kind):
+    from calendar import monthrange
+    from app.services.report_periods import comparison_period
+
+    if mode == "previous_period":
+        if period_kind in {"current_month", "previous_month"}:
+
+            def shift(value):
+                month = value.month - 1 or 12
+                year = value.year - (value.month == 1)
+                return value.replace(
+                    year=year,
+                    month=month,
+                    day=min(value.day, monthrange(year, month)[1]),
+                )
+
+            if start.day == 1 and end.day == monthrange(end.year, end.month)[1]:
+                return comparison_period(start, end, mode, "month")
+            return shift(start), shift(end)
+        if period_kind in {"current_week", "previous_week"}:
+            return start - timedelta(days=7), end - timedelta(days=7)
+        if (
+            period_kind == "custom"
+            and start.year == end.year
+            and start.month == end.month
+            and start.day == 1
+            and end.day == monthrange(end.year, end.month)[1]
+        ):
+            return comparison_period(start, end, mode, "month")
+    return comparison_period(start, end, mode, period_kind)

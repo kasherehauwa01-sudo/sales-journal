@@ -36,3 +36,46 @@ def test_client_filter_returns_controlled_clients_vr_error(monkeypatch):
 
     assert caught.value.status_code == 502
     assert caught.value.detail == "clients_vr недоступен"
+
+
+def test_multiple_selected_clients_intersect_manager_for_both_periods(monkeypatch):
+    from datetime import date
+
+    calls = []
+
+    async def allowed(*args):
+        return [" Клиент А ", "Клиент Б"]
+
+    async def metrics(db, start, end, department, clients, client):
+        calls.append((start, end, clients))
+        return {
+            "revenue": 1,
+            "sales_count": 1,
+            "items_count": 1,
+            "average_check": 1,
+            "average_items_per_sale": 1,
+        }
+
+    async def chart(*args):
+        return []
+
+    monkeypatch.setattr(sales_dynamics_report, "_client_filter", allowed)
+    monkeypatch.setattr(sales_dynamics_report, "_metrics", metrics)
+    monkeypatch.setattr(sales_dynamics_report, "_chart", chart)
+    result = asyncio.run(
+        sales_dynamics_report.report(
+            date(2026, 9, 1),
+            date(2026, 9, 30),
+            period_kind="previous_month",
+            group_by="day",
+            manager="М",
+            comparison_mode="previous_year",
+            db=None,
+            selected_clients=["КЛИЕНТ А", "Клиент В"],
+        )
+    )
+    assert all(call[2] == ["клиент а"] for call in calls)
+    assert result["previous_period"] == {
+        "start": date(2025, 9, 1),
+        "end": date(2025, 9, 30),
+    }
