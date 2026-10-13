@@ -85,3 +85,25 @@ def test_chart_groupings_preserve_totals_and_weighted_averages():
     assert week["average_check"] == 0.3 / 3
     assert week["average_items_per_sale"] == 2
     assert chart_groupings([]) == {"day": [], "week": [], "month": []}
+
+
+def test_year_to_date_excludes_today_and_compares_same_dates():
+    from datetime import date
+    from app.services.sales_dynamics_report import (
+        effective_period,
+        dynamics_comparison_period,
+    )
+
+    start, end, warning = effective_period(
+        date(2026, 1, 1), date(2026, 10, 13), "year", date(2026, 10, 13)
+    )
+    assert end == date(2026, 10, 12)
+    assert warning
+    for mode in ("previous_period", "previous_year"):
+        assert dynamics_comparison_period(start, end, mode, "year") == (
+            date(2025, 1, 1),
+            date(2025, 10, 12),
+        )
+    assert dynamics_comparison_period(
+        date(2024, 1, 1), date(2024, 2, 29), "previous_period", "year"
+    ) == (date(2023, 1, 1), date(2023, 2, 28))

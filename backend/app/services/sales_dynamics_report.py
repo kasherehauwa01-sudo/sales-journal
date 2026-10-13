@@ -5,7 +5,10 @@ def effective_period(
     date_from: date, date_to: date, period_kind: str, today: date
 ) -> tuple[date, date, str | None]:
     """Исключает сегодняшний день: данные продаж поступают только на следующий день."""
-    if period_kind in {"current_week", "current_month", "custom"} and date_to >= today:
+    if (
+        period_kind in {"current_week", "current_month", "year", "custom"}
+        and date_to >= today
+    ):
         effective_to = today - timedelta(days=1)
         if effective_to < date_from:
             return (
@@ -93,6 +96,8 @@ def dynamics_comparison_period(start, end, mode, period_kind):
     from calendar import monthrange
     from app.services.report_periods import comparison_period
 
+    if period_kind == "year":
+        return comparison_period(start, end, "previous_year", period_kind)
     if mode == "previous_period":
         if period_kind in {"current_month", "previous_month"}:
 

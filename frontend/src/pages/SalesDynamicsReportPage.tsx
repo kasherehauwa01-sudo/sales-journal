@@ -8,7 +8,7 @@ import {Empty,Loading} from '../components/States';
 import {useApi} from '../hooks/useApi';
 import {date,money,number,percent} from '../utils/format';
 
-type PeriodKind='yesterday'|'current_week'|'previous_week'|'current_month'|'previous_month'|'custom';
+type PeriodKind='yesterday'|'current_week'|'previous_week'|'current_month'|'previous_month'|'year'|'custom';
 type Group='day'|'week'|'month';type Metric='revenue'|'sales_count'|'items_count'|'average_check'|'average_items_per_sale';
 type Comparison={current:number;previous:number;difference:number;change_percent:number|null};
 type Point={index:number;period?:string;previous_period?:string;current?:Record<string,number|string>;previous?:Record<string,number|string>};
@@ -16,8 +16,8 @@ type Charts=Partial<Record<Group,{group_by:Group;points:Point[]}>>;
 type ComparisonResult={chart_groupings?:Charts;period:{start:string;end:string};metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
 type Report={chart_groupings?:Charts;comparisons?:{previous_period:ComparisonResult;previous_year:ComparisonResult};period:{start:string;end:string};requested_period:{start:string;end:string};previous_period:{start:string;end:string};warning?:string|null;metrics:Record<Metric,Comparison>;chart:{group_by:Group;points:Point[]}};
 const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {date_from:iso(from),date_to:iso(to)}}
-const periodOptions:Array<[PeriodKind,string]>=[['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Прошлая неделя'],['current_month','Текущий месяц'],['previous_month','Прошлый месяц'],['custom','Произвольный период']];
+function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='year')from.setMonth(0,1);if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {date_from:iso(from),date_to:iso(to)}}
+const periodOptions:Array<[PeriodKind,string]>=[['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Прошлая неделя'],['current_month','Текущий месяц'],['previous_month','Прошлый месяц'],['year','Год'],['custom','Произвольный период']];
 const metricOptions:Array<[Metric,string]>=[['revenue','Выручка'],['sales_count','Количество продаж'],['items_count','Количество товаров'],['average_check','Средний чек'],['average_items_per_sale','Товаров в чеке']];
 const metricMoney=(key:Metric)=>key==='revenue'||key==='average_check';const formatMetric=(key:Metric,value:number)=>metricMoney(key)?money(value):number(value);
 export function SalesDynamicsReportPage() {

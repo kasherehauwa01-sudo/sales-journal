@@ -144,7 +144,7 @@ async def report(
     date_to: date,
     period_kind: str = Query(
         "custom",
-        pattern="^(today|yesterday|current_week|previous_week|current_month|previous_month|custom)$",
+        pattern="^(today|yesterday|current_week|previous_week|current_month|previous_month|year|custom)$",
     ),
     group_by: str | None = Query(None, pattern="^(day|week|month)$"),
     department: str | None = None,
