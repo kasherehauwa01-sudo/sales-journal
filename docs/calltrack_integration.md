@@ -284,3 +284,20 @@ Default rules retain the report's eight segments, including separate «Новы�
 Deploy this additive endpoint before the Calltrack client-profile update. No new database tables or migration are needed; the existing local catalog tables must already be migrated. Calltrack caches the response for ten minutes and displays unavailable product/RFM data explicitly if the endpoint is not yet deployed.
 
 Validation: `pytest -q tests/test_calltrack_insights.py tests/test_calltrack_integration.py tests/test_rfm.py` (26 tests). New coverage includes lifetime deduplication, aliases, decimal amounts, category ranking/top 20, exact shared RFM criteria/population caching, grouped SQL shape, and integration-token protection.
+
+### If only Calltrack was updated
+
+The existing Sales Journal `main` does not contain `client-insights` yet. Updating only Calltrack cannot provide unique products, categories or RFM. Install the integration branch and rebuild the backend (no database deletion or volume recreation):
+
+```bash
+cd /var/www/html/vr/sales
+git fetch origin
+git switch feat/calltrack-client-insights
+git pull --ff-only origin feat/calltrack-client-insights
+docker compose up -d --build backend
+docker compose exec -T backend python -m scripts.check_calltrack_insights 'Бережнова Елена Сергеевна ИП'
+```
+
+The checker calls the running authenticated API with its configured token without displaying the token. If the checkout path differs, use the actual Sales Journal directory. If Git reports local changes or Docker reports a startup error, resolve that error before continuing. The usual container startup applies existing Alembic migrations.
+
+Additional verification now executes the full authenticated endpoint against real PostgreSQL, including catalog alias deduplication and RFM population queries: set `CALLTRACK_TEST_POSTGRES` to a dedicated test PostgreSQL URL and run `pytest -q tests/test_calltrack_insights_postgres.py`. It creates and removes only its own randomly named schema. Install `requirements-test.txt` for the test HTTP client.
