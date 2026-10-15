@@ -42,4 +42,3 @@ async def rfm_rows(db: AsyncSession, start: date, end: date, departments: list[s
                        "max_check": float(source["max_check"] or 0), "min_check": float(source["min_check"] or 0),
                        "units": float(source["units"] or 0)})
     return result
-
