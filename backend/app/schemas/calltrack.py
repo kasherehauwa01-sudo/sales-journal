@@ -81,3 +81,15 @@ class CalltrackSaleDetail(BaseModel):
     original_products_text: str | None
     created_at: datetime
     items: list[ItemOut]
+
+
+class CalltrackInsightsRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=512)
+    as_of: date
+
+    @model_validator(mode="after")
+    def validate_name(self):
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValueError("Укажите наименование клиента")
+        return self

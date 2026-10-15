@@ -265,3 +265,22 @@ curl -fsS \
 Batch выполняет один SQL-запрос продаж для всего списка клиентов. Число SQL-запросов не растёт вместе с количеством клиентов. `SaleItem` не загружается для timeline. Отображение manager загружается одним кешируемым обращением к ClientsVR, а не запросом на каждого клиента.
 
 Максимальный размер batch — 500 клиентов. Большие наборы вызывающая сторона должна разбивать на последовательные пакеты.
+
+## Lifetime client insights
+
+`POST /api/integrations/calltrack/client-insights` uses the same integration Bearer token. Request: `{"name":"Харченко Николай Николаевич ИП","as_of":"2026-10-15"}`. Exact normalized client name is the identity; phone is not used.
+
+Response fields:
+- `sale_quantities`: `{sale_id, quantity}` for all matching sales, including zero-item sales. Quantity is a decimal string, summed in SQL per sale.
+- `unique_products`: distinct products across the entire history, not a sum of distinct counts per receipt. Synced CatalogVR product IDs resolve aliases; otherwise code, article, then name identify a product.
+- `top_categories`: up to 20 `{category, revenue, quantity}` entries ranked by descending lifetime item revenue, with category-name tie breaking. Revenue is `sum(quantity * actual_price)`, rounded once to cents. Amounts and quantities are decimal strings.
+- `uncategorized_products`: products lacking a usable category in the existing local CatalogVR snapshot. They appear under «Без категории»; this endpoint does not trigger catalog sync or external per-item calls.
+- `rfm`: `{segment, code, tags}` or null for no eligible purchases, plus `rfm_settings` and `as_of`.
+
+RFM reuses `services/rfm_data.py` (the dataset shared with the RFM report), `rfm.enrich` and `SegmentSettings()` without copying segmentation rules. The reference population is all clients over all history through `as_of`, with no department/manager filters. Equal values retain equal quintile scores. The all-client snapshot is reused for five minutes per process. Only the requested client's status is returned. An RFM report with a different period, population or custom settings can have different scores.
+
+Default rules retain the report's eight segments, including separate «Новые» and «Перспективные». New: first purchase within 30 days and at most two purchases. Lost: at least 180 days without purchase or at least three typical purchase intervals. Sleeping: at least 1.5 intervals, or low recency score with sufficient frequency/value. Risk categories precede new/active/value categories exactly as in the existing report.
+
+Deploy this additive endpoint before the Calltrack client-profile update. No new database tables or migration are needed; the existing local catalog tables must already be migrated. Calltrack caches the response for ten minutes and displays unavailable product/RFM data explicitly if the endpoint is not yet deployed.
+
+Validation: `pytest -q tests/test_calltrack_insights.py tests/test_calltrack_integration.py tests/test_rfm.py` (26 tests). New coverage includes lifetime deduplication, aliases, decimal amounts, category ranking/top 20, exact shared RFM criteria/population caching, grouped SQL shape, and integration-token protection.

@@ -11,6 +11,8 @@ from app.database import get_db
 from app.schemas.calltrack import CalltrackSaleDetail, CalltrackSalesRequest, CalltrackSalesResponse
 from app.services.calltrack_integration import AmbiguousClientReference, find_sales_for_calltrack
 from app.services.sale_details import load_sale_detail
+from app.services.calltrack_insights import client_insights
+from app.schemas.calltrack import CalltrackInsightsRequest
 
 
 router = APIRouter(prefix="/integrations/calltrack", tags=["Интеграция Calltrack"])
@@ -26,6 +28,14 @@ def require_calltrack_token(
     supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
     if not expected or not supplied or not secrets.compare_digest(supplied, expected):
         raise HTTPException(401, "Недействительный integration token", headers={"WWW-Authenticate": "Bearer"})
+
+
+@router.post("/client-insights", dependencies=[Depends(require_calltrack_token)])
+async def insights(payload: CalltrackInsightsRequest, db: AsyncSession = Depends(get_db)):
+    # Serialize Decimal explicitly: money/quantities must not cross JSON as floats.
+    from fastapi.encoders import jsonable_encoder
+    from decimal import Decimal
+    return jsonable_encoder(await client_insights(db, payload.name, payload.as_of), custom_encoder={Decimal: str})
 
 
 @router.post("/client-sales", response_model=CalltrackSalesResponse, dependencies=[Depends(require_calltrack_token)])
