@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.schemas.calltrack import CalltrackSaleDetail, CalltrackSalesRequest, CalltrackSalesResponse
+from app.schemas.calltrack import (CalltrackSaleDetail, CalltrackSalesRequest, CalltrackSalesResponse,
+    CalltrackInsightsRequest, CalltrackInsightsResponse)
+from app.services.calltrack_insights import client_insights as load_client_insights
 from app.services.calltrack_integration import AmbiguousClientReference, find_sales_for_calltrack
 from app.services.sale_details import load_sale_detail
 
@@ -59,3 +61,13 @@ async def sale_detail(sale_id: int, db: AsyncSession = Depends(get_db)):
     if not sale:
         raise HTTPException(404, "Продажа не найдена")
     return CalltrackSaleDetail.model_validate(sale.model_dump())
+
+
+@router.post("/client-insights", response_model=CalltrackInsightsResponse,
+             dependencies=[Depends(require_calltrack_token)])
+async def client_insights(payload: CalltrackInsightsRequest, db: AsyncSession = Depends(get_db)):
+    started = time.monotonic()
+    try:
+        return await load_client_insights(db, payload.name)
+    finally:
+        log.info("Calltrack client-insights duration_ms=%.3f", (time.monotonic() - started) * 1000)

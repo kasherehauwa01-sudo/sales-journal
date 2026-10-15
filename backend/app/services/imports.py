@@ -82,3 +82,11 @@ async def process_import(import_id:int):
     await changed(db)
     await db.commit()
    raise
+
+ # Rebuild only after releasing shared source ownership, otherwise an exclusive
+ # snapshot lock would deadlock against this same import.
+ async with SessionLocal() as db:
+  status=await db.scalar(select(ImportBatch.status).where(ImportBatch.id==import_id))
+ if status=="completed":
+  from app.services.rfm_snapshot import rebuild_after_sales_update
+  await rebuild_after_sales_update(engine)

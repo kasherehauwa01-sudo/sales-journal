@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import asc, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,9 +36,13 @@ async def list_sales(page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),
  items=(await db.scalars(base.order_by(order,desc(Sale.id)).offset((page-1)*page_size).limit(page_size))).unique().all()
  return SalePage(items=items,total=total,page=page,page_size=page_size,pages=max(1,(total+page_size-1)//page_size))
 @router.delete("")
-async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db)):
+async def delete_sales(payload:DeleteSales,db:AsyncSession=Depends(get_db),background_tasks:BackgroundTasks=None):
  async with advisory(db.bind,shared=True,wait=True):
-  return await _delete_sales(payload,db)
+  result = await _delete_sales(payload,db)
+ from app.services.rfm_snapshot import rebuild_after_sales_update
+ if background_tasks is not None:
+  background_tasks.add_task(rebuild_after_sales_update, db.bind)
+ return result
 
 async def _delete_sales(payload,db):
  if payload.all:

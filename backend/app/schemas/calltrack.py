@@ -81,3 +81,61 @@ class CalltrackSaleDetail(BaseModel):
     original_products_text: str | None
     created_at: datetime
     items: list[ItemOut]
+
+
+class CalltrackInsightsRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_name(self):
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValueError("Укажите name клиента")
+        return self
+
+
+class RfmSnapshotMetadata(BaseModel):
+    id: str
+    calculated_at: datetime
+    period_from: date
+    period_to: date
+    age_seconds: int
+    stale: bool
+
+
+class CalltrackRfmInsight(BaseModel):
+    segment: str
+    rfm_code: str
+    tags: list[str]
+    r_score: int
+    f_score: int
+    m_score: int
+    recency_days: int
+    frequency: int
+    monetary: Decimal
+    average_check: Decimal
+    first_purchase: date
+    last_purchase: date
+    purchases_per_month: float
+    average_interval: float | None
+    cycle_overdue: float | None
+
+
+class CalltrackCategoryInsight(BaseModel):
+    category: str
+    quantity: Decimal
+
+
+class CalltrackSaleQuantity(BaseModel):
+    sale_id: int
+    quantity: Decimal
+
+
+class CalltrackInsightsResponse(BaseModel):
+    status: str  # ready | client_not_in_snapshot
+    client_key: str
+    rfm: CalltrackRfmInsight | None
+    snapshot: RfmSnapshotMetadata
+    unique_products: int
+    top_categories: list[CalltrackCategoryInsight]
+    sale_quantities: list[CalltrackSaleQuantity]
