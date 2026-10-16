@@ -313,3 +313,48 @@ def test_unknown_total_is_not_silently_converted_to_zero():
 def test_full_discount_does_not_override_explicit_total():
  row=normalize_sale({**BASE,"total_amount":"10", "base_amount":"17", "discount_percent":"-100%"})
  assert row["total_amount"]==Decimal("10")
+
+
+def test_missing_export_totals_are_restored_from_complete_labelled_items():
+ products='Артикул: 1 | Код: A | Наименование: Штоф | Количество: 6 | Цена базовая: 317,00 | Цена: 301,15 || Артикул: 2 | Код: B | Наименование: Штоф маленький | Количество: 4 | Цена базовая: 134,00 | Цена: 127,30'
+ raw={**BASE,'total_amount':'','base_amount':'','products':products}
+ row=normalize_sale(raw)
+ assert row['total_amount']==Decimal('2316.10')
+ assert row['base_amount']==Decimal('2438.00')
+ assert len(row['items'])==2
+ assert raw['total_amount']==''  # Исходные данные для журнала не меняются.
+ assert row['fingerprint']==normalize_sale({**raw,'total_amount':'2316.10'})['fingerprint']
+ assert normalize_sale({**raw,'total_amount':'100'})['total_amount']==Decimal('100')
+ assert normalize_sale({**raw,'total_amount':0})['total_amount']==Decimal('0')
+ certificate=normalize_sale({**raw,'certificate_amount':'100'})
+ assert certificate['total_amount']==Decimal('2216.10')
+ assert certificate['legacy_fingerprint']==row['fingerprint']
+
+
+def test_missing_export_total_requires_explicit_prices_and_quantities_for_every_item():
+ import pytest
+ complete='Артикул: 1 | Наименование: Товар | Количество: 2 | Цена базовая: 10 | Цена: 9'
+ for products in (
+  complete.replace('Количество: 2','Количество:'),
+  complete.replace('Цена: 9','Цена:'),
+  complete.replace('Цена базовая: 10','Цена базовая:'),
+  complete.replace('Цена: 9','Цена: неизвестно 9'),
+  complete+' || Артикул: 2 | Наименование: Без цены',
+  complete+' | Цена: 8',
+  'Неизвестный товар',
+ ):
+  with pytest.raises(ValueError,match='Не заполнены обязательные поля'):
+   normalize_sale({**BASE,'total_amount':'','products':products})
+
+
+def test_windows_1251_export_with_omitted_totals_and_unclosed_cells(tmp_path):
+ path=tmp_path/'export.html'
+ path.write_bytes(('''<HTML><META CHARSET=windows-1251><TABLE>
+ <TR><TD>Дата<TD>№ Док.<TD>Подразделение<TD>Сумма<TD>Сумма базовых цен<TD>Товары</TR>
+ <TR><TD>23.08.26<TD>К-1<TD>Тест<TD>&nbsp;<TD>&nbsp;<TD>Артикул: 1 | Наименование: Товар | Количество: 2 | Цена базовая: 10,00 | Цена: 9,50</TR>
+ </TABLE></HTML>''').encode('windows-1251'))
+ _,rows=read_sales(path)
+ sales=[normalize_sale(raw) for _,raw in rows]
+ assert len(sales)==1
+ assert sales[0]['total_amount']==Decimal('19.00')
+ assert sales[0]['base_amount']==Decimal('20.00')
