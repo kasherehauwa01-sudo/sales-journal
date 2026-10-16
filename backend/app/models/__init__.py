@@ -10,3 +10,6 @@ from .seasonality import SeasonalityStoreMonth, SeasonalityMonth, SeasonalityPro
 __all__ += ['SeasonalityMonth','SeasonalityProfile','SeasonalityState']
 
 __all__ += ["SeasonalityStoreMonth"]
+
+from .rfm import RfmSnapshot, RfmSnapshotClient, RfmSnapshotState
+__all__ += ["RfmSnapshot", "RfmSnapshotClient", "RfmSnapshotState"]
