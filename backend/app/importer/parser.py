@@ -378,6 +378,11 @@ def read_sales(path:Path)->tuple[str,Iterator[tuple[int,dict[str,Any]]]]:
  raise ValueError(f"Не найдена строка заголовков с обязательными колонками. Проверены первые 1000 строк каждого листа. {details}")
 def normalize_sale(raw:dict)->dict:
  gross_amount=decimal(raw.get("total_amount"));certificate_amount=decimal(raw.get("certificate_amount"))
+ # 1С выводит нулевую сумму пустой ячейкой при скидке -100% (например,
+ # выдача карты лояльности). Восстанавливаем ноль только при полной скидке
+ # и известной базовой сумме; другие отсутствующие суммы остаются ошибкой.
+ if not norm(raw.get("total_amount")) and decimal(raw.get("discount_percent"),True)==Decimal("-100") and decimal(raw.get("base_amount")) is not None:
+  gross_amount=Decimal("0")
  total_amount=gross_amount-certificate_amount if gross_amount is not None and certificate_amount is not None and certificate_amount>0 else gross_amount
  row={"row_number":int(raw["row_number"]) if raw.get("row_number") not in (None,"") else None,"sale_date":parse_date(raw.get("sale_date")),"document_number":str(raw.get("document_number") or "").strip(),"client":str(raw.get("client") or "").strip() or None,"department":str(raw.get("department") or "").strip(),"total_amount":total_amount,"base_amount":decimal(raw.get("base_amount")),"discount_percent":decimal(raw.get("discount_percent"),True),"reason":str(raw.get("reason") or "").strip() or None,"author":str(raw.get("author") or "").strip() or None,"price_type":str(raw.get("price_type") or "").strip() or None,"discount_card_percent":decimal(raw.get("discount_card_percent"),True),"discount_card_number":str(raw.get("discount_card_number") or "").split(".")[0].strip() or None,"social":parse_bool(raw.get("social")),"certificate_amount":certificate_amount,"promotion":str(raw.get("promotion") or "").strip() or None,"phone":parse_phone(raw.get("phone")),"original_products_text":str(raw.get("products") or "").strip() or None}
  if not row["document_number"] or not row["department"] or row["total_amount"] is None:raise ValueError("Не заполнены обязательные поля")
