@@ -277,3 +277,39 @@ def test_streaming_html_reads_large_report_without_materialized_fallback(monkeyp
  assert len(set(documents))==sales_count
  assert documents[0]=="Р-00000000"
  assert documents[-1]=="Р-00009999"
+
+
+def test_1c_blank_total_with_full_discount_preserves_sale_and_items(tmp_path):
+ # Минимальная структура проблемной выгрузки: незакрытые TD, пустая сумма,
+ # базовая цена и скидка -100%, при этом цена товара явно равна нулю.
+ path=tmp_path/"zero-sale.html"
+ path.write_text('''<table><tr><td>Дата<td>№ Док.<td>Подразделение<td>Сумма<td>Сумма базовых цен<td>Скидка %<td>Товары</tr>
+ <tr><td>29.04.25<td>Р-TEST<td>Простор<td>&nbsp;<td>0.01<td>-100%<td>Артикул: TEST | Код: КА-1 | Наименование: Карта лояльности | Количество: 1 | Цена базовая: 0,01 | Цена: 0,00</tr></table>''',encoding="utf-8")
+ _,rows=read_sales(path)
+ records=list(rows)
+ assert len(records)==1
+ raw=records[0][1]
+ sale=normalize_sale(raw)
+ assert sale["total_amount"]==Decimal("0")
+ assert sale["base_amount"]==Decimal("0.01")
+ assert sale["discount_percent"]==Decimal("-100")
+ assert sale["items"][0]["actual_price"]==Decimal("0")
+ assert sale["items"][0]["quantity"]==Decimal("1")
+ assert sale["fingerprint"]==normalize_sale({**raw,"total_amount":"0.00"})["fingerprint"]
+
+
+def test_unknown_total_is_not_silently_converted_to_zero():
+ import pytest
+ for overrides in (
+  {"total_amount":""},
+  {"total_amount":"", "base_amount":"17", "discount_percent":"-99%"},
+  {"total_amount":"", "discount_percent":"-100%"},
+  {"total_amount":"неизвестно", "base_amount":"17", "discount_percent":"-100%"},
+ ):
+  with pytest.raises(ValueError,match="Не заполнены обязательные поля"):
+   normalize_sale({**BASE,**overrides})
+
+
+def test_full_discount_does_not_override_explicit_total():
+ row=normalize_sale({**BASE,"total_amount":"10", "base_amount":"17", "discount_percent":"-100%"})
+ assert row["total_amount"]==Decimal("10")
