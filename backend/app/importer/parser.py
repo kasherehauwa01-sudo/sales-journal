@@ -376,7 +376,33 @@ def read_sales(path:Path)->tuple[str,Iterator[tuple[int,dict[str,Any]]]]:
   return sheet,mapped_rows()
  details="; ".join(diagnostics) or "в книге нет доступных листов"
  raise ValueError(f"Не найдена строка заголовков с обязательными колонками. Проверены первые 1000 строк каждого листа. {details}")
+def _explicit_item_totals(raw:Any)->tuple[Decimal,Decimal]|None:
+ """Восстанавливает итоги только из полностью заполненных позиций выгрузки 1С."""
+ parts=[p.strip(' |\t') for p in re.split(r"(?:[\n;]+|\|\s*(?=Артикул\s*:))",str(raw or ''),flags=re.I) if p.strip(' |\t')]
+ if not parts:return None
+ total=base=Decimal('0')
+ for part in parts:
+  fields={}
+  for field in part.split('|'):
+   if ':' not in field:continue
+   key,value=field.split(':',1);key=compact(key)
+   if key in fields:return None
+   fields[key]=value.strip()
+  required=('количество','ценабазовая','цена')
+  if not fields.get('наименование') or not all(fields.get(k) for k in required):return None
+  # Не используем permissive decimal(): подпись или мусор не являются ценой.
+  if not all(re.fullmatch(r'-?\d[\d \xa0]*(?:[.,]\d+)?',fields[k]) for k in required):return None
+  quantity,base_price,price=(decimal(fields[k]) for k in required)
+  total+=(quantity*price).quantize(Decimal('0.01'))
+  base+=(quantity*base_price).quantize(Decimal('0.01'))
+ return total,base
+
 def normalize_sale(raw:dict)->dict:
+ # В некоторых документах 1С оба итога отсутствуют, но состав чека полон.
+ # Явно заданные итоги и специальное правило скидки -100% имеют приоритет.
+ if all(raw.get(k) is None or (isinstance(raw.get(k),str) and not raw[k].strip()) for k in ('total_amount','base_amount','discount_percent')):
+  totals=_explicit_item_totals(raw.get('products'))
+  if totals is not None:raw={**raw,'total_amount':totals[0],'base_amount':totals[1]}
  gross_amount=decimal(raw.get("total_amount"));certificate_amount=decimal(raw.get("certificate_amount"))
  # 1С выводит нулевую сумму пустой ячейкой при скидке -100% (например,
  # выдача карты лояльности). Восстанавливаем ноль только при полной скидке
