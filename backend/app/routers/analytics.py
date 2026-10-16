@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, distinct, func, select
+from sqlalchemy import String, any_, bindparam, case, cast, distinct, func, select
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Sale, SaleItem
@@ -13,7 +14,11 @@ def filters(q,date_from=None,date_to=None,department=None,client=None,price_type
  for col,val in ((Sale.client,client),(Sale.price_type,price_type),(Sale.promotion,promotion)):
   if val:q=q.where(col==val)
  if clients is not None:
-  normalized=[value.strip().lower() for value in clients];q=q.where(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False)
+  normalized=sorted({value.strip().lower() for value in clients if value and value.strip()})
+  # Clients VR может вернуть больше лимита asyncpg в 32767 параметров.
+  # Массив остаётся одним параметром, включая повторное использование подзапроса.
+  selected=cast(bindparam("buyer_clients",value=normalized,unique=True),ARRAY(String))
+  q=q.where(func.lower(func.trim(Sale.client))==any_(selected) if normalized else False)
  if date_from:q=q.where(Sale.sale_date>=date_from)
  if date_to:q=q.where(Sale.sale_date<=date_to)
  return q
