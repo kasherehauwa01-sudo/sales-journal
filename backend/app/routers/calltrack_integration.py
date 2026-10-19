@@ -101,11 +101,11 @@ async def client_category_details(payload: CalltrackCategoryDetailsRequest, db: 
     return await category_details(db, payload)
 
 
-from app.schemas.calltrack import CalltrackDashboardSalesRequest
+from app.schemas.calltrack import CalltrackDashboardSalesRequest, CalltrackDashboardSalesResponse
 from app.services.calltrack_dashboard import dashboard_sales
 
 
-@router.post("/dashboard-sales", dependencies=[Depends(require_calltrack_token)])
+@router.post("/dashboard-sales", response_model=CalltrackDashboardSalesResponse, dependencies=[Depends(require_calltrack_token)])
 async def calltrack_dashboard_sales(payload: CalltrackDashboardSalesRequest, db: AsyncSession = Depends(get_db)):
     try:
         return await dashboard_sales(db, payload)

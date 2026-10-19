@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_serializer
 
 from app.schemas.common import ItemOut
 
@@ -202,3 +202,24 @@ class CalltrackCategoryDetailsResponse(BaseModel):
 class CalltrackDashboardSalesRequest(BaseModel):
     year: int = Field(ge=2000, le=2100)
     managers: list[str] = Field(max_length=500)
+
+
+class CalltrackDashboardSalesMonth(BaseModel):
+    month: int = Field(ge=1, le=12)
+    revenue: Decimal
+    checks: int
+    units: Decimal
+
+
+    @field_serializer("revenue", "units", when_used="json")
+    def numeric_metrics(self, value):
+        # Preserve the original numeric JSON contract for existing consumers.
+        return float(value)
+
+
+class CalltrackDashboardSalesResponse(BaseModel):
+    items: list[CalltrackDashboardSalesMonth] = Field(min_length=12, max_length=12)
+    previous_items: list[CalltrackDashboardSalesMonth] = Field(min_length=12, max_length=12)
+    year: int
+    previous_year: int
+    as_of: date

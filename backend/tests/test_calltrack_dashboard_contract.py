@@ -39,6 +39,8 @@ def test_http_contract_actual_router_and_sql(monkeypatch, contract):
     monkeypatch.setattr(settings, "calltrack_integration_token", "fixture-only-token")
     monkeypatch.setattr(main, "record_mtls_usage", AsyncMock())
     monkeypatch.setattr(service, "get_client_managers", AsyncMock(return_value={"one": "Alice", "two": "Bob"}))
+    from datetime import date
+    monkeypatch.setattr(service,"business_today",lambda:date(2026,10,19))
     engine = create_engine("sqlite://")
 
     @event.listens_for(engine, "connect")
@@ -51,8 +53,9 @@ def test_http_contract_actual_router_and_sql(monkeypatch, contract):
             conn.execute(text("CREATE TABLE sale_items (sale_id INTEGER, quantity NUMERIC)"))
             conn.execute(text("""INSERT INTO sales VALUES
                 (1,'2026-01-01','One',100.25),(2,'2026-01-31','One',50),
-                (3,'2026-12-31','Two',75),(4,'2025-12-31','One',900),
-                (5,'2027-01-01','One',900),(6,'2026-02-01','One',-10)"""))
+                (3,'2026-03-31','Two',75),(4,'2025-12-31','One',900),
+                (5,'2027-01-01','One',900),(6,'2026-02-01','One',-10),
+                (7,'2025-01-01','One',40),(8,'2025-03-01','Two',20),(9,'2024-01-01','One',999),(10,'2026-11-01','One',9999)"""))
             conn.execute(text("INSERT INTO sale_items VALUES (1,2),(1,3),(2,1),(3,4),(6,-1)"))
 
             class DB:
@@ -72,17 +75,30 @@ def test_http_contract_actual_router_and_sql(monkeypatch, contract):
                     result = await client.request(method, url, json=body, headers=headers)
                     assert result.status_code == 200, result.text
                     payload = result.json()
-                    assert set(payload) == {"items"}
+                    assert set(payload) == {"items","previous_items","year","previous_year","as_of"}
+                    assert payload["year"]==2026 and payload["previous_year"]==2025 and payload["as_of"]=="2026-10-19"
+                    assert len(payload["previous_items"])==12
+                    assert payload["previous_items"][0]["revenue"]==40
+                    assert payload["previous_items"][11]["revenue"]==900
+                    assert payload["previous_items"][2]["revenue"]==0
                     assert len(payload["items"]) == 12
                     assert payload["items"][0] == {"month": 1, "revenue": 150.25, "checks": 2, "units": 6}
                     assert payload["items"][1] == {"month": 2, "revenue": -10, "checks": 1, "units": -1}
                     assert payload["items"][11]["checks"] == 0
+                    assert payload["items"][10]["revenue"] == 0  # future-dated documents are not actual sales
                     assert all(set(row) == {"month", "revenue", "checks", "units"} for row in payload["items"])
 
                     body["managers"] = ["Alice", "Bob"]
                     result = await client.request(method, url, json=body, headers=headers)
                     assert result.status_code == 200
-                    assert result.json()["items"][11]["revenue"] == 75
+                    assert result.json()["items"][2]["revenue"] == 75
+                    assert result.json()["previous_items"][2]["revenue"] == 20
+                    body["year"]=2025
+                    result=await client.request(method,url,json=body,headers=headers)
+                    assert result.json()["year"]==2025 and result.json()["previous_year"]==2024
+                    assert result.json()["items"][0]["revenue"]==40
+                    assert result.json()["previous_items"][0]["revenue"]==999
+                    body["year"]=2026
                     body["managers"] = []
                     result = await client.request(method, url, json=body, headers=headers)
                     assert all(row["checks"] == 0 for row in result.json()["items"])
