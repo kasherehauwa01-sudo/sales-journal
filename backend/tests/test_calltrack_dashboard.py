@@ -1,0 +1,58 @@
+import asyncio
+from unittest.mock import AsyncMock
+from sqlalchemy.dialects import postgresql
+from app.schemas.calltrack import CalltrackDashboardSalesRequest
+from app.services import calltrack_dashboard as service
+
+
+def test_query_aggregates_items_before_headers_and_limits_year():
+    sql = str(service.monthly_sales_query(2026, ['client']).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert 'sum(sales.total_amount)' in sql
+    assert 'count(sales.id)' in sql
+    assert 'sum(sale_items.quantity)' in sql
+    assert 'GROUP BY sale_items.sale_id' in sql
+    assert '2026-01-01' in sql and '2027-01-01' in sql
+    assert "IN ('client')" in sql
+
+
+def test_selected_manager_scope_and_zero_months(monkeypatch):
+    monkeypatch.setattr(service, 'get_client_managers', AsyncMock(return_value={'one':'Alice', 'two':'Bob'}))
+    class Result:
+        def mappings(self):
+            return [{'month':2, 'revenue':100, 'checks':1, 'units':3}]
+    db = AsyncMock()
+    db.execute.return_value = Result()
+    result = asyncio.run(service.dashboard_sales(db, CalltrackDashboardSalesRequest(year=2026,managers=['Alice'])))
+    assert len(result['items']) == 12
+    assert result['items'][0]['checks'] == 0 and result['items'][1]['checks'] == 1
+    sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect(),compile_kwargs={"literal_binds":True}))
+    assert "'one'" in sql and "'two'" not in sql
+
+
+def test_no_selection_does_not_query_or_load_directory(monkeypatch):
+    loader=AsyncMock()
+    monkeypatch.setattr(service,'get_client_managers',loader)
+    db=AsyncMock()
+    result=asyncio.run(service.dashboard_sales(db,CalltrackDashboardSalesRequest(year=2026,managers=[])))
+    assert len(result['items'])==12
+    loader.assert_not_awaited()
+    db.execute.assert_not_awaited()
+
+
+def test_real_sql_does_not_multiply_checks_or_revenue():
+    import re
+    from decimal import Decimal
+    from sqlalchemy import create_engine, event, text
+    engine=create_engine("sqlite://")
+    @event.listens_for(engine,"connect")
+    def functions(conn,_):
+        conn.create_function("regexp_replace",4,lambda v,p,r,f:re.sub(p,r,v or ""))
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE sales (id INTEGER, sale_date DATE, client TEXT, total_amount NUMERIC)"))
+        conn.execute(text("CREATE TABLE sale_items (sale_id INTEGER, quantity NUMERIC)"))
+        conn.execute(text("INSERT INTO sales VALUES (1,'2026-01-01','One',100),(2,'2026-01-02','One',50),(3,'2025-01-01','One',900),(4,'2026-01-01','Other',800),(5,'2026-02-01','One',-10)"))
+        conn.execute(text("INSERT INTO sale_items VALUES (1,2),(1,3),(2,1),(3,99),(4,99),(5,-1)"))
+        rows=conn.execute(service.monthly_sales_query(2026,['one'])).mappings().all()
+        assert len(rows)==2
+        assert rows[0]['revenue']==Decimal('150') and rows[0]['checks']==2 and rows[0]['units']==6
+        assert rows[1]['revenue']==Decimal('-10') and rows[1]['units']==-1

@@ -197,3 +197,8 @@ class CalltrackCategoryDetailsResponse(BaseModel):
     total_count: int
     parent_revenue: Decimal
     parent_quantity: Decimal
+
+
+class CalltrackDashboardSalesRequest(BaseModel):
+    year: int = Field(ge=2000, le=2100)
+    managers: list[str] = Field(max_length=500)

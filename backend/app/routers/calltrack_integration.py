@@ -99,3 +99,15 @@ async def client_category_details(payload: CalltrackCategoryDetailsRequest, db: 
     # One consistent snapshot for sale rows and all catalog lookup chunks.
     await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
     return await category_details(db, payload)
+
+
+from app.schemas.calltrack import CalltrackDashboardSalesRequest
+from app.services.calltrack_dashboard import dashboard_sales
+
+
+@router.post("/dashboard-sales", dependencies=[Depends(require_calltrack_token)])
+async def calltrack_dashboard_sales(payload: CalltrackDashboardSalesRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        return await dashboard_sales(db, payload)
+    except ClientsVrError:
+        raise HTTPException(503, "Не удалось проверить ответственных менеджеров") from None
