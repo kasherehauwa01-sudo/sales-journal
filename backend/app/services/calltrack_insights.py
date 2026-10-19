@@ -16,7 +16,8 @@ async def client_products(db, name, start, end):
     # Group before catalog enrichment; never load Sale.items or query per sale.
     rows = (await db.execute(select(
         Sale.id.label("sale_id"), SaleItem.code, SaleItem.article, SaleItem.name,
-        func.coalesce(func.sum(SaleItem.quantity), 0).label("quantity")
+        func.coalesce(func.sum(SaleItem.quantity), 0).label("quantity"),
+        func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0).label("revenue")
     ).select_from(Sale).outerjoin(SaleItem, SaleItem.sale_id == Sale.id).where(
         func.lower(func.trim(Sale.client)) == func.lower(func.trim(literal(name))),
         Sale.sale_date.between(start, end)
@@ -29,14 +30,20 @@ async def client_products(db, name, start, end):
             products.add(next(v for v in (row["code"], row["article"], row["name"]) if v is not None))
             catalog_rows.append({"key": i, "code": row["code"], "article": row["article"]})
     catalog = await local_catalog(catalog_rows, db) if catalog_rows else {}
-    categories = defaultdict(Decimal)
+    categories = defaultdict(lambda: {"quantity": Decimal(0), "revenue": Decimal(0)})
     for i, row in enumerate(rows):
         category = catalog.get(i, {}).get("catalog_category")
         if category:
-            categories[category] += row["quantity"]
+            categories[category]["quantity"] += row["quantity"]
+            categories[category]["revenue"] += row["revenue"]
     return {"unique_products": len(products),
-            "top_categories": [{"category": key, "quantity": value} for key, value in
-                               sorted(categories.items(), key=lambda pair: (-pair[1], pair[0]))[:10]],
+            "top_categories": [
+                {"category": key, "quantity": value["quantity"], "revenue": value["revenue"]}
+                for key, value in sorted(
+                    categories.items(),
+                    key=lambda pair: (-pair[1]["revenue"], pair[0])
+                )[:20]
+            ],
             "sale_quantities": [{"sale_id": key, "quantity": value} for key, value in sorted(quantities.items())]}
 
 
