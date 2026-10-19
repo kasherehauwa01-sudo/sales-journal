@@ -139,3 +139,61 @@ class CalltrackInsightsResponse(BaseModel):
     unique_products: int
     top_categories: list[CalltrackCategoryInsight]
     sale_quantities: list[CalltrackSaleQuantity]
+
+
+class CalltrackBuyersRequest(BaseModel):
+    search: str = Field(default="", max_length=200)
+    manager: str | None = Field(default=None, max_length=255)
+    client_key: str | None = Field(default=None, min_length=1, max_length=512)
+    activity: str = Field(default="all", pattern="^(all|today|yesterday|7|30|inactive)$")
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=100)
+
+
+class CalltrackBuyer(BaseModel):
+    client_key: str
+    name: str
+    phones: list[str]
+    unique_phones: list[str]
+    manager: str | None
+    last_purchase_at: date
+    purchase_count: int
+
+
+class CalltrackBuyersResponse(BaseModel):
+    items: list[CalltrackBuyer]
+    total: int
+    page: int
+    page_size: int
+
+
+class CalltrackCategoryDetailsRequest(BaseModel):
+    names: list[str] = Field(min_length=1, max_length=500)
+    category: str = Field(min_length=1, max_length=512)
+    subcategory: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def valid_names(self):
+        if any(not name.strip() or len(name) > 512 for name in self.names):
+            raise ValueError("Некорректные имена клиентов")
+        return self
+
+
+class CalltrackCategoryDetailItem(BaseModel):
+    key: str
+    name: str
+    revenue: Decimal
+    quantity: Decimal
+    code: str | None = None
+    article: str | None = None
+    product_id: int | None = None
+
+
+class CalltrackCategoryDetailsResponse(BaseModel):
+    level: str
+    category: str
+    subcategory: str | None
+    items: list[CalltrackCategoryDetailItem]
+    total_count: int
+    parent_revenue: Decimal
+    parent_quantity: Decimal

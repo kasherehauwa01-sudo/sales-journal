@@ -71,3 +71,31 @@ async def client_insights(payload: CalltrackInsightsRequest, db: AsyncSession = 
         return await load_client_insights(db, payload.name)
     finally:
         log.info("Calltrack client-insights duration_ms=%.3f", (time.monotonic() - started) * 1000)
+
+
+from app.schemas.calltrack import CalltrackBuyersRequest, CalltrackBuyersResponse
+from app.services.calltrack_buyers import load_buyers
+from app.services.clients_vr import ClientsVrError
+
+
+@router.post("/buyers", response_model=CalltrackBuyersResponse,
+             dependencies=[Depends(require_calltrack_token)])
+async def buyers(payload: CalltrackBuyersRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        return await load_buyers(db, payload)
+    except ClientsVrError:
+        raise HTTPException(503, "Не удалось проверить ответственных менеджеров") from None
+    except ValueError:
+        raise HTTPException(422, "Некорректные данные покупателя") from None
+
+
+from app.schemas.calltrack import CalltrackCategoryDetailsRequest, CalltrackCategoryDetailsResponse
+from app.services.calltrack_category_details import category_details
+
+
+@router.post("/client-category-details", response_model=CalltrackCategoryDetailsResponse,
+             dependencies=[Depends(require_calltrack_token)])
+async def client_category_details(payload: CalltrackCategoryDetailsRequest, db: AsyncSession = Depends(get_db)):
+    # One consistent snapshot for sale rows and all catalog lookup chunks.
+    await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+    return await category_details(db, payload)

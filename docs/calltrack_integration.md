@@ -265,3 +265,28 @@ curl -fsS \
 Batch выполняет один SQL-запрос продаж для всего списка клиентов. Число SQL-запросов не растёт вместе с количеством клиентов. `SaleItem` не загружается для timeline. Отображение manager загружается одним кешируемым обращением к ClientsVR, а не запросом на каждого клиента.
 
 Максимальный размер batch — 500 клиентов. Большие наборы вызывающая сторона должна разбивать на последовательные пакеты.
+
+## Lazy category drilldown
+
+Protected `POST /api/integrations/calltrack/client-category-details` uses the existing
+Calltrack Bearer token. Request: `names` (1..500 authorized exact names), `category`,
+optional `subcategory`. The caller must resolve the selected client/role/tag scope;
+frontend names are not an authorization source.
+
+Without subcategory returns `level=subcategories`, at most10 items. With subcategory
+returns `level=products`, at most20 items. Response also contains category/subcategory,
+`total_count`, `parent_revenue`, `parent_quantity`. Item has key/name/revenue/quantity;
+product items additionally have code/article/product_id. Decimal monetary values are
+JSON strings; no floating point sum. Sort revenue DESC then name/key. Totals cover
+all matching children, not only visible top rows. Returns/zero values are retained.
+
+Reads all-history sales for selected names, groups product facts in SQL, resolves the
+existing local CatalogProduct.category/subcategory in batches and aggregates across
+clients before truncation. No new table/migration or per-sale/item HTTP call. Missing
+metadata is displayed as «Без категории» / «Без подкатегории». This endpoint is separate
+from RFM snapshots and does not change the existing parent client-insights response.
+
+Deploy must be coordinated with Calltrack's lazy renderer; no production deploy was
+performed while implementing it. Tests: `tests/test_calltrack_category_details.py`;
+PostgreSQL integration opts in via TEST_BUYERS_DATABASE_URL to a disposable database
+named calltrack_buyers_test, and creates only connection-local temporary fixtures.
