@@ -124,6 +124,7 @@ class CalltrackRfmInsight(BaseModel):
 class CalltrackCategoryInsight(BaseModel):
     category: str
     quantity: Decimal
+    revenue: Decimal
 
 
 class CalltrackSaleQuantity(BaseModel):
