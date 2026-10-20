@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine
+from app.routers.analytics_signals import router as analytics_signals_router
 from app.routers import seasonality_report,catalog_sync,access,analytics,calltrack_integration,category_analytics_report,ftp,horeca_reports,imports,integrations,meta,product_analytics,product_reports,promotion_candidates_report,rfm_report,sales,sales_dynamics_report,store_analytics_report,settings as settings_router,settings_auth
 from app.services.ftp_autoload import scheduler
 from app.services.scenarios import scheduler as scenario_scheduler
@@ -26,6 +27,7 @@ async def lifespan(app):
  with suppress(asyncio.CancelledError):await scenario_task
  await engine.dispose()
 app=FastAPI(title=settings.app_name,root_path=settings.base_path,docs_url="/api/docs",openapi_url="/api/openapi.json",lifespan=lifespan)
+app.include_router(analytics_signals_router, prefix="/api")
 app.add_middleware(CORSMiddleware,allow_origins=settings.origins,allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 @app.middleware("http")
 async def mtls_usage(request,call_next):
