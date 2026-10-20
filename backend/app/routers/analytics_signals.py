@@ -37,15 +37,21 @@ async def report(search: str = Query("", max_length=200),
                 configuration_enabled=settings.analytics_signals_enabled, durable_enabled=bool(control and control.enabled),
                 active_run=json_value({"id": active.id, "status": active.status, "phase": active.phase,
                     "heartbeat_at": active.heartbeat_at, "error_count": active.error_count,
-                    "error_code": active.error_code, "counters": active.counters}) if active else None)
+                    "error_code": active.error_code, "counters": active.counters,
+                    "source_decision": active.metadata_json.get("source_decision")}) if active else None)
+    meta["source_decision"] = (active.metadata_json.get("source_decision") if active else
+                               run.metadata_json.get("source_decision") if run else None)
+    scope = active.metadata_json.get("scope") if active else run.metadata_json.get("scope") if run else None
+    meta["scope"] = {k: v for k, v in scope.items() if k != "client_keys"} if scope else None
     if not run:return dict(**meta, run=None, items=[], total=0, next_after=None, page_size=page_size)
     from app.services.analytics_signal_worker import last_closed_day
+    public_metadata = {k: v for k, v in run.metadata_json.items() if k != "scope"}
     meta["run"] = json_value(dict(id=run.id, as_of=run.as_of, status=run.status,
         started_at=run.started_at, finished_at=run.finished_at,
         duration_seconds=(run.finished_at-run.started_at).total_seconds(),
         error_count=run.error_count, source_revision=run.source_revision,
         stale=run.as_of < last_closed_day() or run.source_revision != await source_revision(db),
-        diagnostics=run.counters, **run.metadata_json))
+        diagnostics=run.counters, **public_metadata))
     table = AnalyticsClientEvaluation
     conditions = [table.run_id == run.id, table.score >= min_score, table.confidence >= min_confidence]
     if search:conditions.append(table.display_name.ilike(f"%{search}%") | table.client_key.ilike(f"%{search}%"))

@@ -1,0 +1,71 @@
+{
+  "environment": "isolated localhost PostgreSQL",
+  "database": "analytics_freshness_real_361981a4",
+  "run_id": "5235a5e0-6f3a-4c33-a144-7594d2d4c863",
+  "source_filename": "EROOR_ReestrRN_Kozlovskaja_01.07.2026.html",
+  "source_sha256": "9fed9dc1962e00f470cc88629d2d466c47b366725a99dc322ce8abe80d97fe86",
+  "rows": 24475,
+  "extracted": {
+    "start": "2026-07-01",
+    "end": "2026-10-06",
+    "method": "DECLARED_REPORT_PERIOD"
+  },
+  "scope": "UNFILTERED_BASELINE_REGRESSION_ONLY",
+  "configured_business_scope": {
+    "department": "Авиаторов",
+    "buyer_types": [
+      "Оптовик",
+      "Корпоративный"
+    ]
+  },
+  "scope_limitation": "This Kozlovskaya baseline is not an Aviatorov benchmark; scope verified separately by SQL integration tests.",
+  "decision": {
+    "requested_as_of": "2026-10-19",
+    "last_closed_business_day": "2026-10-19",
+    "declared_data_through": "2026-10-06",
+    "observed_data_through": "2026-10-06",
+    "accepted_data_through": "2026-10-06",
+    "effective_as_of": "2026-10-06",
+    "coverage_status": "DECLARED",
+    "coverage_method": "DECLARED_REPORT_PERIOD",
+    "business_freshness": "STALE",
+    "reason_codes": [
+      "REQUESTED_DATE_AFTER_AVAILABLE_DATA"
+    ],
+    "source_revision": 0,
+    "evidence": [
+      {
+        "id": 1,
+        "filename": "EROOR_ReestrRN_Kozlovskaja_01.07.2026.html",
+        "status": "completed",
+        "error_rows": 0,
+        "imported_at": "2026-10-20T10:54:52.172179+00:00",
+        "declared_start": "2026-07-01",
+        "declared_end": "2026-10-06",
+        "observed_start": "2026-07-01",
+        "observed_end": "2026-10-06",
+        "method": "DECLARED_REPORT_PERIOD"
+      }
+    ],
+    "evidence_fingerprint": "ec76446083b77a72836699950346ab6fa3be471543dc284be98e95babb1194e1",
+    "timezone": "Europe/Moscow",
+    "shadow_allowed": true,
+    "automation_allowed": false,
+    "policy_version": "safe-as-of/1",
+    "source_scope": "ALL_RECORDED_IMPORTS_CONSERVATIVE_INTERSECTION",
+    "source_scope_limitation": "Required upstream sources are unknown; no completeness guarantee."
+  },
+  "counts": {
+    "eligible": 161,
+    "NORMAL": 81,
+    "PURCHASE_OVERDUE": 30,
+    "CHURN_RISK": 50
+  },
+  "original_unsafe_counts": {
+    "NORMAL": 7,
+    "PURCHASE_OVERDUE": 28,
+    "CHURN_RISK": 126
+  },
+  "original_benchmark_sha256": "1e259b61ef80b9876e58318a2b4b1c0c1db80663193b15a51dba7d5ba7536bc7",
+  "automation_allowed": false
+}

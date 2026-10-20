@@ -27,6 +27,14 @@ from app.services.seasonality_worker import advisory, SeasonalityBusy
 ANCHOR = date(2026, 8, 1)
 
 
+@pytest.fixture(autouse=True)
+def analytical_test_scope(monkeypatch):
+    # Baseline lifecycle/math tests deliberately use all synthetic clients.
+    async def scope():
+        return dict(department=None, buyer_types=[], client_keys=None, policy="test/all")
+    monkeypatch.setattr("app.services.analytics_signal_worker.load_analytics_scope", scope)
+
+
 def features(gaps=None, **overrides):
     start = ANCHOR-timedelta(days=100)
     days = [start]
@@ -96,7 +104,9 @@ async def database():
     try:
         async with engine.begin() as c:await c.run_sync(Base.metadata.create_all)
         async with factory() as db:
-            db.add_all([ImportBatch(id=1,filename="synthetic",file_size=0,status="completed",finished_at=datetime.now(timezone.utc)),
+            db.add_all([ImportBatch(id=1,filename="synthetic",file_size=0,status="completed",finished_at=datetime.now(timezone.utc),
+                        declared_period_start=ANCHOR-timedelta(days=200),declared_period_end=ANCHOR+timedelta(days=40),
+                        source_period_method="DECLARED_REPORT_PERIOD"),
                         SeasonalityState(id=1),AnalyticsSignalState(id=1,enabled=True)])
             await db.commit()
         yield engine,factory
@@ -142,7 +152,7 @@ def test_postgres_lifecycle_resume_no_duplicates_multiple_phones_and_report():
                 original=s.id
                 assert s.signal_type=="PURCHASE_OVERDUE" and s.revision==1
                 assert len(s.known_phones)==10 and s.metrics["distinct_purchase_days"]==21
-                assert s.source_coverage_status=="UNKNOWN" and s.mode=="SHADOW"
+                assert s.source_coverage_status=="DECLARED" and s.mode=="SHADOW"
                 assert await db.scalar(select(func.count()).select_from(AnalyticsObservedPhone))==10
             await finish(factory,engine,at)
             async with factory() as db:
@@ -175,7 +185,7 @@ def test_postgres_lifecycle_resume_no_duplicates_multiple_phones_and_report():
                 assert response.status_code==200,response.text
                 body=response.json()
                 assert body['total']==1 and len(body['items'])==1 and body['automation_allowed'] is False
-                assert body['run']['coverage_status']=='UNKNOWN' and body['run']['error_count']==0
+                assert body['run']['coverage_status']=='DECLARED' and body['run']['error_count']==0
                 assert (await client.get('/api/reports/analytics-signals',params={'min_score':101})).status_code==422
             print('LIFECYCLE',original,result)
     asyncio.run(run())
@@ -255,27 +265,31 @@ def test_postgres_same_phone_different_clients_no_change_events_and_unhealthy_so
                 assert len(signals)==2 and {s.analytical_client_key for s in signals}=={'client 0','client 1'}
                 assert all(s.known_phones==['+79991234567'] for s in signals)
                 assert await db.scalar(select(func.count()).select_from(AnalyticsSignalChange))==2
-                # Force a new run with identical features: inspection must not emit UPDATED.
-                await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
+                # Plain inspection must not emit events; a new revision retains new evidence.
             await finish(factory,engine,at)
             async with factory() as db:
                 assert await db.scalar(select(func.count()).select_from(AnalyticsSignalChange))==2
+                await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
+            await finish(factory,engine,at)
+            async with factory() as db:
+                assert await db.scalar(select(func.count()).select_from(AnalyticsSignalChange))==4
                 db.add(ImportBatch(id=2,filename='failed',file_size=0,status='failed',error_rows=1))
                 await db.commit()
-            result=await finish(factory,engine,at)
+            result=await run_batch(factory,engine,as_of=at,configuration_enabled=True)
+            assert result['status']=='BLOCKED'
             async with factory() as db:
                 signals=(await db.scalars(select(AnalyticsSignal))).all()
-                assert all(s.status=='SUSPENDED' and s.resolution_reason=='SOURCE_UNRELIABLE' for s in signals)
-                row=(await db.scalars(select(AnalyticsClientEvaluation).where(AnalyticsClientEvaluation.run_id==result['run_id']))).first()
-                assert row.reason=='SOURCE_UNRELIABLE' and not row.eligible
+                assert all(s.status=='ACTIVE' for s in signals)
+                assert await db.scalar(select(func.count()).select_from(AnalyticsClientEvaluation).where(AnalyticsClientEvaluation.run_id==result['run_id']))==0
                 # Restore delivery: resume same episode, not a new one.
-                await db.execute(update(ImportBatch).where(ImportBatch.id==2).values(status='completed',error_rows=0,finished_at=datetime.now(timezone.utc)))
+                await db.execute(update(ImportBatch).where(ImportBatch.id==2).values(status='completed',error_rows=0,finished_at=datetime.now(timezone.utc),
+                    declared_period_start=ANCHOR-timedelta(days=200),declared_period_end=ANCHOR+timedelta(days=40),source_period_method='DECLARED_REPORT_PERIOD'))
                 await db.commit()
             await finish(factory,engine,at)
             async with factory() as db:
                 assert await db.scalar(select(func.count()).select_from(AnalyticsSignal))==2
                 assert (await db.scalars(select(AnalyticsSignal.status))).all()==['ACTIVE','ACTIVE']
-                assert 'RESUMED' in (await db.scalars(select(AnalyticsSignalChange.event_type))).all()
+                assert 'RESUMED' not in (await db.scalars(select(AnalyticsSignalChange.event_type))).all()
     asyncio.run(run())
 
 

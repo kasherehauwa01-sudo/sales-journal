@@ -6,6 +6,7 @@ from app.database import SessionLocal, engine
 from app.services.seasonality_worker import advisory
 from app.services.seasonality_storage import changed
 from app.importer.parser import include_document, include_for_filename, normalize_sale, read_sales
+from app.importer.source_period import extract_declared_period
 from app.models import ImportBatch, ImportError, Sale, SaleItem
 from app.services.import_files import with_temporary_source
 from app.services.product_analytics_cache import invalidate_product_analytics_cache
@@ -26,6 +27,13 @@ async def _process_import(import_id:int,started:float)->None:
  async with SessionLocal() as db:
   batch=await db.get(ImportBatch,import_id);batch.status="processing";batch.started_at=datetime.now(timezone.utc);batch.log_text=f"[{batch.started_at.isoformat()}] Начата обработка файла {batch.filename}\n";await db.commit()
   try:
+   try:
+    declared=extract_declared_period(Path(batch.stored_path))
+    batch.declared_period_start=declared.start;batch.declared_period_end=declared.end;batch.source_period_method=declared.method
+   except Exception:
+    batch.source_period_method="METADATA_EXTRACTION_FAILED"
+    log.exception("Не удалось извлечь период источника импорта %s",import_id)
+   await db.commit()
    sheet,rows=read_sales(Path(batch.stored_path));batch.log_text+=f"Найден лист «{sheet}». Строки обрабатываются последовательно.\n";await db.commit()
    period_start=None;period_end=None
    for number,raw in rows:

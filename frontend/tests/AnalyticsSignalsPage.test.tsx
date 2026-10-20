@@ -39,3 +39,32 @@ it('explains disabled/no run and reports upstream failure',async()=>{
  render(<AnalyticsSignalsPage/>);
  await screen.findByText('Требуется пароль администратора');
 });
+
+const source={requested_as_of:'2026-10-19',effective_as_of:'2026-10-06',last_closed_business_day:'2026-10-19',
+ declared_data_through:'2026-10-06',observed_data_through:'2026-10-05',accepted_data_through:'2026-10-06',
+ business_freshness:'STALE',coverage_status:'DECLARED',coverage_method:'DECLARED_REPORT_PERIOD',
+ reason_codes:['REQUESTED_DATE_AFTER_AVAILABLE_DATA'],shadow_allowed:true,automation_allowed:false,
+ source_scope_limitation:'No completeness guarantee',
+ evidence:[{id:1,filename:'sales.html',imported_at:'2026-10-20T09:00:00+03:00',declared_start:'2026-07-01',declared_end:'2026-10-06'}]};
+
+it('explains stale historical cutoff, declared coverage, and business scope',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({...result,source_decision:source,
+ scope:{department:'Авиаторов',buyer_types:['Оптовик','Корпоративный']}}))));
+ render(<AnalyticsSignalsPage/>);
+ const block=await screen.findByRole('region',{name:'Доступность данных'});
+ expect(block.textContent).toContain('2026-10-19');expect(block.textContent).toContain('2026-10-06');
+ expect(block.textContent).toContain('2026-10-05');expect(block.textContent).toContain('STALE');
+ expect(block.textContent).toContain('DECLARED_REPORT_PERIOD');
+ expect(block.textContent).toContain('полнота всех документов не подтверждена');
+ expect(block.textContent).toContain('Разрешён исторический расчёт');
+ expect(screen.getByText(/Подразделение: Авиаторов/).textContent).toContain('Оптовик, Корпоративный');
+});
+
+it('shows blocked unhealthy diagnostics even without a published run',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({...result,run:null,items:[],total:0,
+ source_decision:{...source,coverage_status:'UNHEALTHY',business_freshness:'UNHEALTHY',shadow_allowed:false,
+ effective_as_of:null,accepted_data_through:null,reason_codes:['OBSERVED_OUTSIDE_DECLARED_PERIOD']}}))));
+ render(<AnalyticsSignalsPage/>);
+ expect((await screen.findByRole('alert')).textContent).toContain('Новый расчёт заблокирован');
+ expect(screen.getByRole('region',{name:'Доступность данных'}).textContent).toContain('OBSERVED_OUTSIDE_DECLARED_PERIOD');
+});

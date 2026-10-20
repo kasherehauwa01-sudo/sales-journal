@@ -32,7 +32,17 @@ async def reconcile_batch(db, run, features):
         latest.setdefault(s.analytical_client_key, s)
     now = datetime.now(timezone.utc)
     counts = dict(run.counters)
-    decisions = {f['client_key']: evaluate(f, run.as_of, freshness=run.metadata_json['freshness']['status']) for f in features}
+    source = run.metadata_json.get("source_decision")
+    if not source or not source["shadow_allowed"] or source["effective_as_of"] != run.as_of.isoformat():
+        raise ValueError("Evaluation requires accepted immutable source evidence")
+    # The pure evaluator's HEALTHY parameter means calculation is permitted.
+    # Historical business STALE is independent; retain it truthfully in evidence.
+    # UNKNOWN coverage weight (zero) remains unchanged for DECLARED data.
+    decisions = {f['client_key']: evaluate(f, run.as_of, freshness="HEALTHY") for f in features}
+    for decision in decisions.values():
+        decision["metrics"].update(coverage=source["coverage_status"],
+            freshness=source["business_freshness"],
+            source_decision={k: v for k, v in source.items() if k != "evidence"}, automation_allowed=False)
     closed = False
     for f in features:
         s = latest.get(f['client_key'])
@@ -118,6 +128,6 @@ def apply_evidence(s, f, decision, run):
     s.metrics_schema_version, s.generator_version, s.parameters_version = METRICS_SCHEMA_VERSION, GENERATOR_VERSION, PARAMETERS_VERSION
     s.source_period_start, s.source_period_end = run.as_of-timedelta(days=364), run.as_of
     s.as_of = run.as_of
-    s.source_coverage_status = "UNKNOWN"
+    s.source_coverage_status = run.metadata_json["coverage_status"]
     s.source_freshness_status = run.metadata_json["freshness"]["status"]
     s.run_id = run.id

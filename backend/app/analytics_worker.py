@@ -46,7 +46,10 @@ async def execute(options):
                 async with SessionLocal() as db:
                     control = await state(db)
                     active = await db.get(AnalyticsSignalRun, control.active_run_id) if control.active_run_id else None
-                    target = options.as_of or (active.as_of if active else last_closed_day())
+                    target = options.as_of or last_closed_day()
+                    if not options.as_of and active and active.status in {"RUNNING", "PAUSED", "FAILED"}:
+                        original = active.metadata_json.get("source_decision", {}).get("requested_as_of")
+                        target = date.fromisoformat(original) if original else active.as_of
                     await db.commit()
                 try:
                     result = await run_batch(SessionLocal, engine, as_of=target,
@@ -59,9 +62,9 @@ async def execute(options):
                     logging.exception("Shadow analytics batch failed")
                     return 1
                 if result["status"] == "DISABLED":return 0
-                if options.command == "run" and result["status"] in {"SUCCEEDED", "SUPERSEDED"}:return 0 if result["status"] == "SUCCEEDED" else 1
+                if options.command == "run" and result["status"] in {"SUCCEEDED", "SUPERSEDED", "BLOCKED"}:return 0 if result["status"] == "SUCCEEDED" else 1
                 await verify(leadership, WORKER_LOCK)
-                delay = options.poll if result["status"] == "SUCCEEDED" else options.pause
+                delay = options.poll if result["status"] in {"SUCCEEDED", "BLOCKED"} else options.pause
                 try:await asyncio.wait_for(shutdown.wait(), delay)
                 except TimeoutError:pass
         return 0
