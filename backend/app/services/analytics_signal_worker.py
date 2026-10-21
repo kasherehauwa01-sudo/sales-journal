@@ -215,6 +215,8 @@ async def run_batch(factory, engine, *, as_of=None, scan_size=2000, client_size=
             run.heartbeat_at = datetime.now(timezone.utc)
             if run.status == "SUCCEEDED":
                 control.published_run_id, control.active_run_id = run.id, None
+                from app.services.analytics_delivery import publish_delivery
+                await publish_delivery(db, run)
             await verify(source_lock, SOURCE_LOCK)
             if leadership is not None:await verify(leadership, WORKER_LOCK)
             await db.commit()

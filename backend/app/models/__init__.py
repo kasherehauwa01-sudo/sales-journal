@@ -17,3 +17,5 @@ from .analytics_signals import (AnalyticsSignalRun, AnalyticsSignalState, Analyt
     AnalyticsObservedPhone, AnalyticsClientEvaluation, AnalyticsSignal, AnalyticsSignalChange)
 __all__ += ["AnalyticsSignalRun", "AnalyticsSignalState", "AnalyticsPurchaseDay", "AnalyticsObservedPhone",
             "AnalyticsClientEvaluation", "AnalyticsSignal", "AnalyticsSignalChange"]
+
+from .analytics_delivery import AnalyticsDeliveryHead, AnalyticsDeliveryPublication

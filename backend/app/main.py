@@ -37,3 +37,6 @@ async def mtls_usage(request,call_next):
 for router in (seasonality_report.router,catalog_sync.router,sales.router,imports.router,analytics.router,meta.router,ftp.router,integrations.router,calltrack_integration.router,product_reports.router,product_analytics.router,promotion_candidates_report.router,rfm_report.router,sales_dynamics_report.router,store_analytics_report.router,category_analytics_report.router,horeca_reports.router,settings_router.router,settings_auth.router,access.router):app.include_router(router,prefix="/api")
 @app.get("/api/health")
 async def health():return {"status":"ok"}
+
+from app.routers.analytics_delivery import router as analytics_delivery_router
+app.include_router(analytics_delivery_router, prefix="/api")

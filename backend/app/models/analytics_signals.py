@@ -116,7 +116,7 @@ class AnalyticsSignal(Base):
 
 class AnalyticsSignalChange(Base):
     __tablename__ = "analytics_signal_changes"
-    __table_args__ = (UniqueConstraint("signal_id", "signal_revision", name="uq_analytics_signal_revision"),)
+    __table_args__ = (UniqueConstraint("signal_id", "signal_revision", name="uq_analytics_signal_revision"), Index("ix_analytics_change_run_id", "run_id", "id"))
     # Audit sequence ONLY. This is deliberately not an external feed cursor.
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     signal_id: Mapped[str] = mapped_column(ForeignKey("analytics_signals.id"), index=True)
