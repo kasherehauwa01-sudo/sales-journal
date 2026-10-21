@@ -14,7 +14,7 @@ from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, POLIC
 from app.services.analytics_signal_store import reconcile_batch
 from app.services.seasonality_worker import advisory, SOURCE_LOCK, verify
 from app.services.product_analytics_runtime import ensure_headroom
-from app.services.analytics_source import resolve_source, load_source_evidence, POLICY_VERSION
+from app.services.analytics_source import resolve_stored_sales_source, STORED_SALES_POLICY_VERSION, stored_sales_contract_valid
 from app.services.analytics_scope import load_analytics_scope
 from app.services.clients_vr import ClientsVrError
 
@@ -54,10 +54,15 @@ async def begin_run(db, control, decision, scope):
     if control.active_run_id:
         blocked = await db.get(AnalyticsSignalRun, control.active_run_id)
         if blocked and blocked.status == "BLOCKED":candidate = blocked
-    if (candidate and candidate.metadata_json.get("source_decision") == evidence
+    if (candidate and candidate.status in {"SUCCEEDED", "BLOCKED"}
+            and (candidate.metadata_json.get("source_decision") or {}).get("policy_version") == STORED_SALES_POLICY_VERSION
+            and candidate.metadata_json.get("source_decision") == evidence
             and candidate.metadata_json.get("scope") == scope
-            and candidate.metadata_json["generator_version"] == GENERATOR_VERSION
-            and candidate.metadata_json["parameters_version"] == PARAMETERS_VERSION):
+            and candidate.metadata_json.get("generator_version") == GENERATOR_VERSION
+            and candidate.metadata_json.get("parameters_version") == PARAMETERS_VERSION
+            and candidate.metadata_json.get("normalization_version") == ANALYTICAL_NORMALIZATION_VERSION
+            and candidate.metadata_json.get("parameters") == POLICY
+            and stored_sales_contract_valid(candidate.metadata_json)):
         return candidate
     allowed = decision.shadow_allowed
     run = AnalyticsSignalRun(id=str(uuid4()), status="RUNNING" if allowed else "BLOCKED",
@@ -72,7 +77,7 @@ async def begin_run(db, control, decision, scope):
             "ACTIVE", "SUSPENDED", "RESOLVED", "INSUFFICIENT_HISTORY", "IRREGULAR_PURCHASE_PATTERN",
             "INTERVAL_TOO_LONG", "NO_VALID_PURCHASE_DAYS", "SOURCE_UNRELIABLE", "missing_empty_name", "multiple_phones")}, error_count=0,
         metadata_json=dict(mode="SHADOW", automation_allowed=False, normalization_version=ANALYTICAL_NORMALIZATION_VERSION,
-            generator_version=GENERATOR_VERSION, parameters_version=PARAMETERS_VERSION, parameters=POLICY,
+            generator_version=GENERATOR_VERSION, parameters_version=PARAMETERS_VERSION, parameters=dict(POLICY),
             coverage_status=decision.coverage_status, complete_through=None,
             as_of_reason=decision.reason_codes[0], source_decision=evidence, scope=scope,
             timezone=settings.autoload_timezone, freshness=dict(status=decision.business_freshness,
@@ -154,10 +159,78 @@ async def evaluate_batch(db, run, size):
     run.client_cursor = keys[-1]
 
 
+def supersede_run(run, control, reason):
+    run.status, run.error_code = "SUPERSEDED", reason
+    run.finished_at = run.heartbeat_at = datetime.now(timezone.utc)
+    control.active_run_id = None
+
+
+def resume_blocker(run, current, scope):
+    """Validate the frozen snapshot before either checkpoint phase can mutate it."""
+    frozen = run.metadata_json.get("source_decision") or {}
+    if frozen.get("policy_version") != STORED_SALES_POLICY_VERSION:
+        return "SOURCE_POLICY_CHANGED"
+    if (frozen.get("source_revision") != run.source_revision
+            or run.source_revision != current.source_revision
+            or frozen.get("evidence_fingerprint") != current.evidence_fingerprint):
+        return "SOURCE_EVIDENCE_CHANGED"
+    if not current.shadow_allowed:
+        return "SOURCE_DECISION_BLOCKED"
+    if frozen.get("timezone") != current.timezone:
+        return "SOURCE_CONTEXT_CHANGED"
+    # A formerly unclosed request may have a later permissible cutoff today.
+    # Resume still scans/evaluates at the ORIGINAL run.as_of and keeps its frozen
+    # evidence. Advancing the wall clock alone must not restart a valid run.
+    if (frozen.get("requested_as_of") != current.requested_as_of.isoformat()
+            or frozen.get("effective_as_of") != run.as_of.isoformat()
+            or not run.as_of <= current.effective_as_of <= current.requested_as_of):
+        return "SOURCE_CUTOFF_CHANGED"
+    if run.metadata_json.get("scope") != scope:
+        return "ANALYTIC_SCOPE_CHANGED"
+    return None
+
+
+async def stored_source_context(db, as_of):
+    closed = last_closed_day()
+    upper = int(await db.scalar(select(func.max(Sale.id))) or 0)
+    revision = await source_revision(db)
+    pending = await db.scalar(select(ImportBatch.id).where(
+        ImportBatch.status.in_(["queued", "processing"])).limit(1))
+    scope = dict(department="Авиаторов", buyer_types=["Оптовик", "Корпоративный"],
+        client_keys=[], policy="aviatorov-wholesale-corporate/1", buyer_type_source="UNAVAILABLE")
+    reason = None
+    present = None
+    # Pending imports also cover a crashed importer that released its advisory
+    # lock after committing only some rows. Old failed imports do not prove
+    # completeness, but do not prevent diagnostics over stored rows.
+    if pending is None:
+        try:
+            scope = await load_analytics_scope()
+            key = analytical_name_sql(Sale.client)
+            conditions = [Sale.sale_date <= min(as_of, closed), Sale.client.is_not(None), key != ""]
+            if scope["department"] is not None:
+                conditions.append(Sale.department == scope["department"])
+            if scope["client_keys"] is not None:
+                conditions.append(key == func.any(cast(scope["client_keys"], ARRAY(Text))))
+            present = await db.scalar(select(Sale.id).where(*conditions).limit(1))
+            if scope["client_keys"] == []:
+                reason = "BUYER_TYPE_SCOPE_EMPTY"
+            elif present is None:
+                reason = "NO_SCOPED_STORED_SALES"
+        except ClientsVrError:
+            reason = "BUYER_TYPE_SOURCE_UNAVAILABLE"
+    decision = resolve_stored_sales_source(as_of, last_closed_business_day=closed,
+        source_revision=revision, timezone=settings.autoload_timezone,
+        has_sales=present is not None, upper_sale_id=upper, imports_pending=pending is not None)
+    if reason:
+        decision = replace(decision, shadow_allowed=False, effective_as_of=None,
+            reason_codes=decision.reason_codes + (reason,))
+    return decision, scope
+
+
 async def run_batch(factory, engine, *, as_of=None, scan_size=2000, client_size=250, configuration_enabled=None, leadership=None):
     if engine.dialect.name != "postgresql":raise ValueError("Shadow feature worker requires PostgreSQL")
     if not 1 <= scan_size <= 5000 or not 1 <= client_size <= 1000:raise ValueError("Invalid batch limits")
-    as_of = as_of or last_closed_day()
     enabled = settings.analytics_signals_enabled if configuration_enabled is None else configuration_enabled
     if not enabled:return {"status": "DISABLED", "mode": "SHADOW", "automation_allowed": False}
     ensure_headroom()
@@ -170,47 +243,55 @@ async def run_batch(factory, engine, *, as_of=None, scan_size=2000, client_size=
                 await db.commit()
                 return {"status": "DISABLED", "mode": "SHADOW", "automation_allowed": False}
             run = await db.get(AnalyticsSignalRun, control.active_run_id) if control.active_run_id else None
-            current = resolve_source(as_of, await load_source_evidence(db),
-                last_closed_business_day=last_closed_day(), source_revision=await source_revision(db),
-                timezone=settings.autoload_timezone)
+            # Policy changes terminate the old checkpoint before any source read,
+            # evaluation or publication. Its frozen metadata and results are kept.
             if run and run.status in {"RUNNING", "PAUSED", "FAILED"}:
-                frozen = run.metadata_json.get("source_decision")
-                if frozen and frozen["requested_as_of"] != as_of.isoformat():
+                frozen = run.metadata_json.get("source_decision") or {}
+                incompatible = None
+                if frozen.get("policy_version") != STORED_SALES_POLICY_VERSION:
+                    incompatible = "SOURCE_POLICY_CHANGED"
+                elif (run.metadata_json.get("generator_version") != GENERATOR_VERSION
+                        or run.metadata_json.get("parameters_version") != PARAMETERS_VERSION
+                        or run.metadata_json.get("normalization_version") != ANALYTICAL_NORMALIZATION_VERSION
+                        or run.metadata_json.get("parameters") != POLICY):
+                    incompatible = "ALGORITHM_POLICY_CHANGED"
+                elif not stored_sales_contract_valid(run.metadata_json):
+                    incompatible = "SHADOW_CONTRACT_CHANGED"
+                elif run.phase not in {"scan", "evaluate"}:
+                    incompatible = "INVALID_CHECKPOINT_PHASE"
+                if incompatible:
+                    supersede_run(run, control, incompatible)
+                    await verify(source_lock, SOURCE_LOCK)
+                    if leadership is not None:await verify(leadership, WORKER_LOCK)
+                    await db.commit()
+                    return dict(status=run.status, run_id=run.id, phase=run.phase,
+                                error_code=run.error_code, automation_allowed=False)
+                # Resolve the implicit date only after reading the locked active
+                # checkpoint. Midnight must not change its original request.
+                if as_of is None:
+                    as_of = date.fromisoformat(frozen["requested_as_of"])
+                if frozen.get("requested_as_of") != as_of.isoformat():
                     raise ValueError("Resume the active run with its original requested_as_of")
-                if (run.metadata_json["generator_version"] != GENERATOR_VERSION
-                    or run.metadata_json["parameters_version"] != PARAMETERS_VERSION
-                    or run.metadata_json["normalization_version"] != ANALYTICAL_NORMALIZATION_VERSION):
-                    raise ValueError("Active run uses a different algorithm/identity policy")
+            as_of = as_of or last_closed_day()
+            current, scope = await stored_source_context(db, as_of)
+            if run and run.status in {"RUNNING", "PAUSED", "FAILED"}:
+                reason = resume_blocker(run, current, scope)
+                if reason:
+                    supersede_run(run, control, reason)
+                    await verify(source_lock, SOURCE_LOCK)
+                    if leadership is not None:await verify(leadership, WORKER_LOCK)
+                    await db.commit()
+                    return dict(status=run.status, run_id=run.id, phase=run.phase,
+                                error_code=run.error_code, automation_allowed=False)
                 run.status = "RUNNING"
+                run.error_code = None
             else:
-                scope = dict(department="Авиаторов", buyer_types=["Оптовик", "Корпоративный"],
-                             client_keys=[], policy="aviatorov-wholesale-corporate/1", buyer_type_source="UNAVAILABLE")
-                if current.shadow_allowed:
-                    try:
-                        scope = await load_analytics_scope()
-                        if scope["department"] is not None:
-                            present = await db.scalar(select(Sale.id).where(Sale.department == scope["department"]).limit(1))
-                            if present is None:
-                                current = replace(current, shadow_allowed=False, coverage_status="UNKNOWN",
-                                    coverage_method=None, business_freshness="UNKNOWN",
-                                    accepted_data_through=None, effective_as_of=None,
-                                    reason_codes=current.reason_codes + ("DEPARTMENT_SOURCE_EVIDENCE_MISSING",))
-                    except ClientsVrError:
-                        current = replace(current, shadow_allowed=False,
-                            reason_codes=current.reason_codes + ("BUYER_TYPE_SOURCE_UNAVAILABLE",))
                 run = await begin_run(db, control, current, scope)
             if run.status in {"SUCCEEDED", "BLOCKED"}:
                 await db.commit()
                 return {"status": run.status, "run_id": run.id, "phase": run.phase,
                         "source_decision": run.metadata_json.get("source_decision"), "automation_allowed": False}
-            frozen = run.metadata_json.get("source_decision")
-            if (not frozen or frozen.get("policy_version") != POLICY_VERSION
-                    or run.source_revision != current.source_revision
-                    or frozen["evidence_fingerprint"] != current.evidence_fingerprint):
-                run.status, run.error_code = "SUPERSEDED", "SOURCE_EVIDENCE_CHANGED"
-                run.finished_at = datetime.now(timezone.utc)
-                control.active_run_id = None
-            elif run.phase == "scan":await scan_batch(db, run, scan_size)
+            if run.phase == "scan":await scan_batch(db, run, scan_size)
             else:await evaluate_batch(db, run, client_size)
             run.heartbeat_at = datetime.now(timezone.utc)
             if run.status == "SUCCEEDED":
@@ -222,15 +303,25 @@ async def run_batch(factory, engine, *, as_of=None, scan_size=2000, client_size=
             await db.commit()
             return {"status": run.status, "run_id": run.id, "phase": run.phase,
                     "sale_cursor": run.sale_cursor, "client_cursor": run.client_cursor, "counters": run.counters,
+                    "heartbeat_at": run.heartbeat_at.isoformat(),
                     "source_decision": run.metadata_json.get("source_decision"), "automation_allowed": False}
 
 
-async def record_failure(factory, code):
+async def record_failure(factory, code, *, run_id=None, heartbeat_at=None):
+    # An error from a previous transaction must never mark a replacement run.
+    # No ID means no committed checkpoint was identified; do not create state.
+    if run_id is None or heartbeat_at is None:
+        return False
     async with factory() as db:
-        control = await state(db)
-        if control.active_run_id:
-            run = await db.get(AnalyticsSignalRun, control.active_run_id)
-            run.status, run.error_code = "FAILED", code
-            run.error_count += 1
-            run.heartbeat_at = datetime.now(timezone.utc)
+        control = await db.get(AnalyticsSignalState, 1, with_for_update=True)
+        if not control or control.active_run_id != run_id:
+            return False
+        run = await db.get(AnalyticsSignalRun, run_id)
+        if (not run or run.status not in {"RUNNING", "FAILED"} or not control.enabled
+                or run.heartbeat_at != heartbeat_at):
+            return False
+        run.status, run.error_code = "FAILED", code
+        run.error_count += 1
+        run.heartbeat_at = datetime.now(timezone.utc)
         await db.commit()
+        return True

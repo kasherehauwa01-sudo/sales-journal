@@ -114,13 +114,13 @@ def test_resume_new_revision_in_evaluate_preserves_frozen_date(monkeypatch):
                 if first['phase']=='evaluate':break
             async with factory() as db:
                 old=await db.get(AnalyticsSignalRun,first['run_id']);frozen=old.metadata_json['source_decision']
-                assert old.as_of==ANCHOR+timedelta(days=8)
+                assert old.as_of==requested
                 await db.execute(update(ImportBatch).values(declared_period_end=requested))
                 await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
             assert (await worker.run_batch(factory,engine,as_of=requested,configuration_enabled=True))['status']=='SUPERSEDED'
             async with factory() as db:
                 old=await db.get(AnalyticsSignalRun,first['run_id']);assert old.metadata_json['source_decision']==frozen
-                assert old.as_of==ANCHOR+timedelta(days=8) and (await db.get(AnalyticsSignalState,1)).published_run_id is None
+                assert old.as_of==requested and (await db.get(AnalyticsSignalState,1)).published_run_id is None
             fresh=await finish(factory,engine,requested)
             assert fresh['run_id']!=first['run_id'] and fresh['source_decision']['effective_as_of']==requested.isoformat()
             assert fresh['source_decision']['source_revision']==1
@@ -135,7 +135,7 @@ def test_backwards_safe_date_blocks_without_rewriting_lifecycle(monkeypatch):
                 old=await db.scalar(select(AnalyticsSignal));sid,rev=old.id,old.revision
                 await db.execute(update(ImportBatch).values(declared_period_end=ANCHOR+timedelta(days=8)))
                 await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
-            blocked=await worker.run_batch(factory,engine,as_of=ANCHOR+timedelta(days=15),configuration_enabled=True)
+            blocked=await worker.run_batch(factory,engine,as_of=ANCHOR+timedelta(days=8),configuration_enabled=True)
             assert blocked['status']=='BLOCKED' and 'EFFECTIVE_DATE_PRECEDES_PUBLISHED_RUN' in blocked['source_decision']['reason_codes']
             async with factory() as db:
                 assert (await db.get(AnalyticsSignalState,1)).published_run_id==first['run_id']
@@ -194,7 +194,44 @@ def test_other_department_file_is_not_evidence_for_aviatorov(monkeypatch):
             await seed(factory)  # only Shop, no Авиаторов
             result=await worker.run_batch(factory,engine,as_of=ANCHOR+timedelta(days=8),configuration_enabled=True)
             assert result['status']=='BLOCKED'
-            assert 'DEPARTMENT_SOURCE_EVIDENCE_MISSING' in result['source_decision']['reason_codes']
+            assert 'NO_SCOPED_STORED_SALES' in result['source_decision']['reason_codes']
             assert result['source_decision']['coverage_status']=='UNKNOWN'
             assert result['source_decision']['effective_as_of'] is None
     asyncio.run(run())
+
+
+def test_postgres_old_policy_checkpoint_replaced_without_import_dates(monkeypatch):
+    """Prepared only: opt-in disposable DB/schema required; never production."""
+    from app.models import Sale, AnalyticsDeliveryPublication
+    monkeypatch.setattr(worker, 'last_closed_day', lambda: REQUEST)
+    async def scenario():
+        async with database() as (engine, factory):
+            await seed(factory)
+            old_decision = decision(requested=ANCHOR+timedelta(days=8))
+            async with factory() as db:
+                scope = await worker.load_analytics_scope()
+                control = await worker.state(db)
+                old = await worker.begin_run(db, control, old_decision, scope)
+                old_id, frozen = old.id, old.metadata_json.copy()
+                await db.execute(update(ImportBatch).values(declared_period_start=None,
+                    declared_period_end=None, source_period_method=None))
+                db.add(Sale(id=500, sale_date=REQUEST+timedelta(days=1), document_number='future',
+                    client='client 0', department='Shop', total_amount=1000, fingerprint='future', import_id=1))
+                await db.commit()
+            retired = await worker.run_batch(factory, engine, as_of=REQUEST, configuration_enabled=True)
+            assert retired['status'] == 'SUPERSEDED'
+            async with factory() as db:
+                old = await db.get(AnalyticsSignalRun, old_id)
+                assert old.metadata_json == frozen and old.error_code == 'SOURCE_POLICY_CHANGED'
+                assert await db.scalar(select(func.count()).select_from(AnalyticsDeliveryPublication)) == 0
+            result = await finish(factory, engine, REQUEST+timedelta(days=1))
+            assert result['source_decision']['effective_as_of'] == REQUEST.isoformat()
+            assert result['source_decision']['coverage_status'] == 'UNKNOWN'
+            assert result['source_decision']['accepted_data_through'] is None
+            async with factory() as db:
+                signal = await db.scalar(select(AnalyticsSignal))
+                assert signal.metrics['last_purchase_date'] == ANCHOR.isoformat()
+                assert signal.source_coverage_status == signal.source_freshness_status == 'UNKNOWN'
+                assert signal.metrics['automation_allowed'] is False
+                assert await db.scalar(select(func.count()).select_from(AnalyticsDeliveryPublication)) == 1
+    asyncio.run(scenario())

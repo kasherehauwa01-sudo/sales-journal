@@ -121,3 +121,53 @@ async def load_source_evidence(db):
         ImportBatch.declared_period_end, ImportBatch.period_start, ImportBatch.period_end,
         ImportBatch.source_period_method).order_by(ImportBatch.id).limit(EVIDENCE_LIMIT + 1))).all()
     return tuple(ImportEvidence(*row) for row in rows)
+
+
+STORED_SALES_POLICY_VERSION = "stored-sales-shadow/1"
+
+
+def resolve_stored_sales_source(requested_as_of: date, *, last_closed_business_day: date,
+        source_revision: int, timezone: str, has_sales: bool, upper_sale_id: int,
+        imports_pending: bool = False) -> SourceDecision:
+    """A snapshot of stored rows, NEVER a completeness/freshness attestation.
+
+    has_sales refers to dated, named rows in the verified business scope at the
+    cutoff. Neither import report dates nor MAX(sale_date) establish coverage.
+    Fingerprint excludes the moving wall clock so the same frozen cutoff can
+    resume tomorrow, but includes the PK watermark as a secondary change guard.
+    """
+    reasons = ["STORED_SALES_COMPLETENESS_UNKNOWN"]
+    if requested_as_of > last_closed_business_day:
+        reasons.append("REQUESTED_DATE_NOT_CLOSED")
+    if imports_pending:
+        reasons.append("IMPORT_PENDING")
+    if not has_sales or upper_sale_id <= 0:
+        reasons.append("NO_SCOPED_STORED_SALES")
+    allowed = has_sales and upper_sale_id > 0 and not imports_pending
+    digest = sha256(json.dumps(dict(policy=STORED_SALES_POLICY_VERSION,
+        source_revision=source_revision, upper_sale_id=upper_sale_id), sort_keys=True).encode()).hexdigest()
+    return SourceDecision(requested_as_of=requested_as_of,
+        last_closed_business_day=last_closed_business_day,
+        declared_data_through=None, observed_data_through=None,
+        accepted_data_through=None,
+        effective_as_of=min(requested_as_of, last_closed_business_day) if allowed else None,
+        coverage_status="UNKNOWN", coverage_method="STORED_SALES",
+        business_freshness="UNKNOWN", reason_codes=tuple(reasons),
+        source_revision=source_revision, evidence=(), evidence_fingerprint=digest,
+        timezone=timezone, shadow_allowed=allowed, automation_allowed=False,
+        policy_version=STORED_SALES_POLICY_VERSION, source_scope="SCOPED_STORED_POSTGRESQL_SALES",
+        source_scope_limitation="Stored rows only; neither completeness nor upstream freshness is confirmed.")
+
+
+def stored_sales_contract_valid(metadata):
+    """Reject any stored snapshot claiming authority not provided by this policy."""
+    source = metadata.get("source_decision") or {}
+    return (metadata.get("mode") == "SHADOW"
+        and metadata.get("automation_allowed") is False
+        and metadata.get("coverage_status") == "UNKNOWN"
+        and (metadata.get("freshness") or {}).get("status") == "UNKNOWN"
+        and metadata.get("complete_through") is None
+        and source.get("policy_version") == STORED_SALES_POLICY_VERSION
+        and source.get("coverage_status") == source.get("business_freshness") == "UNKNOWN"
+        and source.get("automation_allowed") is False
+        and source.get("accepted_data_through") is None)

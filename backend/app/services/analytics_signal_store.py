@@ -5,6 +5,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from app.models import AnalyticsSignal, AnalyticsSignalChange, AnalyticsClientEvaluation
 from app.services.client_identity import ANALYTICAL_NORMALIZATION_VERSION
+from app.services.analytics_source import stored_sales_contract_valid
 from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, METRICS_SCHEMA_VERSION, evaluate, json_value
 
 
@@ -21,6 +22,10 @@ def record(db, signal, event, run, now):
 
 
 async def reconcile_batch(db, run, features):
+    source = run.metadata_json.get("source_decision") or {}
+    if (not stored_sales_contract_valid(run.metadata_json) or source.get("shadow_allowed") is not True
+            or source.get("effective_as_of") != run.as_of.isoformat()):
+        raise ValueError("Evaluation requires compatible immutable SHADOW source evidence")
     keys = [f["client_key"] for f in features]
     conditions = (AnalyticsSignal.identity_kind == "normalized_name",
                   AnalyticsSignal.normalization_version == ANALYTICAL_NORMALIZATION_VERSION,
@@ -32,12 +37,10 @@ async def reconcile_batch(db, run, features):
         latest.setdefault(s.analytical_client_key, s)
     now = datetime.now(timezone.utc)
     counts = dict(run.counters)
-    source = run.metadata_json.get("source_decision")
-    if not source or not source["shadow_allowed"] or source["effective_as_of"] != run.as_of.isoformat():
-        raise ValueError("Evaluation requires accepted immutable source evidence")
     # The pure evaluator's HEALTHY parameter means calculation is permitted.
-    # Historical business STALE is independent; retain it truthfully in evidence.
-    # UNKNOWN coverage weight (zero) remains unchanged for DECLARED data.
+    # It is NOT a source freshness/completeness assertion. Persist UNKNOWN for
+    # STORED_SALES from frozen source evidence below.
+    # UNKNOWN coverage weight (zero) remains unchanged; no confidence boost.
     decisions = {f['client_key']: evaluate(f, run.as_of, freshness="HEALTHY") for f in features}
     for decision in decisions.values():
         decision["metrics"].update(coverage=source["coverage_status"],

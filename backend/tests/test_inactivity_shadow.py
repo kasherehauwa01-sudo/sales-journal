@@ -145,14 +145,17 @@ def test_postgres_lifecycle_resume_no_duplicates_multiple_phones_and_report():
             first=await run_batch(factory,engine,as_of=at,scan_size=8,configuration_enabled=True)
             assert first["sale_cursor"]==8
             # A new connection/factory resumes the committed checkpoint.
-            await record_failure(factory,"InjectedTestFailure")
+            async with factory() as db:
+                checkpoint = await db.get(AnalyticsSignalRun, first["run_id"])
+            await record_failure(factory,"InjectedTestFailure",run_id=first["run_id"],
+                                 heartbeat_at=checkpoint.heartbeat_at)
             result=await finish(async_sessionmaker(engine,expire_on_commit=False),engine,at,scan_size=8)
             async with factory() as db:
                 s=(await db.scalars(select(AnalyticsSignal))).one()
                 original=s.id
                 assert s.signal_type=="PURCHASE_OVERDUE" and s.revision==1
                 assert len(s.known_phones)==10 and s.metrics["distinct_purchase_days"]==21
-                assert s.source_coverage_status=="DECLARED" and s.mode=="SHADOW"
+                assert s.source_coverage_status=="UNKNOWN" and s.mode=="SHADOW"
                 assert await db.scalar(select(func.count()).select_from(AnalyticsObservedPhone))==10
             await finish(factory,engine,at)
             async with factory() as db:
@@ -185,7 +188,7 @@ def test_postgres_lifecycle_resume_no_duplicates_multiple_phones_and_report():
                 assert response.status_code==200,response.text
                 body=response.json()
                 assert body['total']==1 and len(body['items'])==1 and body['automation_allowed'] is False
-                assert body['run']['coverage_status']=='DECLARED' and body['run']['error_count']==0
+                assert body['run']['coverage_status']=='UNKNOWN' and body['run']['error_count']==0
                 assert (await client.get('/api/reports/analytics-signals',params={'min_score':101})).status_code==422
             print('LIFECYCLE',original,result)
     asyncio.run(run())
@@ -273,7 +276,7 @@ def test_postgres_same_phone_different_clients_no_change_events_and_unhealthy_so
             await finish(factory,engine,at)
             async with factory() as db:
                 assert await db.scalar(select(func.count()).select_from(AnalyticsSignalChange))==4
-                db.add(ImportBatch(id=2,filename='failed',file_size=0,status='failed',error_rows=1))
+                db.add(ImportBatch(id=2,filename='pending',file_size=0,status='processing',error_rows=0))
                 await db.commit()
             result=await run_batch(factory,engine,as_of=at,configuration_enabled=True)
             assert result['status']=='BLOCKED'
