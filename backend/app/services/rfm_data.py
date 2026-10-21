@@ -3,6 +3,7 @@ from datetime import date
 from sqlalchemy import distinct, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Sale, SaleItem
+from app.services.client_features import interval_statistics
 
 
 async def rfm_rows(db: AsyncSession, start: date, end: date, departments: list[str] | None, *, include_products: bool = True) -> list[dict]:
@@ -34,9 +35,7 @@ async def rfm_rows(db: AsyncSession, start: date, end: date, departments: list[s
     months = max(1, (end - start).days + 1) / 30.4375
     result = []
     for source in current:
-        dates = sorted(source["purchase_dates"] or [])
-        gaps = [(b - a).days for a, b in zip(dates, dates[1:])]
-        interval = sum(gaps) / len(gaps) if gaps else None
+        interval = interval_statistics(source["purchase_dates"] or [])["mean_interval"]
         recency = (end - source["last_purchase"]).days
         result.append({**dict(source), "first_purchase": history[source["client_key"]],
                        "recency_days": recency, "purchases_per_month": source["frequency"] / months,

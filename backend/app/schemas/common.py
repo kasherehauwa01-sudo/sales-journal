@@ -9,4 +9,7 @@ class SaleOut(ORMModel):
 class SalePage(BaseModel): items:list[SaleOut]; total:int; page:int; page_size:int; pages:int
 class ImportErrorOut(ORMModel): id:int; row_number:int|None; message:str
 class ImportOut(ORMModel):
+    declared_period_start:date|None=None
+    declared_period_end:date|None=None
+    source_period_method:str|None=None
     id:int; filename:str; file_size:int; status:str; uploaded_at:datetime; period_start:date|None; period_end:date|None; total_rows:int; processed_rows:int; added_rows:int; duplicate_rows:int; skipped_rows:int; error_rows:int; duration_ms:int|None; error_text:str|None; log_text:str|None; errors:list[ImportErrorOut]=Field(default_factory=list)

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,9 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/data/imports")
     import_temp_dir: Path = Path("/tmp/sales-journal-imports")
     log_level: str = "INFO"
+    analytics_signals_enabled: bool = False
+    analytics_signals_mode: Literal["SHADOW"] = "SHADOW"
+    analytics_signals_freshness_hours: int = Field(36, ge=1, le=168)
     autoload_timezone: str = "Europe/Moscow"
     clients_vr_api_url: str = "https://kvasmix.ru/vr/clients/api"
     clients_vr_api_token: str = ""

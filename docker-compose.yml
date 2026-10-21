@@ -34,6 +34,9 @@ services:
       IMPORT_TEMP_DIR: /tmp/sales-journal-imports
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       AUTOLOAD_TIMEZONE: "${AUTOLOAD_TIMEZONE:-Europe/Moscow}"
+      ANALYTICS_SIGNALS_ENABLED: "${ANALYTICS_SIGNALS_ENABLED:-false}"
+      ANALYTICS_SIGNALS_MODE: SHADOW
+      ANALYTICS_SIGNALS_FRESHNESS_HOURS: "${ANALYTICS_SIGNALS_FRESHNESS_HOURS:-36}"
       CLIENTS_VR_API_URL: "${CLIENTS_VR_API_URL:-https://kvasmix.ru/vr/clients/api}"
       CLIENTS_VR_API_TOKEN: "${CLIENTS_VR_API_TOKEN:-}"
       CALLTRACK_INTEGRATION_TOKEN: "${CALLTRACK_INTEGRATION_TOKEN:-}"
@@ -91,6 +94,23 @@ services:
       CATALOG_SYNC_DB_LOCK_TIMEOUT_SECONDS: "${CATALOG_SYNC_DB_LOCK_TIMEOUT_SECONDS:-2}"
       CATALOG_LOOKUP_TIMEOUT_SECONDS: "${CATALOG_LOOKUP_TIMEOUT_SECONDS:-15}"
       CATALOG_LOOKUP_MAX_ATTEMPTS: "${CATALOG_LOOKUP_MAX_ATTEMPTS:-3}"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  analytics-signals:
+    profiles: ["analytics-shadow"]
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.analytics_worker", "worker"]
+    restart: "no"
+    stop_grace_period: 45s
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sales}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-sales}"
+      AUTOLOAD_TIMEZONE: "${AUTOLOAD_TIMEZONE:-Europe/Moscow}"
+      ANALYTICS_SIGNALS_ENABLED: "${ANALYTICS_SIGNALS_ENABLED:-false}"
+      ANALYTICS_SIGNALS_MODE: SHADOW
+      ANALYTICS_SIGNALS_FRESHNESS_HOURS: "${ANALYTICS_SIGNALS_FRESHNESS_HOURS:-36}"
     depends_on:
       db:
         condition: service_healthy

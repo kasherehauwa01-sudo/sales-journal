@@ -13,3 +13,9 @@ __all__ += ["SeasonalityStoreMonth"]
 
 from .rfm import RfmSnapshot, RfmSnapshotClient, RfmSnapshotState
 __all__ += ["RfmSnapshot", "RfmSnapshotClient", "RfmSnapshotState"]
+from .analytics_signals import (AnalyticsSignalRun, AnalyticsSignalState, AnalyticsPurchaseDay,
+    AnalyticsObservedPhone, AnalyticsClientEvaluation, AnalyticsSignal, AnalyticsSignalChange)
+__all__ += ["AnalyticsSignalRun", "AnalyticsSignalState", "AnalyticsPurchaseDay", "AnalyticsObservedPhone",
+            "AnalyticsClientEvaluation", "AnalyticsSignal", "AnalyticsSignalChange"]
+
+from .analytics_delivery import AnalyticsDeliveryHead, AnalyticsDeliveryPublication
