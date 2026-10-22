@@ -15,7 +15,7 @@ from app.services.analytics_signal_store import reconcile_batch
 from app.services.seasonality_worker import advisory, SOURCE_LOCK, verify
 from app.services.product_analytics_runtime import ensure_headroom
 from app.services.analytics_source import resolve_stored_sales_source, STORED_SALES_POLICY_VERSION, stored_sales_contract_valid
-from app.services.analytics_scope import load_analytics_scope
+from app.services.analytics_scope import load_analytics_scope, SCOPE_POLICY
 from app.services.clients_vr import ClientsVrError
 
 WORKER_LOCK = 734190223
@@ -197,7 +197,7 @@ async def stored_source_context(db, as_of):
     pending = await db.scalar(select(ImportBatch.id).where(
         ImportBatch.status.in_(["queued", "processing"])).limit(1))
     scope = dict(department="Авиаторов", buyer_types=["Оптовик", "Корпоративный"],
-        client_keys=[], policy="aviatorov-wholesale-corporate/1", buyer_type_source="UNAVAILABLE")
+        client_keys=[], policy=SCOPE_POLICY, buyer_type_source="UNAVAILABLE")
     reason = None
     present = None
     # Pending imports also cover a crashed importer that released its advisory

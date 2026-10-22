@@ -146,8 +146,8 @@ def test_backwards_safe_date_blocks_without_rewriting_lifecycle(monkeypatch):
 def test_aviatorov_wholesale_corporate_filter_is_applied_before_features(monkeypatch):
     from app.services import analytics_scope
     from app.models import Sale
-    async def buyer_types():return {'client 0':'Оптовик','client 1':'Корпоративный','client 2':'Розница'}
-    monkeypatch.setattr(analytics_scope,'get_client_buyer_types',buyer_types)
+    async def buyer_types(_types):return {'Оптовик':['client 0'],'Корпоративный':['client 1']}
+    monkeypatch.setattr(analytics_scope,'get_complete_buyer_type_names',buyer_types)
     monkeypatch.setattr(worker,'load_analytics_scope',analytics_scope.load_analytics_scope)
     async def run():
         async with database() as (engine,factory):

@@ -7,22 +7,19 @@ completeness guarantee or an automatic manager-task system.
 
 ## Business scope
 
-Signals use **Авиаторов** sales for clients whose ClientsVR buyer kind is
-**Оптовик OR Корпоративный**. Department AND buyer-kind membership is applied in
-SQL before purchase-day projection, intervals, last purchase and monetary facts.
-Other stores and retail purchases cannot extend this scope's last purchase.
-The buyer kind is existing ClientsVR metadata, not `Sale.price_type`. Names use
-the existing v1 analytical normalization; phones do not determine membership.
+Scope v2 uses **Авиаторов** sales and complete specialized ClientsVR lists for
+**Оптовик** and **Корпоративный**. Include a normalized name in exactly one target
+kind; exclude the intersection. Retail does not veto a single target kind.
+Department AND membership are applied in SQL before features; Sale.price_type
+is not a substitute. Names retain analytical normalization v1.
 
-Membership is frozen in run metadata. ClientsVR failure blocks, never silently
-falls back to all clients. No ClientsVR or Calltrack API is changed. An empty
-valid selection remains empty. Mapping freshness/completeness is subject to the
-existing ClientsVR cache/contract, not a new identity guarantee. A new run reads
-membership again; ongoing runs retain their original membership. Changing the
-scope policy after an earlier published lifecycle blocks and requires separate
-isolated validation; historical episodes are not reinterpreted automatically.
-A dataset with no sales evidence for Авиаторов is blocked rather than treating a
-Козловская-only file as evidence for Авиаторов.
+See [scope v2 contract and rollout blockers](analytics_scope_v2.md). The proposed
+strict completeness metadata has NOT yet been confirmed in ClientsVR source.
+Unknown/partial/unavailable responses block; no full /integration/clients fallback.
+Scope is frozen per run, rechecked against the current cached directory before
+each resumed batch; changes supersede the checkpoint. A published v1 lifecycle
+requires separate isolated validation before policy v2 can publish. No history
+or control pointer is automatically reset. Empty scope never means all clients.
 
 ## Declared report metadata
 
