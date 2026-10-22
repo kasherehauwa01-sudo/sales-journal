@@ -13,9 +13,12 @@ kind; exclude the intersection. Retail does not veto a single target kind.
 Department AND membership are applied in SQL before features; Sale.price_type
 is not a substitute. Names retain analytical normalization v1.
 
-See [scope v2 contract and rollout blockers](analytics_scope_v2.md). The proposed
-strict completeness metadata has NOT yet been confirmed in ClientsVR source.
-Unknown/partial/unavailable responses block; no full /integration/clients fallback.
+See [scope v2 contract and remaining limitations](analytics_scope_v2.md). The owner
+confirmed a specialized HTTP200 JSON list[str] endpoint with no SQL pagination.
+Malformed/unavailable/transport-reported partial responses block; no full
+/integration/clients fallback. No total, completeness marker or shared revision
+is available, so valid-but-incomplete lists and cross-request changes cannot be
+independently detected. This does not confirm source completeness/freshness.
 Scope is frozen per run, rechecked against the current cached directory before
 each resumed batch; changes supersede the checkpoint. A published v1 lifecycle
 requires separate isolated validation before policy v2 can publish. No history

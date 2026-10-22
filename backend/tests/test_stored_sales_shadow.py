@@ -138,7 +138,7 @@ def test_actual_source_context_filters_date_and_business_scope(monkeypatch, pend
 
 def test_actual_scope_never_substitutes_price_types(monkeypatch):
     loader = AsyncMock(return_value={'Оптовик':[' ALPHA\u00a0 X '], 'Корпоративный':['Beta']})
-    monkeypatch.setattr('app.services.analytics_scope.get_complete_buyer_type_names', loader)
+    monkeypatch.setattr('app.services.analytics_scope.get_analytics_buyer_type_names', loader)
     scope = asyncio.run(load_analytics_scope())
     loader.assert_awaited_once_with(('Оптовик', 'Корпоративный'))
     assert scope['client_keys'] == ['alpha x', 'beta'] and scope['department'] == 'Авиаторов'
@@ -646,7 +646,7 @@ def test_cli_shutdown_does_not_pause_a_different_checkpoint(monkeypatch, case):
 
 
 def test_normalized_target_type_collision_is_ambiguous(monkeypatch):
-    monkeypatch.setattr('app.services.analytics_scope.get_complete_buyer_type_names', AsyncMock(return_value={
+    monkeypatch.setattr('app.services.analytics_scope.get_analytics_buyer_type_names', AsyncMock(return_value={
         'Оптовик':['A  B', 'E  F', 'Valid'], 'Корпоративный':['A B', 'E F']}))
     scope = asyncio.run(load_analytics_scope())
     assert scope['client_keys'] == ['valid']
@@ -655,5 +655,5 @@ def test_normalized_target_type_collision_is_ambiguous(monkeypatch):
 
 @pytest.mark.parametrize('catalogue', [None, [], {'Оптовик': []}, {'Оптовик': [None], 'Корпоративный': []}])
 def test_malformed_buyer_catalogue_fails_closed(monkeypatch, catalogue):
-    monkeypatch.setattr('app.services.analytics_scope.get_complete_buyer_type_names', AsyncMock(return_value=catalogue))
+    monkeypatch.setattr('app.services.analytics_scope.get_analytics_buyer_type_names', AsyncMock(return_value=catalogue))
     with pytest.raises(ClientsVrError): asyncio.run(load_analytics_scope())
