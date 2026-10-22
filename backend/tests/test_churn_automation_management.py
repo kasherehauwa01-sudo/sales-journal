@@ -18,6 +18,16 @@ def test_operator_policy_and_identity_are_explicit_versioned_and_fail_closed():
             async with factory() as db:
                 draft=await manage_policy(db,'draft',dict(min_confidence=.5,max_manifest_age_seconds=600,issuer='fixture',required_sources=['fixture-1c']),actor='synthetic-operator',expected_revision=1)
                 await db.commit()
+            for value in (1, 'true', None):
+                async with factory() as db:
+                    with pytest.raises(ValueError):
+                        await manage_policy(db,'approve',{'confirm_business_approval':value},actor='synthetic-operator',expected_revision=2)
+                    await db.rollback()
+            for revision in (True, 2.0, '2', -1, None):
+                async with factory() as db:
+                    with pytest.raises(ValueError):
+                        await manage_policy(db,'revoke',{},actor='synthetic-operator',expected_revision=revision)
+                    await db.rollback()
             async with factory() as db:
                 approved=await manage_policy(db,'approve',{'confirm_business_approval':True},actor='synthetic-operator',expected_revision=2)
                 assert approved['approved'];await db.commit()
@@ -31,6 +41,11 @@ def test_operator_policy_and_identity_are_explicit_versioned_and_fail_closed():
             async with factory() as db:
                 with pytest.raises(ValueError):await review_identity(db,request,actor='synthetic-reviewer',expected_revision=0)
                 await db.rollback()
+            for revision in (True, 0.0, '0', -1, None):
+                async with factory() as db:
+                    with pytest.raises(ValueError):
+                        await review_identity(db,request,actor='synthetic-reviewer',expected_revision=revision)
+                    await db.rollback()
             request['evidence'].update({k:True for k in ('all_sales_reviewed','complete_client_history_reviewed','client_unique','manager_unique','nontechnical','no_name_phone_conflict')})
             async with factory() as db:
                 reviewed=await review_identity(db,request,actor='synthetic-reviewer',expected_revision=0)

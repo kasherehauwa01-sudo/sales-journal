@@ -1,5 +1,7 @@
 # CHURN_RISK phase 1: подготовка внедрения, 22.10.2026
 
+**Актуализация аудита:** см. [production readiness](audits/churn-risk-production-readiness-20261022.md). Пользователь отказался от новых production backup. Новые dump/backup не входят в текущий план. Установка BLOCKED до проверки существующего способа восстановления или отдельного решения владельца.
+
 **Это план, не разрешение и не выполненное внедрение.** Production не запрашивался. Все команды с изменением сервера/БД выполняются владельцем только после отдельного согласования. Развёртывание disabled и разрешение реальных задач — два разных решения.
 
 ## Git-базы и серверные зависимости
@@ -57,7 +59,7 @@ DDL MySQL/MariaDB делает implicit commit. Нельзя обещать roll
 ## Точная последовательность согласованного disabled-внедрения
 
 1. **Read-only preflight.** Зафиксировать actual SHA/status/хеши изменяемых файлов/старый image ID+digest/действительную конфигурацию запуска. Сверить schema/ключи/версии и обе расходящиеся ветки. Получить утверждённую пару commit SHA из итогового отчёта/PR, а не только имя изменяемой ветки. Пока сверка не выполнена — STOP.
-2. **Backup.** После отдельного разрешения создать private каталог с umask077 вне web-root и Git. Сохранить код с локальными server changes, binary diff, конфигурацию запуска и приватную конфигурацию, текущий image, schema-only и consistent data backup обеих БД. Сохранить SHA256 файлов backup. Не печатать credentials и не добавлять backup в build context/Git. Проверить чтение backup и восстановление на разрешённом disposable стенде. Backup без репетиции восстановления недостаточен.
+2. **Existing recovery gate.** Новые production backup запрещены текущим решением владельца. Проверить существующий способ восстановления, покрытие кода/config/image/обеих БД, допустимый RPO и rehearsal на разрешённом изолированном стенде. Если проверенной стратегии нет — STOP до отдельного решения. Не считать отказ от backup разрешением на рискованные миграции.
 3. **Зафиксировать окно и остановку.** По отдельному разрешению остановить только analytics/release/consumer расписания/процессы. Подтвердить worker env disabled, consumer disabled, отсутствие active transactions. Не затрагивать импорт/другие службы без согласованного окна. Ни один режим enabled не нужен для disabled-внедрения.
 4. **Собрать reviewed candidate.** Из чистого tracked checkout точных согласованных SHA; не из грязного production backend. Dockerfile содержит COPY . . — backend/.analytics_shadow_backup_20261021_110515, .env, выгрузки и другие untracked не должны попасть в образ. Существующий backup на сервере не удалять. Tag образа включает reviewed SHA; старый image/tag/digest сохранить.
 5. **Применить PostgreSQL только до точной цели.** В одноразовом контейнере нового reviewed образа с согласованными existing DB network и private env, переопределив CMD/entrypoint, выполнить **`alembic upgrade 20261022_24`**, не произвольный head. Не стартовать обычный backend до этого этапа: его CMD автоматически выполняет Alembic. Перед применением heads нового образа должен быть только 20261022_24; иначе STOP. После — read-only проверить revision, пять таблиц, FK/UNIQUE/index и закрытую policy row.
@@ -68,17 +70,9 @@ DDL MySQL/MariaDB делает implicit commit. Нельзя обещать roll
 
 Не приводятся выдуманные project/network/secret-file пути или пароли для migration Docker-команды: их фиксируют по preflight и private run sheet перед разрешением шага 5. Обязательные target revisions/SQL и порядок выше точны; execution binding к серверу сейчас NOT VERIFIED.
 
-### Backup-команды (только будущее согласованное окно)
+### Решение по резервным копиям
 
-PostgreSQL consistent dump, credentials читаются внутри существующего db-контейнера, вывод только в protected файл:
-
-```sh
-# Из server Bash, только после выбора приватного BACKUP_DIR владельцем.
-umask 077
-docker exec sales-journal-db sh -c 'exec pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$BACKUP_DIR/sales.dump"
-```
-
-Calltrack: `mariadb-dump --defaults-extra-file=PRIVATE_APPROVED_FILE --single-transaction --routines --triggers --events --hex-blob CALLTRACK_DATABASE > protected-backup.sql`. Это шаблон будущего окна, PRIVATE_APPROVED_FILE/имя БД должен определить владелец, не публиковать их содержимое. Для consistent dump все рабочие таблицы должны быть InnoDB; DDL на время backup запрещён. Проверить code/config/image backup и sha256 отдельно; восстанавливать на production в этой задаче запрещено.
+Новые production backup/dump не создавать. Команды их создания исключены из актуального плана. Отсутствие проверенного existing recovery блокирует установку и включение, даже при успешных тестах и согласии не создавать backup.
 
 ## Откат без потери истории
 

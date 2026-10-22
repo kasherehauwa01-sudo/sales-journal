@@ -155,7 +155,9 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
                 env=os.environ.copy()
                 for name in ('DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'):env.pop(name,None)
                 return subprocess.run(docker+args,check=True,text=True,capture_output=True,env=env)
-            command(['exec','churn-phase1-mariadb','mariadb','-uroot','-psynthetic-only','-e','DROP DATABASE IF EXISTS analytics_sync_test; CREATE DATABASE analytics_sync_test'])
+            mariadb_container=os.environ.get('CHURN_TEST_MARIADB_CONTAINER','churn-phase1-mariadb')
+            assert mariadb_container in {'churn-phase1-mariadb','churn-audit-mariadb-1186'}
+            command(['exec',mariadb_container,'mariadb','-uroot','-psynthetic-only','-e','DROP DATABASE IF EXISTS analytics_sync_test; CREATE DATABASE analytics_sync_test'])
             gateway=command(['network','inspect','churn-phase1-test','--format','{{(index .IPAM.Config 0).Gateway}}']).stdout.strip()
             args=['run','--rm','--network','churn-phase1-test','--read-only','--tmpfs','/tmp',
                 '-e','ANALYTICS_TASK_TEST_DSN=mysql:host=analytics-test-mariadb;dbname=analytics_sync_test',

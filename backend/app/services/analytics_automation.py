@@ -188,6 +188,7 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
 
 async def manage_policy(db,action,payload,*,actor,expected_revision):
     """Operator CLI only. Draft revokes approval; no arbitrary business defaults."""
+    if type(expected_revision) is not int or expected_revision<0:raise ValueError('Integer revision required')
     if not known_text(actor):raise ValueError('Reviewed actor required')
     await db.execute(text('SELECT pg_advisory_xact_lock(:key)'),{'key':SOURCE_LOCK})
     policy=await db.get(Policy,1,with_for_update=True)
@@ -200,7 +201,7 @@ async def manage_policy(db,action,payload,*,actor,expected_revision):
         policy.settings_json=payload;policy.enabled=False;policy.approved=False
     elif action=='approve':
         c=policy.settings_json
-        if payload!={'confirm_business_approval':True}:raise ValueError('Explicit business approval required')
+        if not isinstance(payload,dict) or set(payload)!={'confirm_business_approval'} or payload['confirm_business_approval'] is not True:raise ValueError('Explicit business approval required')
         minimum=c.get('min_confidence');sources=c.get('required_sources')
         if (type(minimum) not in (int,float) or not math.isfinite(minimum) or not 0<=minimum<=1
             or type(c.get('max_manifest_age_seconds')) is not int or c['max_manifest_age_seconds']<=0
@@ -217,6 +218,7 @@ async def manage_policy(db,action,payload,*,actor,expected_revision):
 
 
 async def review_identity(db,payload,*,actor,expected_revision):
+    if type(expected_revision) is not int or expected_revision<0:raise ValueError('Integer revision required')
     if not known_text(actor):raise ValueError('Reviewed actor required')
     await db.execute(text('SELECT pg_advisory_xact_lock(:key)'),{'key':SOURCE_LOCK})
     scope=payload['scope'];client_key=payload['client_key'];status=payload['status']
