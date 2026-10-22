@@ -193,3 +193,12 @@ def test_unknown_detail_returns_404(monkeypatch):
     monkeypatch.setattr("app.routers.calltrack_integration.load_sale_detail",loader)
     with pytest.raises(HTTPException) as caught:asyncio.run(sale_detail(999,object()))
     assert caught.value.status_code==404
+
+
+def test_sale_with_phone_and_name_pointing_to_different_clients_is_rejected(monkeypatch):
+    payload = request([
+        CalltrackClientRef(key="phone-owner", phone="79991234567", name="Fixture Alpha"),
+        CalltrackClientRef(key="name-owner", name="Fixture Beta"),
+    ])
+    with pytest.raises(AmbiguousClientReference, match="разным client key"):
+        run_batch(monkeypatch, payload, [sale(100, client="Fixture Beta")])

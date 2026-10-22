@@ -57,6 +57,10 @@ async def find_sales_for_calltrack(
     for sale in sales:
         phone = normalize_phone(sale.phone)
         name = normalize_client_name(sale.client)
+        if phone in phone_keys and name in name_keys and phone_keys[phone] != name_keys[name]:
+            raise AmbiguousClientReference(
+                "Телефон и имя продажи соответствуют разным client key"
+            )
         if phone and phone in phone_keys:
             client_key, matched_by = phone_keys[phone], "phone"
         elif name and name in name_keys:
