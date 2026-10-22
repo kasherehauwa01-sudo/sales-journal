@@ -19,3 +19,5 @@ __all__ += ["AnalyticsSignalRun", "AnalyticsSignalState", "AnalyticsPurchaseDay"
             "AnalyticsClientEvaluation", "AnalyticsSignal", "AnalyticsSignalChange"]
 
 from .analytics_delivery import AnalyticsDeliveryHead, AnalyticsDeliveryPublication
+from .analytics_automation import (AnalyticsAutomationPolicy, AnalyticsAutomationIdentity,
+    AnalyticsAutomationRelease, AnalyticsAutomationEvent, AnalyticsAutomationDecision)

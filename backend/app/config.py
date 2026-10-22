@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/data/imports")
     import_temp_dir: Path = Path("/tmp/sales-journal-imports")
     log_level: str = "INFO"
+    analytics_automation_enabled: bool = False
+    analytics_automation_manifest_key: str = ""
     analytics_signals_enabled: bool = False
     analytics_signals_mode: Literal["SHADOW"] = "SHADOW"
     analytics_signals_freshness_hours: int = Field(36, ge=1, le=168)

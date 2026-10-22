@@ -4,7 +4,7 @@ The audit sequence is a cursor ONLY within one SUCCEEDED frozen run. Poll latest
 again after completing pagination; consumers compare per-signal revisions.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import AnalyticsSignalRun, AnalyticsSignalState, AnalyticsSignalChange, AnalyticsDeliveryPublication
@@ -74,3 +74,55 @@ async def publications(after: int = Query(0, ge=0), page_size: int = Query(50, g
     rows = rows[:page_size]
     return dict(items=[dict(sequence=r.sequence, run_id=r.run_id) for r in rows],
                 next_after=rows[-1].sequence if more else None, automation_allowed=False)
+
+# Separate stream: historical SHADOW rows/publications are never rewritten.
+async def automation_available(db):
+    from app.config import settings
+    from app.models import AnalyticsAutomationPolicy
+    policy=await db.get(AnalyticsAutomationPolicy,1)
+    if not settings.analytics_automation_enabled or not policy or not policy.enabled or not policy.approved:
+        raise HTTPException(503,'Automation release disabled')
+    return policy
+
+
+@router.get('/automation/publications')
+async def automation_publications(after:int=Query(0,ge=0),page_size:int=Query(50,ge=1,le=100),db:AsyncSession=Depends(get_db)):
+    from app.models import AnalyticsAutomationRelease as Release
+    policy=await automation_available(db)
+    rows=list((await db.scalars(select(Release).where(Release.sequence>after,Release.metadata_json['policy_revision'].as_integer()==policy.revision).order_by(Release.sequence).limit(page_size+1))).all())
+    more=len(rows)>page_size;rows=rows[:page_size]
+    return dict(items=[dict(sequence=r.sequence,run_id=r.id) for r in rows],next_after=rows[-1].sequence if more else None,automation_allowed=True)
+
+
+@router.get('/automation/runs/{run_id}/changes')
+async def automation_changes(run_id:str,after:int=Query(0,ge=0),page_size:int=Query(50,ge=1,le=100),db:AsyncSession=Depends(get_db)):
+    from app.models import AnalyticsAutomationRelease as Release, AnalyticsAutomationEvent as Event
+    policy=await automation_available(db)
+    release=await db.get(Release,run_id)
+    if not release:raise HTTPException(404,'Release not found')
+    if release.metadata_json['policy_revision']!=policy.revision:raise HTTPException(410,'Release policy revoked')
+    from datetime import datetime, timezone, timedelta
+    from zoneinfo import ZoneInfo
+    from app.config import settings
+    from app.models import SeasonalityState, ImportBatch, AnalyticsAutomationIdentity
+    evidence=release.metadata_json['run']['source_decision']
+    now=datetime.now(timezone.utc)
+    revision=await db.scalar(select(SeasonalityState.source_revision).where(SeasonalityState.id==1))
+    pending=await db.scalar(select(ImportBatch.id).where(ImportBatch.status.in_(['queued','processing'])).limit(1))
+    if (revision!=evidence['source_revision'] or pending is not None
+        or datetime.fromisoformat(evidence['valid_until'])<=now
+        or release.metadata_json['run']['as_of']!=(now.astimezone(ZoneInfo(settings.autoload_timezone)).date()-timedelta(days=1)).isoformat()):
+        raise HTTPException(410,'Release source evidence no longer current')
+    guards=release.metadata_json.get('binding_guards',[])
+    aliases=await db.scalar(select(AnalyticsAutomationIdentity.client_id).where(
+        AnalyticsAutomationIdentity.status=='VERIFIED',AnalyticsAutomationIdentity.client_id.in_([g['client_id'] for g in guards])
+    ).group_by(AnalyticsAutomationIdentity.client_id).having(func.count()>1).limit(1)) if guards else None
+    if aliases is not None:raise HTTPException(410,'Release identity aliases require history merge')
+    bindings={b.subject_key:b for b in (await db.scalars(select(AnalyticsAutomationIdentity).where(AnalyticsAutomationIdentity.subject_key.in_([g['key'] for g in guards])))).all()} if guards else {}
+    for guard in guards:
+        binding=bindings.get(guard['key'])
+        if not binding or binding.status!='VERIFIED' or binding.revision!=guard['revision'] or binding.client_id!=guard['client_id'] or binding.manager_id!=guard['manager_id']:
+            raise HTTPException(410,'Release identity revoked')
+    rows=list((await db.scalars(select(Event).where(Event.release_id==run_id,Event.id>after).order_by(Event.id).limit(page_size+1))).all())
+    more=len(rows)>page_size;rows=rows[:page_size]
+    return dict(run=release.metadata_json['run'],items=[r.payload for r in rows],next_after=rows[-1].id if more else None,automation_allowed=True)
