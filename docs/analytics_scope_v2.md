@@ -1,6 +1,6 @@
 # STORED_SALES SHADOW: buyer scope v2
 
-Base branch: feat/analytics-calltrack-integration (259ea1d). No formula, identity-normalization version, DB schema, flags or Calltrack change.
+Follow-up branch: fix/stored-sales-client-names-array, based on origin/main b349cd2 (includes PR153 / 8ef0156). No formula, identity-normalization version, DB schema, flags or Calltrack change.
 
 ## Cause and selection
 
@@ -14,25 +14,54 @@ Groups retain raw names until normalize_client_name(..., version=1). Each analyt
 
 SQL department is still Авиаторов. Sales price_type labels are not buyer types. Verified scope empty => worker blocks no-scoped-sales, never broadens to all buyers/stores.
 
-## Proposed strict API contract — NOT confirmed upstream
+## Confirmed endpoint shape and validation
 
-ClientsVR source checkout is unavailable. GitHub repo discovery through gh repo list returned `Post "https://api.github.com/graphql": Forbidden`; tested ClientsVR/Clients repository URLs were not accessible. No production request was made. The source implementation and deployed response completeness HAVE NOT BEEN VERIFIED.
+The owner inspected the ClientsVR production source in read-only mode and supplied
+this contract on2026-10-22. Codex did not access production independently:
+`response_model=list[str]`, returning
+`list(db.scalars(buyer_type_client_names_query(buyer_type)).all())`.
+The query groups by lower(normalized_name), selects min(normalized_name), excludes
+archived/empty-name rows, filters Client.buyer_type and contains no LIMIT/OFFSET.
 
-The following is the contract required by this Sales Journal adapter, NOT a claim about existing ClientsVR responses:
+Expected successful response (HTTP200):
 
 ```json
-{"clients":["Synthetic Name"],"total":1,"complete":true}
+["Synthetic Name"]
 ```
 
-- `clients` or `client_names`, exactly one: full array of nonblank strings for the requested buyer kind. Preserve all raw name variations; do not collapse conflicting kinds upstream into one last-wins name map. Duplicate entries are permitted and counted BEFORE de-duplication.
-- `total`: nonnegative integer, not bool/string; authoritative total rows for that kind BEFORE pagination, equal to array length. It must not mean page length or count after normalizing/distinct keys.
-- `complete`: literal true, only after a successful complete query/serialization. Empty confirmed result is `{clients:[],total:0,complete:true}`. Missing/empty body, bare array, error envelope or missing metadata is not evidence of zero clients.
-- Optional `buyer_type` must match the requested kind. Optional `has_more` must be false; next/next_page/next_cursor absent/null/empty; page if given must be1; pages if given0/1. Unsupported/nested metadata is rejected rather than silently ignoring pagination/errors.
-- Optional `revision`: nonempty string/integer, excluding bool. If present on either response it must be present and equal on both. No revision means cross-request snapshot consistency is NOT attested. Even a matching revision requires upstream confirmation that it changes on all relevant mutations and supports a consistent snapshot; client-side equality alone is not proof.
+An HTTP200 JSON `[]` is a valid empty selection for that buyer kind, not a network
+error. Both empty selections remain an empty scope, which the worker blocks
+instead of broadening to all clients. Empty body, JSON null/object/string, blank
+name, non-string element, invalid JSON/UTF8, transport error and non200 status
+(including206 Partial Content) fail closed. A specialized404/403 never triggers
+legacy/public/full-catalogue fallback. The earlier proposed clients/total/complete
+wrapper is NOT the real contract and is no longer accepted by this adapter.
 
-Responses with real server-side pagination require an explicit confirmed pagination/snapshot contract and a separately reviewed collector; this implementation rejects partial pages rather than guessing URL parameters or accepting a first page. /clients object responses are deliberately not used as an unverified fallback.
+Separate raw name arrays preserve cross-kind membership until v1 normalization;
+SQL grouping inside each individual kind does not replace the cross-kind set.
+The legacy last-wins name map is never used here. Existing generic ClientsVR
+request/parsing functions retain their previous behaviour.
 
-Two-kind bundle is cached only after BOTH requests and validations succeed, in an analytics-only namespace with existing5-minute TTL. A failure on either endpoint rejects the bundle; expired cache is not used as fallback. Existing legacy client/buyer/manager caches and functions are unchanged. TTL implies changes may take up to cache expiry to be observed. Shared cache revision does not prove upstream directory completeness.
+Both lists are fetched and validated before creating an analytics-only cache
+entry, under a new list-format namespace. Failure on either request rejects the
+bundle; expired cache is not used as fallback. Existing caches are unchanged.
+The five-minute TTL can delay discovery of upstream membership changes.
+
+### What this does NOT prove
+
+Absence of pagination is a property of the reviewed source, NOT proof of complete
+production data or a complete HTTP response. The API supplies no independent
+count, completeness marker, checksum or shared snapshot revision. Validation can
+reject malformed/truncated JSON and transport-reported truncation, but cannot
+detect a valid JSON array that an upstream bug/cache/proxy silently shortened.
+Two sequential kind requests are not an atomic directory snapshot; membership
+may change between them. The supplied review also does not pin every deployed
+endpoint/version or prove completeness of ClientsVR imports/replication.
+
+The owner-confirmed contract permits use for diagnostic SHADOW scope; it does
+not promote sales coverage/freshness or enable automation. Sales coverage and
+business_freshness remain UNKNOWN, automation_allowed remains false. Real
+endpoint latency and end-to-end production/DB behaviour were not tested here.
 
 ## Policy transition
 
@@ -44,4 +73,8 @@ A running v1 checkpoint whose scope changes is SUPERSEDED before any next scan/e
 
 SHADOW only; automation_allowed=false, sales coverage/freshness UNKNOWN remain unchanged. No ClientsVR or sales rows are written, no production DB/API queries, no worker/flag enabling. Read-only GitHub source lookup is not a production call. PostgreSQL opt-in tests remain skipped; new tests are synthetic/mock HTTP and do not use a database.
 
-NOT approved for deploy until ClientsVR code/contract is confirmed to satisfy the strict envelope and complete per-kind selection, response performance is verified through an authorized separate check, and v1→v2 publication transition is agreed. If actual endpoint returns a bare list, old `{clients:[...]}` without metadata or a paginated wrapper, this version safely BLOCKS; it is not a ready production compatibility claim. No upstream server changes are included here.
+The list-format incompatibility is fixed against the supplied source contract.
+No upstream ClientsVR change is required. Deployment still needs separate owner
+approval and review of any v1→v2 published-lifecycle transition. No deployments,
+real catalogue calls or PostgreSQL integration runs were performed here. The
+remaining completeness/snapshot limitations above are not declared resolved.

@@ -1,5 +1,5 @@
-"""Versioned SHADOW scope; complete specialized ClientsVR lists only."""
-from app.services.clients_vr import get_complete_buyer_type_names, ClientsVrError
+"""Versioned SHADOW scope; validated specialized ClientsVR name lists only."""
+from app.services.clients_vr import get_analytics_buyer_type_names, ClientsVrError
 from app.services.client_identity import normalize_client_name
 
 DEPARTMENT = "Авиаторов"
@@ -8,7 +8,7 @@ SCOPE_POLICY = "aviatorov-wholesale-corporate/2"
 
 
 async def load_analytics_scope():
-    groups = await get_complete_buyer_type_names(BUYER_TYPES)
+    groups = await get_analytics_buyer_type_names(BUYER_TYPES)
     if not isinstance(groups, dict) or set(groups) != set(BUYER_TYPES):
         raise ClientsVrError("Incomplete analytical buyer-type bundle")
     kinds_by_key = {}

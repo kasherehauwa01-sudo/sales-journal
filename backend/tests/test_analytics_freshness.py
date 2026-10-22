@@ -147,7 +147,7 @@ def test_aviatorov_wholesale_corporate_filter_is_applied_before_features(monkeyp
     from app.services import analytics_scope
     from app.models import Sale
     async def buyer_types(_types):return {'Оптовик':['client 0'],'Корпоративный':['client 1']}
-    monkeypatch.setattr(analytics_scope,'get_complete_buyer_type_names',buyer_types)
+    monkeypatch.setattr(analytics_scope,'get_analytics_buyer_type_names',buyer_types)
     monkeypatch.setattr(worker,'load_analytics_scope',analytics_scope.load_analytics_scope)
     async def run():
         async with database() as (engine,factory):
