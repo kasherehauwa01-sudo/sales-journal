@@ -186,3 +186,62 @@ async def resolve_manager_filter(filters:dict,loader=None):
  resolved=filters.copy();manager=resolved.pop("manager",None)
  if manager:resolved["clients"]=await (loader or get_manager_clients)(manager)
  return resolved
+
+
+def _complete_buyer_type_names(payload, buyer_type):
+ """Validate a complete specialized response, without legacy lossy coercion.
+
+ `total` must be the authoritative total for this buyer kind, not page size.
+ Bare arrays/legacy envelopes cannot attest completeness and are rejected.
+ """
+ if not isinstance(payload,dict):
+  raise ClientsVrError("Buyer-type response has no completeness metadata")
+ allowed={"clients","client_names","total","complete","has_more","next","next_page","next_cursor","pages","page","buyer_type","revision"}
+ if set(payload)-allowed:
+  raise ClientsVrError("Buyer-type response has unsupported metadata")
+ if "buyer_type" in payload and (not isinstance(payload["buyer_type"],str) or payload["buyer_type"].strip().casefold()!=buyer_type.casefold()):
+  raise ClientsVrError("Buyer-type response describes a different kind")
+ fields=[key for key in ("clients","client_names") if key in payload]
+ if len(fields)!=1 or not isinstance(payload[fields[0]],list):
+  raise ClientsVrError("Buyer-type response has an invalid names collection")
+ names=payload[fields[0]];total=payload.get("total")
+ if type(total) is not int or total<0 or total!=len(names):
+  raise ClientsVrError("Buyer-type response total does not confirm completeness")
+ if payload.get("complete") is not True:
+  raise ClientsVrError("Buyer-type response is not complete")
+ if "has_more" in payload and payload["has_more"] is not False:
+  raise ClientsVrError("Buyer-type response has more pages")
+ if any(payload.get(key) not in (None,"") for key in ("next","next_page","next_cursor")):
+  raise ClientsVrError("Buyer-type response has a continuation")
+ if "pages" in payload and (type(payload["pages"]) is not int or payload["pages"] not in (0,1)):
+  raise ClientsVrError("Buyer-type response is paginated")
+ if "page" in payload and (type(payload["page"]) is not int or payload["page"]!=1):
+  raise ClientsVrError("Buyer-type response is not the first complete page")
+ if any(not isinstance(name,str) or not name.strip() for name in names):
+  raise ClientsVrError("Buyer-type response contains an invalid client name")
+ return tuple(names)
+
+
+async def get_complete_buyer_type_names(buyer_types:tuple[str,...]):
+ """Analytics-only all-or-error bundle; no full catalogue/public fallback.
+
+ Cache both kinds together only after both responses pass validation. Reusing
+ the legacy name->single-kind map would discard collisions before v1 grouping.
+ """
+ if not buyer_types or len(set(buyer_types))!=len(buyer_types):
+  raise ValueError("Distinct buyer types required")
+ def load():
+  result={};revisions=[]
+  for buyer_type in buyer_types:
+   path=f"/integration/buyer-types/{quote(buyer_type,safe='')}/client-names"
+   payload=_request([path])
+   result[buyer_type]=_complete_buyer_type_names(payload,buyer_type)
+   revision=payload.get("revision")
+   if revision is not None and (type(revision) not in (str,int) or revision==""):
+    raise ClientsVrError("Buyer-type response has an invalid revision")
+   revisions.append(revision)
+  if any(revision is not None for revision in revisions) and any(revision!=revisions[0] for revision in revisions):
+   raise ClientsVrError("Buyer-type responses belong to different snapshots")
+  return result
+ value=await _cached("analytics-complete-buyer-names:"+json.dumps(buyer_types,ensure_ascii=False),load)
+ return dict(value)
