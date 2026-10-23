@@ -1,0 +1,18 @@
+# Future owner-approved operation only; exact image must pass isolated compatibility tests.
+services:
+  backend:
+    image: "${SALES_ROLLBACK_IMAGE:?Pin the tested immutable old image ID}"
+    build: !reset null
+    pull_policy: never
+    restart: "no"
+    stop_grace_period: 30s
+    command: ["python", "-B", "/run/sales-rollback/start_backend.py", "--rollback", "--expected-revision", "20261022_24"]
+    environment:
+      ANALYTICS_SIGNALS_ENABLED: "false"
+      ANALYTICS_SIGNALS_MODE: SHADOW
+      ANALYTICS_AUTOMATION_ENABLED: "false"
+    volumes:
+      - type: bind
+        source: "${SALES_ROLLBACK_LAUNCHER:?Absolute reviewed start_backend.py path}"
+        target: /run/sales-rollback/start_backend.py
+        read_only: true

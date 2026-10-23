@@ -1,0 +1,15 @@
+# Opt-in job. Never started by ordinary compose up; requires separate migration approval.
+services:
+  schema-migrate:
+    profiles: ["schema-maintenance"]
+    image: "${SALES_CANDIDATE_IMAGE:?Pin the reviewed candidate image}"
+    restart: "no"
+    command: ["python", "-B", "start_backend.py", "--migrate", "--expected-revision", "20261022_24"]
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sales}:${POSTGRES_PASSWORD:?Required}@db:5432/${POSTGRES_DB:-sales}"
+      ANALYTICS_SIGNALS_ENABLED: "false"
+      ANALYTICS_SIGNALS_MODE: SHADOW
+      ANALYTICS_AUTOMATION_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy

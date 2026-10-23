@@ -33,16 +33,18 @@ Production-ready веб-сервис для накопления продаж и
 ```bash
 cp .env.example .env
 # обязательно задайте длинный POSTGRES_PASSWORD
-docker compose up -d --build
+docker compose up -d db
+docker compose build
+# Только НОВАЯ локальная dev-БД: явное первоначальное создание схемы
+docker compose run --rm --no-deps backend alembic upgrade 20261022_24
+docker compose up -d backend frontend
 docker compose ps
 ```
 
-Frontend: `http://127.0.0.1:8011/vr/sales/`, API: `http://127.0.0.1:8010/api/docs`. Порты слушают только loopback. Миграция `alembic upgrade head` выполняется backend-контейнером перед стартом. Вручную:
+Frontend: `http://127.0.0.1:8011/vr/sales/`, API: `http://127.0.0.1:8010/api/docs`. Порты слушают только loopback.
+Backend больше **не применяет миграции при старте**: `start_backend.py` проверяет схему в read-only транзакции и запускает uvicorn через exec. Для существующей схемы23 ->24 предусмотрен отдельный явный migration-job с блокировкой. На несовпадении схемы обычный старт останавливается, не исправляя БД.
 
-```bash
-docker compose exec backend alembic current
-docker compose exec backend alembic upgrade head
-```
+См. [ROLLBACK_COMPATIBILITY_REPORT.md](docs/ROLLBACK_COMPATIBILITY_REPORT.md): явная миграция, rollback старого образа, ограничения и разрешения. Локальный bootstrap выше не является production-инструкцией.
 
 Для разработки frontend:
 
@@ -129,22 +131,10 @@ curl -fsS https://kvasmix.ru/vr/sales/api/health
 
 ## Обновление, резервное копирование и восстановление
 
-```bash
-cd /var/www/html/vr/sales
-git pull --ff-only
-docker compose build --pull
-docker compose up -d
-docker compose exec backend alembic upgrade head
-
-# backup БД
-docker compose exec -T db pg_dump -U sales -Fc sales > sales-$(date +%F).dump
-# restore в пустую БД
-docker compose exec -T db pg_restore -U sales -d sales --clean --if-exists < sales.dump
-# backup оригиналов
-docker run --rm -v sales-journal_sales_imports:/data -v "$PWD":/backup alpine tar czf /backup/imports.tgz -C /data .
-```
-
-Перед обновлением создавайте оба backup. Имена volumes уточняются через `docker volume ls`.
+**PRODUCTION DEPLOYMENT = BLOCKED — NO VERIFIED RECOVERY.**
+Возврат кода/образа, изменение схемы и восстановление данных — разные операции.
+Нельзя обновлять сервер, запускать миграции, создавать новые production backups или применять restore без отдельного разрешения и проверенного плана восстановления.
+Старый образ de0a0c8 со штатным Alembic CMD не запускается на24. Проверяемый rollback-launcher и opt-in override описаны в [отчёте](docs/ROLLBACK_COMPATIBILITY_REPORT.md). Они не восстанавливают потерянные данные; downgrade/stamp и удаление истории не являются rollback-процедурой.
 
 ## Диагностика
 
