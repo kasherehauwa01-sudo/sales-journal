@@ -7,6 +7,7 @@ from app.models import AnalyticsSignal, AnalyticsSignalChange, AnalyticsClientEv
 from app.services.client_identity import ANALYTICAL_NORMALIZATION_VERSION
 from app.services.analytics_source import stored_sales_contract_valid
 from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, METRICS_SCHEMA_VERSION, evaluate, json_value
+from app.services import churn_pilot
 
 
 def snapshot(signal):
@@ -41,7 +42,9 @@ async def reconcile_batch(db, run, features):
     # It is NOT a source freshness/completeness assertion. Persist UNKNOWN for
     # STORED_SALES from frozen source evidence below.
     # UNKNOWN coverage weight (zero) remains unchanged; no confidence boost.
-    decisions = {f['client_key']: evaluate(f, run.as_of, freshness="HEALTHY") for f in features}
+    generator, _, _ = churn_pilot.algorithm(run.metadata_json.get("scope") or {})
+    evaluator = churn_pilot.evaluate if generator == churn_pilot.GENERATOR_VERSION else evaluate
+    decisions = {f['client_key']: evaluator(f, run.as_of, freshness="HEALTHY") for f in features}
     for decision in decisions.values():
         decision["metrics"].update(coverage=source["coverage_status"],
             freshness=source["business_freshness"],
@@ -128,7 +131,8 @@ def apply_evidence(s, f, decision, run):
     s.confidence = Decimal(str(decision["confidence"])).quantize(Decimal('.0001'))
     if s.status == "RESOLVED":s.score, s.severity = Decimal(0), 0
     s.metrics = decision["metrics"]
-    s.metrics_schema_version, s.generator_version, s.parameters_version = METRICS_SCHEMA_VERSION, GENERATOR_VERSION, PARAMETERS_VERSION
+    s.metrics_schema_version = METRICS_SCHEMA_VERSION
+    s.generator_version, s.parameters_version, _ = churn_pilot.algorithm(run.metadata_json.get("scope") or {})
     s.source_period_start, s.source_period_end = run.as_of-timedelta(days=364), run.as_of
     s.as_of = run.as_of
     s.source_coverage_status = run.metadata_json["coverage_status"]

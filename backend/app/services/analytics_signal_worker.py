@@ -11,6 +11,7 @@ from app.models import (AnalyticsSignalRun, AnalyticsSignalState, AnalyticsPurch
 from app.services.client_identity import analytical_name_sql, ANALYTICAL_NORMALIZATION_VERSION
 from app.services.client_features import load_inactivity_features
 from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, POLICY
+from app.services.churn_pilot import algorithm
 from app.services.analytics_signal_store import reconcile_batch
 from app.services.seasonality_worker import advisory, SOURCE_LOCK, verify
 from app.services.product_analytics_runtime import ensure_headroom
@@ -40,6 +41,7 @@ async def state(db):
 
 
 async def begin_run(db, control, decision, scope):
+    GENERATOR_VERSION, PARAMETERS_VERSION, POLICY = algorithm(scope)
     now = datetime.now(timezone.utc)
     previous = await db.get(AnalyticsSignalRun, control.published_run_id) if control.published_run_id else None
     if decision.effective_as_of and previous and previous.as_of > decision.effective_as_of:
@@ -105,8 +107,12 @@ async def scan_batch(db, run, size):
     counters["missing_empty_name"] = counters.get("missing_empty_name", 0)+missing
     counters["scanned_sales"] = counters.get("scanned_sales", 0)+len(ids)
     run.counters = counters
+    positive = Sale.total_amount > 0
+    if algorithm(scope)[0] == "inactivity/aviator-churn-pilot/1":
+        for prefix in ("ВЗВ-", "РНВ-", "ВРМ-"):
+            positive = positive & ~Sale.document_number.startswith(prefix)
     query = select(literal(run.id), key, Sale.sale_date, func.min(Sale.client), func.count(),
-                   func.sum(case((Sale.total_amount > 0, 1), else_=0)), func.sum(Sale.total_amount)).where(
+                   func.sum(case((positive, 1), else_=0)), func.sum(Sale.total_amount)).where(
         *base, Sale.client.is_not(None), key != "").group_by(key, Sale.sale_date)
     statement = insert(AnalyticsPurchaseDay).from_select(
         ["run_id", "client_key", "sale_date", "display_name", "checks", "positive_checks", "revenue"], query)
@@ -246,6 +252,7 @@ async def run_batch(factory, engine, *, as_of=None, scan_size=2000, client_size=
             # Policy changes terminate the old checkpoint before any source read,
             # evaluation or publication. Its frozen metadata and results are kept.
             if run and run.status in {"RUNNING", "PAUSED", "FAILED"}:
+                GENERATOR_VERSION, PARAMETERS_VERSION, POLICY = algorithm(run.metadata_json.get("scope") or {})
                 frozen = run.metadata_json.get("source_decision") or {}
                 incompatible = None
                 if frozen.get("policy_version") != STORED_SALES_POLICY_VERSION:

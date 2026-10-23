@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from app.models import AnalyticsDeliveryHead, AnalyticsDeliveryPublication
 from app.services.analytics_source import stored_sales_contract_valid
-from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, POLICY
+from app.services.churn_pilot import algorithm
 from app.services.client_identity import ANALYTICAL_NORMALIZATION_VERSION
 
 
@@ -15,6 +15,7 @@ async def publish_delivery(db, run):
     No audit BIGSERIAL is exposed as a cross-run cursor.
     """
     metadata = run.metadata_json
+    GENERATOR_VERSION, PARAMETERS_VERSION, POLICY = algorithm(metadata.get("scope") or {})
     if (run.status != "SUCCEEDED" or not stored_sales_contract_valid(metadata)
             or metadata.get("generator_version") != GENERATOR_VERSION
             or metadata.get("parameters_version") != PARAMETERS_VERSION
