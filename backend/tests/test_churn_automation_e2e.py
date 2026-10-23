@@ -32,7 +32,9 @@ from app.services.analytics_automation import (release_churn, source_manifest_fa
 from test_inactivity_shadow import database, finish
 
 @pytest.mark.skipif(os.environ.get('CHURN_PHASE1_E2E')!='1',reason='Explicit isolated PostgreSQL/MariaDB/HTTP stand required')
-def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypatch):
+@pytest.mark.parametrize('pilot',[False,True])
+def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypatch,pilot):
+    candidates=6 if pilot else 2
     root=Path(os.environ.get('CALLTRACK_ROOT','/workspace/calltrack-verification')).resolve()
     assert (root/'tests/churn_automation_e2e.php').is_file()
     port=18769
@@ -40,7 +42,7 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
     @app.get('/integration/buyer-types/{kind}/client-names')
     def names(kind:str,authorization:str=Header('')):
         if authorization!='Bearer synthetic-vr-token':raise HTTPException(401)
-        return ['Fixture '+str(i) for i in range(4)] if kind=='Оптовик' else []
+        return ['Fixture '+str(i) for i in range(8 if pilot else 4)] if kind=='Оптовик' else []
     from app.services import clients_vr
     monkeypatch.setattr(clients_vr,'cache',{})
     monkeypatch.setattr(settings,'clients_vr_api_url',f'http://127.0.0.1:{port}')
@@ -65,8 +67,8 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
             app.dependency_overrides[get_db]=sessions
             day=last_closed_day();now=datetime.now(timezone.utc)
             rows=[]
-            for i,delay in enumerate([30,30,8,2]):
-                for n in range(21):
+            for i,delay in enumerate([45]*6+[8,2] if pilot else [45,46,8,2]):
+                for n in range(3 if pilot else 21):
                     rows.append(dict(id=len(rows)+1,sale_date=day-timedelta(days=delay+5*n),
                         document_number=str(len(rows)),client='Fixture '+str(i),department='Авиаторов',
                         total_amount=1000,fingerprint='synthetic-'+str(len(rows)),import_id=1))
@@ -78,15 +80,15 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
                 run=await db.get(AnalyticsSignalRun,rid)
                 assert run.metadata_json['source_decision']['coverage_status']=='UNKNOWN'
                 signals=(await db.scalars(select(AnalyticsSignal))).all()
-                assert sum(s.signal_type=='CHURN_RISK' for s in signals)==2
-                assert any(s.signal_type=='PURCHASE_OVERDUE' for s in signals)
+                assert sum(s.signal_type=='CHURN_RISK' for s in signals)==candidates
+                assert not any(s.signal_type=='PURCHASE_OVERDUE' for s in signals)
                 fullscope=run.metadata_json['scope'];scope={k:v for k,v in fullscope.items() if k!='client_keys'}
                 evaluations=(await db.scalars(select(AnalyticsClientEvaluation).where(AnalyticsClientEvaluation.run_id==rid,AnalyticsClientEvaluation.signal_type=='CHURN_RISK').order_by(AnalyticsClientEvaluation.client_key))).all()
                 db.add(Policy(id=1,enabled=True,approved=True,revision=1,sequence=0,
-                    settings_json={'min_confidence':.5,'max_manifest_age_seconds':7200,'issuer':'synthetic-upstream','required_sources':['synthetic-1c']}))
+                    settings_json={'algorithm_policy':'aviator-churn-pilot/1','min_confidence':(.3 if pilot else .5),'max_manifest_age_seconds':7200,'issuer':'synthetic-upstream','required_sources':['synthetic-1c']}))
                 assignments=[]
                 for i,c in enumerate(evaluations):
-                    binding=Identity(subject_key=identity_key(c.client_key,scope),client_id=f'fixture-id-{i}',manager_id=3+i,revision=1,status='VERIFIED',
+                    binding=Identity(subject_key=identity_key(c.client_key,scope),client_id=f'fixture-id-{i}',manager_id=3+i%2,revision=1,status='VERIFIED',
                         evidence=dict(all_sales_reviewed=True,complete_client_history_reviewed=True,client_unique=True,manager_unique=True,nontechnical=True,no_name_phone_conflict=True,reviewer='synthetic-reviewer',reason='independent synthetic source identity'))
                     db.add(binding);assignments.append(dict(subject_hash=digest(c.client_key),client_id=binding.client_id,manager_id=binding.manager_id,revision=1))
                 facts=await source_manifest_facts(db,run)
@@ -120,23 +122,24 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
                 assert (await release_churn(db,rid,envelope,preview=True,now=now))['status']=='BLOCKED'
                 await db.rollback()
             monkeypatch.setattr(settings,'analytics_automation_enabled',True)
-            for broken in ('policy','confidence','identity','name_phone_conflict','aliases'):
+            for broken in ('policy','algorithm','confidence','identity','name_phone_conflict','aliases'):
                 async with factory() as db:
                     policy=await db.get(Policy,1)
                     binding=await db.get(Identity,identity_key(evaluations[0].client_key,scope))
                     if broken=='policy':policy.approved=False
+                    elif broken=='algorithm':policy.settings_json={k:v for k,v in policy.settings_json.items() if k!='algorithm_policy'}
                     elif broken=='confidence':policy.settings_json={**policy.settings_json,'min_confidence':None}
                     elif broken=='identity':binding.status='AMBIGUOUS'
                     elif broken=='name_phone_conflict':binding.evidence={**binding.evidence,'no_name_phone_conflict':False}
                     else:db.add(Identity(subject_key=digest('extra-alias'),client_id=binding.client_id,manager_id=binding.manager_id,revision=1,status='VERIFIED',evidence=binding.evidence))
                     await db.flush()
                     refused=await release_churn(db,rid,envelope,preview=True,now=now)
-                    if broken in ('identity','name_phone_conflict','aliases'):assert refused['ready']==1 and refused['decisions'][0]['reasons']
+                    if broken in ('identity','name_phone_conflict','aliases'):assert refused['ready']==candidates-1 and refused['decisions'][0]['reasons']
                     else:assert refused['status']=='BLOCKED'
                     await db.rollback()
             async with factory() as db:
                 preview=await release_churn(db,rid,envelope,preview=True,now=now)
-                assert preview['status']=='READY' and preview['ready']==2,preview
+                assert preview['status']=='READY' and preview['ready']==candidates,preview
                 assert await db.scalar(select(func.count()).select_from(Event))==0
                 await db.rollback()
             # Concurrent release requests commit exactly one immutable release.
@@ -147,7 +150,7 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
             assert sorted(r['status'] for r in released)==['EXISTING','RELEASED'],released
             async with factory() as db:
                 assert await db.scalar(select(func.count()).select_from(Release))==1
-                assert await db.scalar(select(func.count()).select_from(Event))==2
+                assert await db.scalar(select(func.count()).select_from(Event))==candidates
                 original=await db.get(AnalyticsSignalRun,rid)
                 assert original.metadata_json['source_decision']['coverage_status']=='UNKNOWN'
             docker=['docker','--host=unix:///var/run/docker.sock']
@@ -165,7 +168,7 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
                 '-e','CALLTRACK_STORAGE_DIR=/tmp/churn','-e','CALLTRACK_ANALYTICS_FEED=approved_churn',
                 '-e',f'SALES_JOURNAL_BASE_URL=http://{gateway}:{port}',
                 '-e','CALLTRACK_INTEGRATION_TOKEN=synthetic-integration-token','-e',f'NO_PROXY={gateway},analytics-test-mariadb','-e',f'no_proxy={gateway},analytics-test-mariadb',
-                '-v',str(root)+':/code:ro','-w','/code','analytics-php-test:local','php','tests/churn_automation_e2e.php']
+                '-v',str(root)+':/code:ro','-w','/code','analytics-php-test:local','php','tests/churn_pilot_e2e.php' if pilot else 'tests/churn_automation_e2e.php']
             try:output=command(args)
             except subprocess.CalledProcessError as exc:
                 raise AssertionError(exc.stdout+'\n'+exc.stderr) from None
@@ -175,6 +178,17 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
             async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{port}',headers={'Authorization':'Bearer synthetic-integration-token'}) as client:
                 url=f"/api/integrations/calltrack/analytics/automation/runs/{released[0]['release_id']}/changes"
                 assert (await client.get(url,headers={'Authorization':'Bearer wrong'})).status_code==401
+                async with factory() as db:
+                    policy=await db.get(Policy,1);saved=dict(policy.settings_json)
+                    policy.settings_json={k:v for k,v in saved.items() if k!='algorithm_policy'};await db.commit()
+                assert (await client.get(url)).status_code==503
+                async with factory() as db:
+                    policy=await db.get(Policy,1);policy.settings_json=saved
+                    release=await db.get(Release,released[0]['release_id']);saved_release=dict(release.metadata_json)
+                    release.metadata_json={k:v for k,v in saved_release.items() if k!='algorithm_policy'};await db.commit()
+                assert (await client.get(url)).status_code==410
+                async with factory() as db:
+                    release=await db.get(Release,released[0]['release_id']);release.metadata_json=saved_release;await db.commit()
                 async with factory() as db:
                     policy=await db.get(Policy,1);policy.revision=2;await db.commit()
                 assert (await client.get(url)).status_code==410

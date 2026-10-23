@@ -17,7 +17,8 @@ from app.models import (AnalyticsAutomationPolicy as Policy, AnalyticsAutomation
     AnalyticsAutomationRelease as Release, AnalyticsAutomationEvent as Event, AnalyticsAutomationDecision as Decision,
     AnalyticsSignalRun, AnalyticsSignalState, AnalyticsClientEvaluation, AnalyticsPurchaseDay, ImportBatch, SeasonalityState)
 from app.services.seasonality_worker import SOURCE_LOCK
-from app.services.inactivity import json_value, GENERATOR_VERSION, POLICY as INACTIVITY_POLICY
+from app.services.inactivity import json_value
+from app.services.churn_pilot import GENERATOR_VERSION, POLICY as INACTIVITY_POLICY
 from app.services.analytics_scope import SCOPE_POLICY
 from app.services.analytics_source import stored_sales_contract_valid
 
@@ -69,6 +70,7 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
     conf=(policy.settings_json if policy and isinstance(policy.settings_json,dict) else {})
     if not settings.analytics_automation_enabled:reasons.append('PRODUCER_DISABLED')
     if not policy or not policy.enabled or not policy.approved:reasons.append('POLICY_NOT_APPROVED')
+    if conf.get('algorithm_policy')!='aviator-churn-pilot/1':reasons.append('ALGORITHM_POLICY_NOT_APPROVED')
     minimum=conf.get('min_confidence');max_age=conf.get('max_manifest_age_seconds')
     required=conf.get('required_sources')
     required_valid=isinstance(required,list) and bool(required) and all(known_text(v) for v in required) and len(set(required))==len(required)
@@ -168,7 +170,7 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
             effective_as_of=run.as_of.isoformat(),source_revision=run.source_revision,proof_hash=proof,
             method='INDEPENDENT_SIGNED_UPSTREAM_MANIFEST_V1',valid_until=payload['valid_until'],policy_revision=policy.revision))
     db.add(Release(id=rid,sequence=policy.sequence,source_run_id=run_id,created_at=now,proof_hash=proof,
-                   metadata_json=dict(run=run_public,policy_revision=policy.revision,policy_settings=result['policy_settings'],manifest=envelope,
+                   metadata_json=dict(algorithm_policy='aviator-churn-pilot/1',run=run_public,policy_revision=policy.revision,policy_settings=result['policy_settings'],manifest=envelope,
                        binding_guards=[dict(key=b.subject_key,revision=b.revision,client_id=b.client_id,manager_id=b.manager_id) for _,b,_ in ready])))
     await db.flush()
     for candidate,binding,signal in ready:
@@ -197,11 +199,12 @@ async def manage_policy(db,action,payload,*,actor,expected_revision):
         policy=Policy(id=1,enabled=False,approved=False,revision=0,sequence=0,settings_json={});db.add(policy)
     if policy.revision!=expected_revision:raise ValueError('Policy revision conflict')
     if action=='draft':
-        if not isinstance(payload,dict) or set(payload)-{'min_confidence','max_manifest_age_seconds','issuer','required_sources'}:raise ValueError('Unknown policy fields')
+        if not isinstance(payload,dict) or set(payload)-{'min_confidence','max_manifest_age_seconds','issuer','required_sources','algorithm_policy'}:raise ValueError('Unknown policy fields')
         policy.settings_json=payload;policy.enabled=False;policy.approved=False
     elif action=='approve':
         c=policy.settings_json
         if not isinstance(payload,dict) or set(payload)!={'confirm_business_approval'} or payload['confirm_business_approval'] is not True:raise ValueError('Explicit business approval required')
+        if c.get('algorithm_policy')!='aviator-churn-pilot/1':raise ValueError('Explicit pilot algorithm approval required')
         minimum=c.get('min_confidence');sources=c.get('required_sources')
         if (type(minimum) not in (int,float) or not math.isfinite(minimum) or not 0<=minimum<=1
             or type(c.get('max_manifest_age_seconds')) is not int or c['max_manifest_age_seconds']<=0

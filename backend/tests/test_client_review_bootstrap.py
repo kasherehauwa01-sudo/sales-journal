@@ -83,7 +83,7 @@ def test_native_shadow_existing_admin_review_and_external_identity(monkeypatch):
             app.dependency_overrides[get_db]=sessions
             try:
                 day=last_closed_day();now=datetime.now(timezone.utc)
-                rows=[dict(id=n+1,sale_date=day-timedelta(days=30+5*n),document_number=str(n),client='Synthetic Customer',department='Авиаторов',total_amount=1000,fingerprint='synthetic-'+str(n),import_id=1) for n in range(21)]
+                rows=[dict(id=n+1,sale_date=day-timedelta(days=45+n),document_number=str(n),client='Synthetic Customer',department='Авиаторов',total_amount=1000,fingerprint='synthetic-'+str(n),import_id=1) for n in range(3)]
                 async with factory() as db:await db.execute(insert(Sale),rows);await db.commit()
                 result=await finish(factory,engine,day);rid=result['run_id']
                 async with factory() as db:
@@ -114,7 +114,7 @@ def test_native_shadow_existing_admin_review_and_external_identity(monkeypatch):
                 identity['evidence'].update({k:True for k in ('all_sales_reviewed','complete_client_history_reviewed','client_unique','manager_unique','nontechnical','no_name_phone_conflict')})
                 async with factory() as db:
                     await review_identity(db,identity,actor='synthetic-admin',expected_revision=0)
-                    await manage_policy(db,'draft',dict(min_confidence=.5,max_manifest_age_seconds=600,issuer='synthetic-upstream',required_sources=['synthetic-1c']),actor='synthetic-admin',expected_revision=0)
+                    await manage_policy(db,'draft',dict(algorithm_policy='aviator-churn-pilot/1',min_confidence=.3,max_manifest_age_seconds=600,issuer='synthetic-upstream',required_sources=['synthetic-1c']),actor='synthetic-admin',expected_revision=0)
                     await manage_policy(db,'approve',{'confirm_business_approval':True},actor='synthetic-admin',expected_revision=1);await db.commit()
                 expected=[dict(client_key='synthetic customer',day=r['sale_date'],checks=1,positive_checks=1,revenue='1000.00') for r in sorted(rows,key=lambda r:r['sale_date'])]
                 assignments=[dict(subject_hash=digest(candidate.client_key),client_id='client-100',manager_id=3,revision=1)]
@@ -147,7 +147,7 @@ def test_native_shadow_existing_admin_review_and_external_identity(monkeypatch):
                 assert action('inspect')['tasks']==0
                 assert api(manager,'manager_bindings.php',dict(designation='Legacy Owner',web_user_id=3,expected_revision=None))[0]==403
                 status,response=api(admin,'manager_bindings.php',dict(designation='Legacy Owner',web_user_id=3,expected_revision=None));assert status==200,response
-                status,response=api(admin,'analytics_policy_admin.php',dict(revision=1,action='save_draft',min_confidence=.5,types=[dict(signal_type='CHURN_RISK',enabled=True,priority='HIGH',due_days=1),dict(signal_type='PURCHASE_OVERDUE',enabled=False,priority=None,due_days=None)]));assert status==200,response
+                status,response=api(admin,'analytics_policy_admin.php',dict(revision=1,action='save_draft',min_confidence=.3,types=[dict(signal_type='CHURN_RISK',enabled=True,priority='HIGH',due_days=3),dict(signal_type='PURCHASE_OVERDUE',enabled=False,priority=None,due_days=None)]));assert status==200,response
                 status,response=api(admin,'analytics_policy_admin.php',dict(revision=2,action='approve',confirm_business_approval=True));assert status==200,response
                 status,response=api(admin,'analytics_admin.php',dict(signal_key=external['signal_key'],action='dry_run'));assert status==200 and 'BUDGET_NOT_APPROVED' in response['decision']['reasons']
                 status,response=api(admin,'analytics_budget.php',dict(revision=1,approved=True,max_tasks=1));assert status==200,response

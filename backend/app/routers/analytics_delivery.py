@@ -80,7 +80,8 @@ async def automation_available(db):
     from app.config import settings
     from app.models import AnalyticsAutomationPolicy
     policy=await db.get(AnalyticsAutomationPolicy,1)
-    if not settings.analytics_automation_enabled or not policy or not policy.enabled or not policy.approved:
+    if (not settings.analytics_automation_enabled or not policy or not policy.enabled or not policy.approved
+            or policy.settings_json.get('algorithm_policy')!='aviator-churn-pilot/1'):
         raise HTTPException(503,'Automation release disabled')
     return policy
 
@@ -89,7 +90,7 @@ async def automation_available(db):
 async def automation_publications(after:int=Query(0,ge=0),page_size:int=Query(50,ge=1,le=100),db:AsyncSession=Depends(get_db)):
     from app.models import AnalyticsAutomationRelease as Release
     policy=await automation_available(db)
-    rows=list((await db.scalars(select(Release).where(Release.sequence>after,Release.metadata_json['policy_revision'].as_integer()==policy.revision).order_by(Release.sequence).limit(page_size+1))).all())
+    rows=list((await db.scalars(select(Release).where(Release.sequence>after,Release.metadata_json['policy_revision'].as_integer()==policy.revision,Release.metadata_json['algorithm_policy'].as_string()=='aviator-churn-pilot/1').order_by(Release.sequence).limit(page_size+1))).all())
     more=len(rows)>page_size;rows=rows[:page_size]
     return dict(items=[dict(sequence=r.sequence,run_id=r.id) for r in rows],next_after=rows[-1].sequence if more else None,automation_allowed=True)
 
@@ -100,6 +101,7 @@ async def automation_changes(run_id:str,after:int=Query(0,ge=0),page_size:int=Qu
     policy=await automation_available(db)
     release=await db.get(Release,run_id)
     if not release:raise HTTPException(404,'Release not found')
+    if release.metadata_json.get('algorithm_policy')!='aviator-churn-pilot/1':raise HTTPException(410,'Release algorithm policy incompatible')
     if release.metadata_json['policy_revision']!=policy.revision:raise HTTPException(410,'Release policy revoked')
     from datetime import datetime, timezone, timedelta
     from zoneinfo import ZoneInfo

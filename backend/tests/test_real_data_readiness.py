@@ -22,7 +22,7 @@ def test_store_inactivity_does_not_use_global_rfm_or_other_buyer_groups(monkeypa
             rows=[]
             for name in ['Fixture Alpha','Retail','Ambiguous']:
                 for n in range(21):
-                    rows.append(dict(id=len(rows)+1,sale_date=day-timedelta(days=30+n*5),
+                    rows.append(dict(id=len(rows)+1,sale_date=day-timedelta(days=45+n*5),
                         document_number=str(len(rows)),client=name,department='Авиаторов',
                         total_amount=1000,fingerprint='fixture-'+str(len(rows)),import_id=1))
             rows.append(dict(id=len(rows)+1,sale_date=day,document_number='other-store',client='Fixture Alpha',
@@ -35,7 +35,7 @@ def test_store_inactivity_does_not_use_global_rfm_or_other_buyer_groups(monkeypa
                 assert next(r for r in global_rows if r['client_key']=='fixture alpha')['last_purchase']==day
                 signal=(await db.scalars(select(AnalyticsSignal))).one()
                 assert signal.analytical_client_key=='fixture alpha' and signal.signal_type=='CHURN_RISK'
-                assert signal.anchor_purchase_date==day-timedelta(days=30)
+                assert signal.anchor_purchase_date==day-timedelta(days=45)
                 run=await db.get(AnalyticsSignalRun,result['run_id'])
                 assert run.metadata_json['scope']['department']=='Авиаторов'
                 assert run.metadata_json['source_decision']['coverage_status']=='UNKNOWN'

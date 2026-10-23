@@ -16,7 +16,7 @@ def test_operator_policy_and_identity_are_explicit_versioned_and_fail_closed():
                 with pytest.raises(ValueError):await manage_policy(db,'approve',{'confirm_business_approval':True},actor='synthetic-operator',expected_revision=1)
                 await db.rollback()
             async with factory() as db:
-                draft=await manage_policy(db,'draft',dict(min_confidence=.5,max_manifest_age_seconds=600,issuer='fixture',required_sources=['fixture-1c']),actor='synthetic-operator',expected_revision=1)
+                draft=await manage_policy(db,'draft',dict(algorithm_policy='aviator-churn-pilot/1',min_confidence=.5,max_manifest_age_seconds=600,issuer='fixture',required_sources=['fixture-1c']),actor='synthetic-operator',expected_revision=1)
                 await db.commit()
             for value in (1, 'true', None):
                 async with factory() as db:
