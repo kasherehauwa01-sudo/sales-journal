@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+from datetime import datetime,timezone
 from fastapi import APIRouter,Depends,HTTPException
 from openpyxl import Workbook
 from pydantic import BaseModel,Field
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import HorecaReport,Scenario,SmtpConfig
 from app.services.email_recipients import parse_recipient_emails
+from app.services.horeca_links import horeca_link_expires_at
 from app.services.horeca_report_utils import limit_horeca_products,omir_codes
 from app.services.scenarios import _send
 from app.services.vrcatalog import VrCatalogError,get_catalog_images
@@ -18,6 +20,10 @@ class SendSelection(BaseModel):keys:list[str]=Field(min_length=1,max_length=1000
 async def _report(token:str,db):
  report=await db.scalar(select(HorecaReport).where(HorecaReport.token==token))
  if not report:raise HTTPException(404,"Отчет не найден или ссылка недействительна")
+ try:expires_at=horeca_link_expires_at(report.token,report.created_at)
+ except ValueError:raise HTTPException(404,"Отчет не найден или ссылка недействительна") from None
+ if expires_at is not None and datetime.now(timezone.utc)>=expires_at:
+  raise HTTPException(410,"Срок действия ссылки истёк. Ссылка действительна 10 суток (240 часов) с момента создания.")
  return report
 
 @router.get("/{token}")
