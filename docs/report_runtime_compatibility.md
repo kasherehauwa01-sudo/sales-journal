@@ -70,3 +70,22 @@ procedure. This report change adds no migration. Do not switch blindly to an old
 image tag or use the container startup as an unreviewed migration mechanism.
 
 No production update was performed during this fix.
+
+## Empty and single product-sales selections
+
+Product-sales requests now preserve the legacy wire shape when it is sufficient:
+no selected values become JSON null, one value becomes a string (e.g. buyer_type
+"Розница"), and two or more values remain an array. The UI state remains an array
+and no selected values are discarded. The same serializer is used by report
+requests, details and Excel from the successful snapshot. There is no automatic
+retry or fallback that replaces multiple selections with just the first value.
+
+This removes the string-only backend's validation rejection for empty/single
+manager and buyer filters. Full multiple selections still require the compatible
+backend schema described above. It does not modify a running server's SQL or
+Docker image, and a production report calculation has not been run here.
+
+Validation for this follow-up: 95 frontend tests and 25 targeted backend tests
+passed, including null/string/array request shapes, the old nullable string
+contract, and retail queries against the current backend endpoints using both
+single and array selections. Frontend build and diff check passed.

@@ -219,7 +219,8 @@ class ProductDb:
         return Rows(rows)
 
 
-def test_product_sales_retail_endpoints_do_not_expand_40000_clients(monkeypatch):
+@pytest.mark.parametrize("selection", ["Розница", ["Розница"]])
+def test_product_sales_retail_endpoints_do_not_expand_40000_clients(monkeypatch, selection):
     async def buyers(value):
         assert value == "Розница"
         return ["Retail customer"] + [f"other-{i}" for i in range(40000)]
@@ -236,7 +237,7 @@ def test_product_sales_retail_endpoints_do_not_expand_40000_clients(monkeypatch)
         return db
 
     app.dependency_overrides[get_db] = database
-    payload = dict(date_from="2026-09-01", date_to="2026-09-30", buyer_type=["Розница"],
+    payload = dict(date_from="2026-09-01", date_to="2026-09-30", buyer_type=selection,
                    products=[dict(code="001", article="A1", name="Item")])
 
     async def run():
@@ -275,3 +276,26 @@ def test_old_backend_rejects_array_filters_before_loading_sales():
     assert response.status_code == 422
     assert {tuple(issue["loc"]) for issue in response.json()["detail"]} == {("body", "manager"), ("body", "buyer_type")}
     assert all(issue["type"] == "string_type" for issue in response.json()["detail"])
+
+
+def test_old_report_contract_accepts_null_and_single_retail():
+    from pydantic import BaseModel
+
+    class OldRequest(BaseModel):
+        manager: str | None = None
+        buyer_type: str | None = None
+
+    app = FastAPI()
+
+    @app.post("/reports/product-sales/summary")
+    async def old_report(payload: OldRequest):
+        return {"manager": payload.manager, "buyer_type": payload.buyer_type}
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            for value in (None, "Розница"):
+                response = await client.post("/reports/product-sales/summary", json={"manager": None, "buyer_type": value})
+                assert response.status_code == 200
+                assert response.json() == {"manager": None, "buyer_type": value}
+
+    asyncio.run(run())
