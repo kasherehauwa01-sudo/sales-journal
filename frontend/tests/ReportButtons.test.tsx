@@ -108,10 +108,10 @@ function fixture(path: string): unknown {
   const route = path.split("?")[0];
   if (route.includes("/sales-dynamics/client-directory")) return {items:["Клиент1","Клиент2"],next_cursor:null};
   if (route === "/reports/brands") return ["Бренд1", "Бренд2"];
-  if (route === "/filters") return { departments: ["Магазин1"], clients: ["Клиент1","Клиент2"] };
+  if (route === "/filters") return { departments: ["Магазин1", "Магазин2"], clients: ["Клиент1","Клиент2"] };
   if (route.endsWith("/managers") && !route.includes("product-sales"))
     return ["Менеджер1", "Менеджер2"];
-  if (route.endsWith("/buyer-types")) return ["Розница"];
+  if (route.endsWith("/buyer-types")) return ["Розница", "Оптовик"];
   if (route === "/reports/product-sales/sets")
     return [{ id: 1, name: "Набор1", products: [product] }];
   if (route === "/reports/rfm")
@@ -633,16 +633,23 @@ it("category revenue chart switches year data without new requests", async () =>
   expect(heavy).toHaveBeenCalledTimes(1);
 });
 
-for (const page of pages.filter(page => ["Товары", "Категории", "Магазины"].includes(page.name)))
+for (const page of pages.filter(page => ["Товары", "Категории", "Магазины", "Динамика"].includes(page.name)))
   it(`${page.name}: sends multiple managers, retail and brand in the generated snapshot`, async () => {
     const { Component } = page;
     render(<Component />);
     await prepare(page.name);
     await selectManagers(["Менеджер1", "Менеджер2"]);
-    for (const [title, values] of [["Вид покупателя", ["Розница"]], ["Бренд", ["Бренд1", "Бренд2"]]] as const) {
+    for (const [title, values] of [["Вид покупателя", ["Розница", "Оптовик"]], ["Бренд", ["Бренд1", "Бренд2"]]] as const) {
       const label = screen.getByText(title, { selector: "label" });
       fireEvent.click(within(label).getByRole("button"));
       for (const value of values) fireEvent.click(await within(label).findByRole("checkbox", { name: value }));
+      fireEvent.mouseDown(document.body);
+    }
+    if (page.name === "Динамика") {
+      const department = screen.getByText("Подразделение", { selector: "label" });
+      fireEvent.click(within(department).getByRole("button"));
+      fireEvent.click(await within(department).findByRole("checkbox", { name: "Магазин1" }));
+      fireEvent.click(await within(department).findByRole("checkbox", { name: "Магазин2" }));
       fireEvent.mouseDown(document.body);
     }
     expect(heavy).not.toHaveBeenCalled();
@@ -652,13 +659,14 @@ for (const page of pages.filter(page => ["Товары", "Категории", "
       if (init?.body) {
         const sent = JSON.parse(String(init.body));
         expect(sent.manager).toEqual(["Менеджер1", "Менеджер2"]);
-        expect(sent.buyer_type).toEqual(["Розница"]);
+        expect(sent.buyer_type).toEqual(["Розница", "Оптовик"]);
         expect(sent.brands).toEqual(["Бренд1", "Бренд2"]);
       } else {
         const sent = new URLSearchParams(path.split("?")[1]);
         expect(sent.getAll("manager")).toEqual(["Менеджер1", "Менеджер2"]);
-        expect(sent.getAll("buyer_type")).toEqual(["Розница"]);
+        expect(sent.getAll("buyer_type")).toEqual(["Розница", "Оптовик"]);
         expect(sent.getAll("brands")).toEqual(["Бренд1", "Бренд2"]);
+        if (page.name === "Динамика") expect(sent.getAll("departments")).toEqual(["Магазин1", "Магазин2"]);
       }
     }
   });

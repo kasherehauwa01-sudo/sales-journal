@@ -66,6 +66,7 @@ type Parameters = {
   compare_to?: string;
   departments: string[];
   managers: string[];
+  buyer_types: string[];
   brands: string[];
   manufacturers: string[];
   subcategories: string[];
@@ -227,6 +228,7 @@ export function ProductAnalyticsPage() {
     [debouncedManufacturerSearch, setDebouncedManufacturerSearch] =
       useState(""),
     [managers, setManagers] = useState<string[]>([]),
+    [buyerTypes, setBuyerTypes] = useState<string[]>([]),
     [subcategories, setSubcategories] = useState<string[]>([]),
     [subcategorySearch, setSubcategorySearch] = useState(""),
     [debouncedSubcategorySearch, setDebouncedSubcategorySearch] = useState(""),
@@ -238,6 +240,7 @@ export function ProductAnalyticsPage() {
   const { data: managerOptions } = useApi<string[]>(
     "/reports/product-analytics/manager-options",
   );
+  const { data: buyerTypeOptions, error: buyerTypeError } = useApi<string[]>("/integrations/clients-vr/buyer-types");
   useEffect(() => {
     const timer = setTimeout(
       () => setDebouncedSubcategorySearch(subcategorySearch),
@@ -291,6 +294,7 @@ export function ProductAnalyticsPage() {
     compare_to: manualCompare ? compareTo : undefined,
     departments,
     managers,
+    buyer_types: buyerTypes,
     brands,
     manufacturers,
     subcategories,
@@ -628,6 +632,11 @@ export function ProductAnalyticsPage() {
               showActions
               emptyText="Менеджеры не найдены"
             />
+          </label>
+          <label>
+            Вид покупателя
+            <MultiSelect options={buyerTypeOptions || []} value={buyerTypes} onChange={setBuyerTypes} placeholder="Все виды покупателей" searchable showActions />
+            {buyerTypeError && <small role="alert">Не удалось загрузить виды покупателей: {buyerTypeError}</small>}
           </label>
           <label>
             Подкатегория
