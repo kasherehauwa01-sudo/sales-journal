@@ -58,3 +58,24 @@ Validation for this checkpoint:
   not replace PostgreSQL integration/performance testing on the target schema.
 
 No migrations, production access, deployment, automation or Calltrack changes.
+
+
+## Runtime follow-up: brands and request validation
+
+The supplied runtime access log shows `/api/reports/brands` returning 404 while
+`/api/reports/product-analytics/catalog-options/brand` returns 200. Shared brand
+filters now use the existing catalogue options endpoint with debounced search,
+checkboxes and retained selections. The old brands route is a compatibility alias
+to the same configured source rather than a sales-matched subset.
+
+The observed product-sales summary failure is HTTP 422, not HTTP 500. The response
+body was not supplied, so the exact rejected field must be checked; a stale
+string-only filter schema rejects the frontend arrays with the same 422 before
+SQL runs. Current source accepts strings and arrays. A regression reproduces the
+old contract rejection, and the frontend explains it without exposing validation
+inputs or silently flattening selections. See `report_runtime_compatibility.md`
+for safe read-only image/schema checks and the requirement to update frontend
+and backend together. No production image was modified here.
+
+Follow-up validation: 68 backend tests passed, 1 PostgreSQL-dependent test skipped;
+92 frontend tests passed; frontend build, OpenAPI generation and diff check passed.

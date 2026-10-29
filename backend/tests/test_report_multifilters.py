@@ -252,3 +252,26 @@ def test_product_sales_retail_endpoints_do_not_expand_40000_clients(monkeypatch)
 
     asyncio.run(run())
     assert db.executions >= 12
+
+
+def test_old_backend_rejects_array_filters_before_loading_sales():
+    from pydantic import BaseModel
+
+    class OldRequest(BaseModel):
+        manager: str | None = None
+        buyer_type: str | None = None
+
+    app = FastAPI()
+
+    @app.post("/reports/product-sales/summary")
+    async def old_report(payload: OldRequest):
+        raise AssertionError("Old backend must reject this before executing a report")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            return await client.post("/reports/product-sales/summary", json={"manager": [], "buyer_type": ["Розница"]})
+
+    response = asyncio.run(run())
+    assert response.status_code == 422
+    assert {tuple(issue["loc"]) for issue in response.json()["detail"]} == {("body", "manager"), ("body", "buyer_type")}
+    assert all(issue["type"] == "string_type" for issue in response.json()["detail"])
