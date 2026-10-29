@@ -21,3 +21,11 @@ async def suggestions(q:str=Query(min_length=1,max_length=200),field:str=Query("
  if field=="client":return clients
  groups=[clients,await matches(Sale.phone,"Телефон"),await matches(Sale.document_number,"Документ")]
  return [item for index in range(10) for group in groups for item in group[index:index+1]][:10]
+
+@router.get("/reports/brands")
+async def report_brands(db:AsyncSession=Depends(get_db)):
+ from app.models import CatalogProduct, CatalogLookup
+ return list((await db.scalars(select(CatalogProduct.brand).join(
+  CatalogLookup, CatalogLookup.product_id == CatalogProduct.product_id
+ ).where(CatalogLookup.status == "matched", CatalogProduct.brand.is_not(None),
+  func.trim(CatalogProduct.brand) != "").distinct().order_by(CatalogProduct.brand))).all())

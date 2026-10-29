@@ -70,8 +70,8 @@ class Request(BaseModel):
     date_from: date
     date_to: date
     departments: list[str] = Field(default_factory=list)
-    manager: str | None = None
-    buyer_type: str | None = None
+    manager: str | list[str] | None = None
+    buyer_type: str | list[str] | None = None
     category: str | None = None
     brand: str | None = None
     manufacturer: str | None = None

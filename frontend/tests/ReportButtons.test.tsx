@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RfmReportPage } from "../src/pages/RfmReportPage";
@@ -106,6 +107,7 @@ const metrics = Object.fromEntries(
 function fixture(path: string): unknown {
   const route = path.split("?")[0];
   if (route.includes("/sales-dynamics/client-directory")) return {items:["Клиент1","Клиент2"],next_cursor:null};
+  if (route === "/reports/brands") return ["Бренд1", "Бренд2"];
   if (route === "/filters") return { departments: ["Магазин1"], clients: ["Клиент1","Клиент2"] };
   if (route.endsWith("/managers") && !route.includes("product-sales"))
     return ["Менеджер1", "Менеджер2"];
@@ -314,9 +316,18 @@ async function prepare(name: string) {
     fireEvent.click(await screen.findByRole("button", { name: /Набор1/ }));
   else if (name === "RFM")
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-  else await screen.findByRole("option", { name: "Менеджер1" });
+  else await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/clients-vr/managers"))).toBe(true));
+}
+async function selectManagers(values: string[]) {
+  const label = screen.getByText("Менеджер", { selector: "label" });
+  fireEvent.click(within(label).getByRole("button"));
+  fireEvent.click(within(label).getByRole("button", { name: "Сбросить" }));
+  for (const value of values)
+    fireEvent.click(await within(label).findByRole("checkbox", { name: value }));
+  fireEvent.mouseDown(document.body);
 }
 async function editFilter(page:{name:string;label:string},value:string){
+  if (page.label === "Менеджер") { await selectManagers(value ? [value] : []); return; }
   if(page.name!=="Динамика"){fireEvent.change(screen.getByLabelText(page.label),{target:{value}});return;}
   fireEvent.click(screen.getByRole("button",{name:"Клиент"}));
   const clear=screen.queryByRole("button",{name:"Очистить"});if(clear)fireEvent.click(clear);
@@ -479,37 +490,25 @@ it("product-sales validates a missing selection before requesting reports", asyn
 });
 it("category details retain report filters when draft changes", async () => {
   render(<CategoryAnalyticsReportPage />);
-  await screen.findByRole("option", { name: "Менеджер1" });
-  fireEvent.change(screen.getByLabelText("Менеджер"), {
-    target: { value: "Менеджер1" },
-  });
+  await selectManagers(["Менеджер1"]);
   fireEvent.click(build());
   await finish(1);
-  fireEvent.change(screen.getByLabelText("Менеджер"), {
-    target: { value: "Менеджер2" },
-  });
+  await selectManagers(["Менеджер2"]);
   fireEvent.click(screen.getByText("Категория1", { selector: "b" }));
   await screen.findByText("Детализация категории");
   const calls = () =>
     fetchMock.mock.calls.filter(([url]) => String(url).includes("/details?"));
   expect(calls()).toHaveLength(1);
   expect(decodeURIComponent(calls()[0][0])).toContain("manager=Менеджер1");
-  fireEvent.change(screen.getByLabelText("Менеджер"), {
-    target: { value: "" },
-  });
+  await selectManagers([]);
   expect(calls()).toHaveLength(1);
 });
 it("store details use the report snapshot for both requests", async () => {
   render(<StoreAnalyticsReportPage />);
-  await screen.findByRole("option", { name: "Менеджер1" });
-  fireEvent.change(screen.getByLabelText("Менеджер"), {
-    target: { value: "Менеджер1" },
-  });
+  await selectManagers(["Менеджер1"]);
   fireEvent.click(build());
   await finish(1);
-  fireEvent.change(screen.getByLabelText("Менеджер"), {
-    target: { value: "Менеджер2" },
-  });
+  await selectManagers(["Менеджер2"]);
   fireEvent.click(screen.getByText("Магазин1", { selector: "b" }));
   await screen.findByText("Детализация магазина");
   const calls = fetchMock.mock.calls.filter(([url]) =>
@@ -602,10 +601,9 @@ it("category product opens scoped sales then sale card", async () => {
     return original(url,init);
   });
   render(<CategoryAnalyticsReportPage />);
-  await screen.findByRole("option", {name:"Менеджер1"});
-  fireEvent.change(screen.getByLabelText("Менеджер"),{target:{value:"Менеджер1"}});
+  await selectManagers(["Менеджер1"]);
   fireEvent.click(build());await finish(1);
-  fireEvent.change(screen.getByLabelText("Менеджер"),{target:{value:"Менеджер2"}});
+  await selectManagers(["Менеджер2"]);
   fireEvent.click(screen.getByText("Категория1",{selector:"b"}));
   await screen.findByText("Детализация категории");
   fireEvent.keyDown(screen.getByRole("button",{name:"Продажи товара Товар1"}),{key:"Enter"});
@@ -634,3 +632,33 @@ it("category revenue chart switches year data without new requests", async () =>
   expect(chart()[0].previous_revenue).toBe(50);
   expect(heavy).toHaveBeenCalledTimes(1);
 });
+
+for (const page of pages.filter(page => ["Товары", "Категории", "Магазины"].includes(page.name)))
+  it(`${page.name}: sends multiple managers, retail and brand in the generated snapshot`, async () => {
+    const { Component } = page;
+    render(<Component />);
+    await prepare(page.name);
+    await selectManagers(["Менеджер1", "Менеджер2"]);
+    for (const [title, values] of [["Вид покупателя", ["Розница"]], ["Бренд", ["Бренд1", "Бренд2"]]] as const) {
+      const label = screen.getByText(title, { selector: "label" });
+      fireEvent.click(within(label).getByRole("button"));
+      for (const value of values) fireEvent.click(await within(label).findByRole("checkbox", { name: value }));
+      fireEvent.mouseDown(document.body);
+    }
+    expect(heavy).not.toHaveBeenCalled();
+    fireEvent.click(build());
+    await finish(page.count);
+    for (const [path, init] of heavy.mock.calls) {
+      if (init?.body) {
+        const sent = JSON.parse(String(init.body));
+        expect(sent.manager).toEqual(["Менеджер1", "Менеджер2"]);
+        expect(sent.buyer_type).toEqual(["Розница"]);
+        expect(sent.brands).toEqual(["Бренд1", "Бренд2"]);
+      } else {
+        const sent = new URLSearchParams(path.split("?")[1]);
+        expect(sent.getAll("manager")).toEqual(["Менеджер1", "Менеджер2"]);
+        expect(sent.getAll("buyer_type")).toEqual(["Розница"]);
+        expect(sent.getAll("brands")).toEqual(["Бренд1", "Бренд2"]);
+      }
+    }
+  });

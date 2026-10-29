@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
+from app.services.report_filters import brand_sale_conditions, brand_item_condition, report_sale_amount, client_names_condition
 from app.services.clients_vr import ClientsVrError
 from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import dynamics_comparison_period
@@ -40,17 +41,18 @@ def _conditions(
     department: str | None,
     clients: list[str] | None,
     client: str | None = None,
-):
+    brands: list[str] | None = None):
     result = [Sale.sale_date >= start, Sale.sale_date <= end]
     if department:
         result.append(Sale.department == department)
     if clients is not None:
         normalized = [value.strip().lower() for value in clients]
         result.append(
-            func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False
+            client_names_condition(Sale.client, normalized) if normalized else False
         )
     if client:
         result.append(func.lower(func.trim(Sale.client)) == client.strip().casefold())
+    result.extend(brand_sale_conditions(brands) if brands else [])
     return result
 
 
@@ -60,18 +62,18 @@ def _sales_rows(
     department: str | None,
     clients: list[str] | None,
     client: str | None = None,
-):
+    brands: list[str] | None = None):
     """Сначала агрегирует позиции только для отфильтрованных продаж, сохраняя одну строку на чек."""
     return (
         select(
             Sale.id,
             Sale.sale_date,
-            Sale.total_amount,
+            report_sale_amount(brands).label("total_amount"),
             func.coalesce(func.sum(SaleItem.quantity), 0).label("items_count"),
         )
         .outerjoin(SaleItem, SaleItem.sale_id == Sale.id)
-        .where(*_conditions(start, end, department, clients, client))
-        .group_by(Sale.id, Sale.sale_date, Sale.total_amount)
+        .where(*_conditions(start, end, department, clients, client, **({"brands": brands} if brands else {})), brand_item_condition(brands))
+        .group_by(Sale.id, Sale.sale_date, report_sale_amount(brands))
         .subquery()
     )
 
@@ -83,8 +85,8 @@ async def _metrics(
     department: str | None,
     clients: list[str] | None,
     client: str | None = None,
-):
-    sales = _sales_rows(start, end, department, clients, client)
+    brands: list[str] | None = None):
+    sales = _sales_rows(start, end, department, clients, client, **({"brands": brands} if brands else {}))
     row = (
         await db.execute(
             select(
@@ -106,8 +108,8 @@ async def _chart(
     clients: list[str] | None,
     client: str | None = None,
     all_groupings: bool = False,
-):
-    sales = _sales_rows(start, end, department, clients, client)
+    brands: list[str] | None = None):
+    sales = _sales_rows(start, end, department, clients, client, **({"brands": brands} if brands else {}))
     bucket = func.date_trunc(
         "day" if all_groupings else group_by, sales.c.sale_date
     ).label("period")
@@ -148,8 +150,8 @@ async def report(
     ),
     group_by: str | None = Query(None, pattern="^(day|week|month)$"),
     department: str | None = None,
-    manager: str | None = None,
-    buyer_type: str | None = None,
+    manager: Annotated[list[str] | None, Query()] = None,
+    buyer_type: Annotated[list[str] | None, Query()] = None,
     client: str | None = None,
     comparison_mode: str = Query(
         "previous_period", pattern="^(previous_period|previous_year)$"
@@ -160,7 +162,7 @@ async def report(
     selected_clients: Annotated[
         list[str] | None, Query(alias="clients", max_length=500)
     ] = None,
-):
+    brands: Annotated[list[str] | None, Query()] = None):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
@@ -183,7 +185,8 @@ async def report(
         )
         clients = sorted(chosen if allowed is None else chosen & allowed)
     current = await _metrics(
-        db, effective_from, effective_to, department, clients, client
+        db, effective_from, effective_to, department, clients, client,
+        **({"brands": brands} if brands else {}),
     )
     current_points = await _chart(
         db,
@@ -194,7 +197,7 @@ async def report(
         clients,
         client,
         **({"all_groupings": True} if include_groupings else {}),
-    )
+     **({"brands": brands} if brands else {}))
     comparisons = {}
     for mode in (
         ("previous_period", "previous_year") if include_both else (comparison_mode,)
@@ -202,7 +205,7 @@ async def report(
         start, end = dynamics_comparison_period(
             effective_from, effective_to, mode, period_kind
         )
-        previous = await _metrics(db, start, end, department, clients, client)
+        previous = await _metrics(db, start, end, department, clients, client, **({"brands": brands} if brands else {}))
         previous_points = await _chart(
             db,
             start,
@@ -212,7 +215,7 @@ async def report(
             clients,
             client,
             **({"all_groupings": True} if include_groupings else {}),
-        )
+         **({"brands": brands} if brands else {}))
         comparisons[mode] = {
             "period": {"start": start, "end": end},
             "metrics": {

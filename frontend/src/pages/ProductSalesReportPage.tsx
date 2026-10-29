@@ -1,9 +1,10 @@
+import { BrandFilter } from "../components/BrandFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload,ReportHttpError} from '../hooks/useExplicitReport';
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {Download,FolderOpen,Plus,Save,Trash2,X} from 'lucide-react';import {useEffect,useMemo,useState} from 'react';
 import {api,query} from '../api/client';import {CatalogTreeMultiSelect} from '../components/CatalogTreeMultiSelect';import {MultiSelect} from '../components/MultiSelect';import {Empty,ErrorBox,Loading} from '../components/States';import {PeriodPicker,type Period} from '../components/PeriodPicker';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
-type Product={key:string;article?:string;code?:string;name:string;image_url?:string|null};type ProductPage={items:Product[];total:number;page:number;pages:number};type Filters={period:Period;date_from:string;date_to:string;manager:string;buyer_type:string;departments:string[];compare:boolean;comparison_mode:'previous_period'|'previous_year';products:Product[]};type Report={summary:any;products:any[];dynamics:any[];managers:any[];departments:any[]};type SavedSet={id:number;name:string;products:Product[]};type CatalogFilterDef={key:string;label:string};
+type Product={key:string;article?:string;code?:string;name:string;image_url?:string|null};type ProductPage={items:Product[];total:number;page:number;pages:number};type Filters={period:Period;date_from:string;date_to:string;manager:string[];buyer_type:string[];brands:string[];departments:string[];compare:boolean;comparison_mode:'previous_period'|'previous_year';products:Product[]};type Report={summary:any;products:any[];dynamics:any[];managers:any[];departments:any[]};type SavedSet={id:number;name:string;products:Product[]};type CatalogFilterDef={key:string;label:string};
 const iso=(d:Date)=>d.toISOString().slice(0,10);
 function range(value:string){const now=new Date(),from=new Date(now),to=new Date(now);if(value==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(value==='week')from.setDate(from.getDate()-((from.getDay()+6)%7));if(value==='month')from.setDate(1);if(value==='previous'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {date_from:iso(from),date_to:iso(to)}}
 export function ProductSalesReportPage() {
@@ -11,8 +12,9 @@ export function ProductSalesReportPage() {
   const [filters, setFilters] = useState<Filters>({
     period: "month",
     ...initialPeriod,
-    manager: "",
-    buyer_type: "",
+    manager: [],
+    buyer_type: [],
+    brands: [],
     departments: [],
     compare: false,
     comparison_mode: "previous_period",
@@ -39,8 +41,9 @@ export function ProductSalesReportPage() {
   const payload = (f: Filters) => ({
     date_from: f.date_from,
     date_to: f.date_to,
-    manager: f.manager || null,
-    buyer_type: f.buyer_type || null,
+    manager: f.manager,
+    buyer_type: f.buyer_type,
+    brands: f.brands,
     departments: f.departments,
     compare: f.compare,
     comparison_mode: f.comparison_mode,
@@ -244,35 +247,14 @@ export function ProductSalesReportPage() {
               onChange={(period) => setFilters({ ...filters, ...period })}
             />
           </div>
+          <BrandFilter value={filters.brands} onChange={brands => setFilters({ ...filters, brands })} />
           <label>
             Менеджер
-            <select
-              value={filters.manager}
-              onChange={(e) =>
-                setFilters({ ...filters, manager: e.target.value })
-              }
-            >
-              <option value="">Все менеджеры</option>
-              {managers?.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={managers || []} value={filters.manager} onChange={value => setFilters({ ...filters, manager: value })} searchable showActions />
           </label>
           <label>
             Вид покупателя
-            <select
-              value={filters.buyer_type}
-              onChange={(e) =>
-                setFilters({ ...filters, buyer_type: e.target.value })
-              }
-            >
-              <option value="">Все виды покупателей</option>
-              {buyerTypes?.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
+            <MultiSelect options={buyerTypes || []} value={filters.buyer_type} onChange={value => setFilters({ ...filters, buyer_type: value })} searchable showActions />
           </label>
           <label>
             Подразделения

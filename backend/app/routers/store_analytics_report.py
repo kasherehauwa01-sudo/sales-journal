@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
+from app.services.report_filters import brand_sale_conditions, brand_item_condition, report_sale_amount, client_names_condition
 from app.services.clients_vr import ClientsVrError
 from app.services.sales_dynamics_report import dynamics_comparison_period as comparison_period
 from app.services.sales_client_filters import get_sales_filter_clients
@@ -29,17 +30,18 @@ async def _clients(db: AsyncSession, manager: str | None, buyer_type: str | None
         raise HTTPException(502, str(exc)) from exc
 
 
-def _conditions(start: date, end: date, stores: list[str], clients: list[str] | None):
+def _conditions(start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None):
     conditions = [Sale.sale_date >= start, Sale.sale_date <= end]
     if stores:
         conditions.append(Sale.department.in_(stores))
     if clients is not None:
         normalized = [value.strip().casefold() for value in clients if value.strip()]
-        conditions.append(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else false())
+        conditions.append(client_names_condition(Sale.client, normalized) if normalized else false())
+    conditions.extend(brand_sale_conditions(brands) if brands else [])
     return conditions
 
 
-def _sales(start: date, end: date, stores: list[str], clients: list[str] | None):
+def _sales(start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None):
     """Формирует по одной строке на чек после применения фильтров отчёта.
 
     Прямая группировка устраняет вложенный CTE из прежней реализации: такой
@@ -48,41 +50,41 @@ def _sales(start: date, end: date, stores: list[str], clients: list[str] | None)
     return select(
         Sale.id, Sale.sale_date, Sale.document_number, Sale.client,
         func.coalesce(Sale.department, "Без подразделения").label("store"),
-        Sale.total_amount, func.coalesce(Sale.discount_percent, 0).label("discount"),
+        report_sale_amount(brands).label("total_amount"), func.coalesce(Sale.discount_percent, 0).label("discount"),
         func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
     ).outerjoin(
         SaleItem, SaleItem.sale_id == Sale.id,
     ).where(
-        *_conditions(start, end, stores, clients),
+        *_conditions(start, end, stores, clients, **({"brands": brands} if brands else {})), brand_item_condition(brands),
     ).group_by(
         Sale.id,
         Sale.sale_date,
         Sale.document_number,
         Sale.client,
         Sale.department,
-        Sale.total_amount,
+        report_sale_amount(brands),
         Sale.discount_percent,
     ).subquery()
 
 
-async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str], clients: list[str] | None):
+async def _aggregates(db: AsyncSession, start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None):
     """Считает продажи и товары независимыми простыми агрегатами.
 
     Так сумма чека не размножается на число его позиций, а PostgreSQL не
     приходится выполнять вложенную агрегацию сгруппированного подзапроса.
     """
     store = func.coalesce(Sale.department, "Без подразделения").label("store")
-    conditions = _conditions(start, end, stores, clients)
+    conditions = _conditions(start, end, stores, clients, **({"brands": brands} if brands else {}))
     sales_rows = (await db.execute(select(
         store,
-        func.coalesce(func.sum(Sale.total_amount), 0).label("revenue"),
+        func.coalesce(func.sum(report_sale_amount(brands)), 0).label("revenue"),
         func.count(Sale.id).label("checks"),
         func.coalesce(func.sum(Sale.discount_percent), 0).label("discount_sum"),
     ).where(*conditions).group_by(store))).all()
     item_rows = (await db.execute(select(
         store,
         func.coalesce(func.sum(SaleItem.quantity), 0).label("items"),
-    ).select_from(SaleItem).join(Sale).where(*conditions).group_by(store))).all()
+    ).select_from(SaleItem).join(Sale).where(*conditions, brand_item_condition(brands)).group_by(store))).all()
     items_by_store = {row.store: float(row.items) for row in item_rows}
     return [
         {
@@ -102,7 +104,7 @@ def _total(rows: list[dict]):
     return calculated_store_metrics(sum(x["revenue"] for x in rows), sum(x["checks"] for x in rows), sum(x["items"] for x in rows), sum(x["average_discount"] * x["checks"] for x in rows))
 
 
-async def _scope(date_from: date, date_to: date, period_kind: str, comparison_mode: str, stores: list[str], manager: str | None, buyer_type: str | None, db: AsyncSession):
+async def _scope(date_from: date, date_to: date, period_kind: str, comparison_mode: str, stores: list[str], manager: str | None, buyer_type: str | None, db: AsyncSession, brands: list[str] | None = None):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
@@ -111,14 +113,14 @@ async def _scope(date_from: date, date_to: date, period_kind: str, comparison_mo
         raise HTTPException(422, warning or "В выбранном периоде пока нет данных")
     previous_from, previous_to = comparison_period(current_from, current_to, comparison_mode, period_kind)
     clients = await _clients(db, manager, buyer_type)
-    current = await _aggregates(db, current_from, current_to, stores, clients)
-    previous = await _aggregates(db, previous_from, previous_to, stores, clients)
+    current = await _aggregates(db, current_from, current_to, stores, clients, **({"brands": brands} if brands else {}))
+    previous = await _aggregates(db, previous_from, previous_to, stores, clients, **({"brands": brands} if brands else {}))
     return current_from, current_to, previous_from, previous_to, warning, clients, current, previous
 
 
 @router.get("")
-async def report(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period", pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db), include_both: Annotated[bool, Query()] = False):
-    start, end, previous_start, previous_end, warning, clients, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db)
+async def report(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period", pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, db: AsyncSession = Depends(get_db), include_both: Annotated[bool, Query()] = False, brands: Annotated[list[str] | None, Query()] = None):
+    start, end, previous_start, previous_end, warning, clients, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db, **({"brands": brands} if brands else {}))
     def comparison(first, last, rows):
         return {"period": {"start": first, "end": last}, "metrics": compare_metrics(_total(current), _total(rows)), "stores": merge_store_rows(current, rows)}
     primary = comparison(previous_start, previous_end, previous)
@@ -126,21 +128,21 @@ async def report(date_from: date, date_to: date, period_kind: str = "custom", co
     if include_both:
         other_mode = "previous_year" if comparison_mode == "previous_period" else "previous_period"
         other_start, other_end = comparison_period(start, end, other_mode, period_kind)
-        other = previous if (other_start, other_end) == (previous_start, previous_end) else await _aggregates(db, other_start, other_end, stores, clients)
+        other = previous if (other_start, other_end) == (previous_start, previous_end) else await _aggregates(db, other_start, other_end, stores, clients, **({"brands": brands} if brands else {}))
         result["comparisons"] = {comparison_mode: primary, other_mode: comparison(other_start, other_end, other)}
     return result
 
 
 @router.get("/stores/{store}/dynamics")
-async def dynamics(store: str, date_from: date, date_to: date, group_by: str | None = Query(None, pattern="^(day|week|month)$"), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
-    clients = await _clients(db, manager, buyer_type); grouping = group_by or default_grouping(date_from, date_to); sales = _sales(date_from, date_to, [store], clients); bucket = func.date_trunc(grouping, sales.c.sale_date).label("period")
+async def dynamics(store: str, date_from: date, date_to: date, group_by: str | None = Query(None, pattern="^(day|week|month)$"), manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, db: AsyncSession = Depends(get_db), brands: Annotated[list[str] | None, Query()] = None):
+    clients = await _clients(db, manager, buyer_type); grouping = group_by or default_grouping(date_from, date_to); sales = _sales(date_from, date_to, [store], clients, **({"brands": brands} if brands else {})); bucket = func.date_trunc(grouping, sales.c.sale_date).label("period")
     rows = (await db.execute(select(bucket, func.sum(sales.c.total_amount).label("revenue"), func.count(sales.c.id).label("checks")).group_by(bucket).order_by(bucket))).all()
     return {"group_by": grouping, "points": [{"period": x.period.date(), "revenue": float(x.revenue or 0), "checks": x.checks, "average_check": float(x.revenue or 0) / x.checks if x.checks else 0} for x in rows]}
 
 
 @router.get("/stores/{store}/sales")
-async def store_sales(store: str, date_from: date, date_to: date, manager: str | None = None, buyer_type: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db)):
-    clients = await _clients(db, manager, buyer_type); sales = _sales(date_from, date_to, [store], clients); total = await db.scalar(select(func.count()).select_from(sales)) or 0
+async def store_sales(store: str, date_from: date, date_to: date, manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db), brands: Annotated[list[str] | None, Query()] = None):
+    clients = await _clients(db, manager, buyer_type); sales = _sales(date_from, date_to, [store], clients, **({"brands": brands} if brands else {})); total = await db.scalar(select(func.count()).select_from(sales)) or 0
     rows = (await db.execute(select(sales).order_by(sales.c.sale_date.desc(), sales.c.id.desc()).offset((page - 1) * page_size).limit(page_size))).all()
     return {"items": [{**dict(x._mapping), "total_amount": float(x.total_amount), "items": float(x.items), "discount": float(x.discount)} for x in rows], "total": total, "page": page, "pages": max(1, (total + page_size - 1) // page_size)}
 
@@ -153,8 +155,8 @@ def _sheet(book, title, headers, rows):
 
 
 @router.get("/export")
-async def export(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period",pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: str | None = None, buyer_type: str | None = None, db: AsyncSession = Depends(get_db)):
-    start, end, previous_start, previous_end, _, clients, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db); merged = merge_store_rows(current, previous); totals = compare_metrics(_total(current), _total(previous)); sales = _sales(start, end, stores, clients); details = (await db.execute(select(sales).order_by(sales.c.store, sales.c.sale_date))).all(); book = Workbook(); book.remove(book.active)
+async def export(date_from: date, date_to: date, period_kind: str = "custom", comparison_mode: str = Query("previous_period",pattern="^(previous_period|previous_year)$"), stores: list[str] = Query(default=[]), manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, db: AsyncSession = Depends(get_db), brands: Annotated[list[str] | None, Query()] = None):
+    start, end, previous_start, previous_end, _, clients, current, previous = await _scope(date_from, date_to, period_kind, comparison_mode, stores, manager, buyer_type, db, **({"brands": brands} if brands else {})); merged = merge_store_rows(current, previous); totals = compare_metrics(_total(current), _total(previous)); sales = _sales(start, end, stores, clients, **({"brands": brands} if brands else {})); details = (await db.execute(select(sales).order_by(sales.c.store, sales.c.sale_date))).all(); book = Workbook(); book.remove(book.active)
     names = {"revenue": "Выручка", "checks": "Количество чеков", "average_check": "Средний чек", "items": "Продано товаров", "items_per_check": "Товаров в чеке", "average_discount": "Средняя скидка"}
     headers = ["Магазин"] + [name for key in METRIC_KEYS for name in (f"{names[key]}: текущий", f"{names[key]}: предыдущий", f"{names[key]}: изменение, %")]
     _sheet(book, "Магазины", headers, [[row["store"]] + [value for key in METRIC_KEYS for value in (row["metrics"][key]["current"], row["metrics"][key]["previous"], row["metrics"][key]["change_percent"])] for row in merged])
