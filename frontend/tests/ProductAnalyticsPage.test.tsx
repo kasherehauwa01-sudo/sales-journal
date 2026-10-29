@@ -104,6 +104,8 @@ beforeEach(() => {
       return Promise.resolve(json({ departments: ["Магазин A"] }));
     if (url.includes("/catalog-status"))
       return Promise.resolve(json({ state: { completed: true, last_full_success_at: "2026-10-10", last_success_at: "2026-10-10" } }));
+    if (url.includes("/clients-vr/buyer-types"))
+      return Promise.resolve(json(["Розница", "Оптовик", "Корпоративный"]));
     if (url.includes("/manager-options"))
       return Promise.resolve(json(["Менеджер A"]));
     if (url.includes("/catalog-options/brand"))
@@ -479,4 +481,31 @@ describe("local CatalogVR characteristics diagnostics", () => {
     expect(screen.getByText("Один товар требует проверки сопоставления")).toBeTruthy();
     expect(post).toHaveBeenCalledTimes(1);
   });
+});
+
+it("keeps multiple buyer types in the report, export and details despite draft edits", async () => {
+  render(<ProductAnalyticsPage />);
+  const label = screen.getByText("Вид покупателя", { selector: "label" });
+  fireEvent.click(within(label).getByRole("button"));
+  fireEvent.click(await within(label).findByRole("checkbox", { name: "Розница" }));
+  fireEvent.click(await within(label).findByRole("checkbox", { name: "Оптовик" }));
+  fireEvent.mouseDown(document.body);
+  await choose("Все менеджеры", "Менеджер A");
+  expect(post).not.toHaveBeenCalled();
+  await generate();
+  expect(payload().buyer_types).toEqual(["Розница", "Оптовик"]);
+  expect(payload().managers).toEqual(["Менеджер A"]);
+  fireEvent.click(within(label).getByRole("button"));
+  fireEvent.click(within(label).getByRole("button", { name: "Сбросить" }));
+  fireEvent.click(await within(label).findByRole("checkbox", { name: "Корпоративный" }));
+  fireEvent.mouseDown(document.body);
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(screen.getByText(/Фильтры изменены/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Выгрузить в Excel" }));
+  await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
+  expect(payload(1).buyer_types).toEqual(["Розница", "Оптовик"]);
+  fireEvent.click(screen.getByText("Тестовый товар"));
+  await screen.findByText("Склад A");
+  expect(payload(2).buyer_types).toEqual(["Розница", "Оптовик"]);
+  expect(payload(2).managers).toEqual(["Менеджер A"]);
 });

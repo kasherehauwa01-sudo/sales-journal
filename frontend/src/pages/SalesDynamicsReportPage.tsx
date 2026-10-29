@@ -28,7 +28,7 @@ export function SalesDynamicsReportPage() {
   const [periodKind, setPeriodKind] = useState<PeriodKind>("current_month");
   const [dateFrom, setDateFrom] = useState(initial.date_from);
   const [dateTo, setDateTo] = useState(initial.date_to);
-  const [department, setDepartment] = useState("");
+  const [departments, setDepartments] = useState<string[]>([]);
   const [manager, setManager] = useState<string[]>([]);
   const [buyerType, setBuyerType] = useState<string[]>([]);
   const [showPrevious,setShowPrevious]=useState(true),[showYear,setShowYear]=useState(true);
@@ -47,7 +47,7 @@ export function SalesDynamicsReportPage() {
     date_to: dateTo,
     period_kind: periodKind,
     include_groupings: true,
-    department,
+    departments,
     manager,
     buyer_type: buyerType,
     brands,
@@ -130,15 +130,7 @@ export function SalesDynamicsReportPage() {
         <div className="report-filters">
           <label>
             Подразделение
-            <select
-              value={department}
-              onChange={(e) => setDepartment(e.target.value)}
-            >
-              <option value="">Все подразделения</option>
-              {filters?.departments.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={filters?.departments || []} value={departments} onChange={setDepartments} placeholder="Все подразделения" searchable showActions />
           </label>
           <BrandFilter value={brands} onChange={setBrands} />
           <label>

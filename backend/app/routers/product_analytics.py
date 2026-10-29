@@ -23,7 +23,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db
 from app.config import settings
 from app.models import Sale, SaleItem
-from app.services.clients_vr import ClientsVrError, get_client_managers, get_managers
+from app.services.clients_vr import ClientsVrError, get_buyer_type_clients, get_client_managers, get_managers
+from app.services.sales_client_filters import selected_values
 from app.services.product_analytics import GROUP_FIELDS, MISSING_MANAGER, classify, clients_for_managers, filter_subcategories, filter_values, group_rows, merge_periods, previous_period, product_key, summary
 from app.services.product_analytics_cache import cached_product_dataset
 from app.services.catalog_attributes import local_catalog, begin_catalog_snapshot, catalog_revision, local_options, coverage, sync_status, remember_detail_image
@@ -55,7 +56,7 @@ router=APIRouter(route_class=HeavyAnalyticsRoute,prefix="/reports/product-analyt
 logger=logging.getLogger(__name__)
 
 class AnalyticsRequest(BaseModel):
- date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);manufacturers:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
+ date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);buyer_types:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);manufacturers:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
 
 def _dates(data):
  if data.date_from>data.date_to:raise HTTPException(422,"Дата начала не может быть позже даты окончания")
@@ -95,10 +96,32 @@ async def _catalog(rows):
   logger.warning("CatalogVR enrichment недоступен: %s",type(exc).__name__)
   return {}
 
-async def _manager_clients(data,db,old_from,old_to):
- if not data.managers:return None
- try:mapping=await get_client_managers()
+async def _buyer_type_scope(data):
+ """Union selected buyer types; preserve None (unset) versus an empty match."""
+ if not data.buyer_types:return None
+ clients=set()
+ try:
+  for buyer_type in selected_values(data.buyer_types):
+   clients.update(value.strip().casefold() for value in await get_buyer_type_clients(buyer_type) if value and value.strip())
  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ return clients
+
+
+def _selected_clients(data, clients, mapping, buyer_scope):
+ selected=clients_for_managers(clients,mapping,data.managers) if data.managers else list(clients)
+ if buyer_scope is not None:
+  selected=[client for client in selected if client.strip().casefold() in buyer_scope]
+ return selected
+
+
+async def _manager_clients(data,db,old_from,old_to):
+ if not data.managers and not data.buyer_types:return None
+ buyer_scope=await _buyer_type_scope(data)
+ if buyer_scope == set():return []
+ mapping={}
+ if data.managers:
+  try:mapping=await get_client_managers()
+  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  normalized=func.coalesce(func.lower(func.trim(Sale.client)),"")
  scope=or_(and_(Sale.sale_date>=data.date_from,Sale.sale_date<=data.date_to),and_(Sale.sale_date>=old_from,Sale.sale_date<=old_to))
  conditions=[scope]
@@ -108,7 +131,7 @@ async def _manager_clients(data,db,old_from,old_to):
  try:
   async for batch in result.partitions(512):
    ensure_headroom()
-   clients.extend(clients_for_managers(batch,mapping,data.managers))
+   clients.extend(_selected_clients(data,batch,mapping,buyer_scope))
  finally:await result.close()
  diagnostics("manager_clients", result_rows=len(clients), container_bytes=sys.getsizeof(clients))
  return clients
@@ -116,7 +139,7 @@ async def _manager_clients(data,db,old_from,old_to):
 def _dataset_cache_key(data:AnalyticsRequest,revision:int) -> str:
  payload=data.model_dump(mode="json")
  payload["group_by"]="product"
- for field in ("departments","managers","brands","manufacturers","subcategories"):
+ for field in ("departments","managers","buyer_types","brands","manufacturers","subcategories"):
   payload[field]=sorted(payload[field],key=str.casefold)
  return f"{revision}:"+json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
 
@@ -364,14 +387,18 @@ def _detail_product(data:DetailRequest):
  return func.lower(func.trim(column))==value.strip().casefold(),prefix,value.strip()
 
 async def _detail_manager_clients(data:DetailRequest,db:AsyncSession,product_condition):
- """Определяет клиентов менеджеров только для выбранного SKU и периода."""
- if not data.managers:return None
- try:mapping=await get_client_managers()
- except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+ """Resolve the same manager/buyer scope for the selected SKU and period."""
+ if not data.managers and not data.buyer_types:return None
+ buyer_scope=await _buyer_type_scope(data)
+ if buyer_scope == set():return []
+ mapping={}
+ if data.managers:
+  try:mapping=await get_client_managers()
+  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  normalized=func.coalesce(func.lower(func.trim(Sale.client)),"")
  conditions=[*_conditions(data,data.date_from,data.date_to),product_condition]
  clients=list((await db.scalars(select(normalized).join(SaleItem,SaleItem.sale_id==Sale.id).where(*conditions).distinct())).all())
- return clients_for_managers(clients,mapping,data.managers)
+ return _selected_clients(data,clients,mapping,buyer_scope)
 
 def _empty_detail_product(article_key:str,prefix:str,value:str):
  """Сохраняет структуру product, даже если в периоде нет продаж."""

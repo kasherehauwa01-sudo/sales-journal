@@ -241,7 +241,7 @@ def test_cache_keys_preserve_all_filters_but_share_grouping():
     assert base == router._dataset_cache_key(request.model_copy(update={'group_by': 'brand', 'brands': ['Б', 'А']}), 10)
     for changes in ({'brands': ['А']}, {'manufacturers': ['Завод']}, {'subcategories': ['Раздел']},
                     {'article': '123'}, {'search': 'чай'}, {'departments': ['Отдел']},
-                    {'managers': ['Иванов']}, {'date_to': date(2026, 9, 29)},
+                    {'managers': ['Иванов']}, {'buyer_types': ['Розница']}, {'date_to': date(2026, 9, 29)},
                     {'compare_from': date(2025, 1, 1), 'compare_to': date(2025, 9, 30)}):
         assert router._dataset_cache_key(request.model_copy(update=changes), 10) != base
     assert router._dataset_cache_key(request, 11) != base

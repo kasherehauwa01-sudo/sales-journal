@@ -38,13 +38,13 @@ async def _client_filter(
 def _conditions(
     start: date,
     end: date,
-    department: str | None,
+    department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
     brands: list[str] | None = None):
     result = [Sale.sale_date >= start, Sale.sale_date <= end]
     if department:
-        result.append(Sale.department == department)
+        result.append(Sale.department.in_(department) if isinstance(department, list) else Sale.department == department)
     if clients is not None:
         normalized = [value.strip().lower() for value in clients]
         result.append(
@@ -59,7 +59,7 @@ def _conditions(
 def _sales_rows(
     start: date,
     end: date,
-    department: str | None,
+    department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
     brands: list[str] | None = None):
@@ -82,7 +82,7 @@ async def _metrics(
     db: AsyncSession,
     start: date,
     end: date,
-    department: str | None,
+    department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
     brands: list[str] | None = None):
@@ -104,7 +104,7 @@ async def _chart(
     start: date,
     end: date,
     group_by: str,
-    department: str | None,
+    department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
     all_groupings: bool = False,
@@ -162,7 +162,11 @@ async def report(
     selected_clients: Annotated[
         list[str] | None, Query(alias="clients", max_length=500)
     ] = None,
-    brands: Annotated[list[str] | None, Query()] = None):
+    brands: Annotated[list[str] | None, Query()] = None,
+    departments: Annotated[list[str] | None, Query()] = None,
+):
+    # Legacy singular department remains supported for existing callers.
+    department_scope = departments if departments is not None else department
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
@@ -185,7 +189,7 @@ async def report(
         )
         clients = sorted(chosen if allowed is None else chosen & allowed)
     current = await _metrics(
-        db, effective_from, effective_to, department, clients, client,
+        db, effective_from, effective_to, department_scope, clients, client,
         **({"brands": brands} if brands else {}),
     )
     current_points = await _chart(
@@ -193,7 +197,7 @@ async def report(
         effective_from,
         effective_to,
         grouping,
-        department,
+        department_scope,
         clients,
         client,
         **({"all_groupings": True} if include_groupings else {}),
@@ -205,13 +209,13 @@ async def report(
         start, end = dynamics_comparison_period(
             effective_from, effective_to, mode, period_kind
         )
-        previous = await _metrics(db, start, end, department, clients, client, **({"brands": brands} if brands else {}))
+        previous = await _metrics(db, start, end, department_scope, clients, client, **({"brands": brands} if brands else {}))
         previous_points = await _chart(
             db,
             start,
             end,
             grouping,
-            department,
+            department_scope,
             clients,
             client,
             **({"all_groupings": True} if include_groupings else {}),
