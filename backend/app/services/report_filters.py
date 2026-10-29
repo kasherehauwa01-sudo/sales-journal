@@ -4,13 +4,22 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from app.models import Sale, SaleItem, CatalogLookup, CatalogProduct
 
 
+def array_membership(column, values, *, parameter_name="report_values"):
+    """One typed PostgreSQL array bind regardless of selection size.
+
+    Normalization is explicit at the caller so case-sensitive fields such as
+    department names retain their existing semantics. ANY never duplicates rows.
+    """
+    if not values:
+        return False
+    return column == any_(cast(
+        bindparam(parameter_name, value=list(values), unique=True), ARRAY(String)
+    ))
+
+
 def client_names_condition(column, clients):
     names = sorted({v.strip().lower() for v in clients if v and v.strip()})
-    if not names:
-        return False
-    return func.lower(func.trim(column)) == any_(cast(
-        bindparam("report_clients", value=names, unique=True), ARRAY(String)
-    ))
+    return array_membership(func.lower(func.trim(column)), names, parameter_name="report_clients")
 
 
 def brand_item_condition(brands):
@@ -24,7 +33,7 @@ def brand_item_condition(brands):
         CatalogLookup.status == "matched",
         norm(CatalogLookup.code) == norm(SaleItem.code),
         norm(CatalogLookup.article) == norm(SaleItem.article),
-        func.lower(func.trim(CatalogProduct.brand)).in_([b.strip().lower() for b in brands]),
+        array_membership(func.lower(func.trim(CatalogProduct.brand)), sorted({b.strip().lower() for b in brands}), parameter_name="report_brands"),
     ).correlate(SaleItem).exists()
 
 

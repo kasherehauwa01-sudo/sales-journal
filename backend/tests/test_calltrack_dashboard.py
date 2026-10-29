@@ -7,12 +7,13 @@ from app.services import calltrack_dashboard as service
 
 def test_query_aggregates_items_before_headers_and_limits_year():
     sql = str(service.monthly_sales_query(2026, ['client']).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
-    assert 'sum(sales.total_amount)' in sql
-    assert 'count(sales.id)' in sql
+    assert 'sum(dashboard_scope.total_amount)' in sql
+    assert 'count(dashboard_scope.id)' in sql
     assert 'sum(sale_items.quantity)' in sql
-    assert 'GROUP BY sale_items.sale_id' in sql
+    assert 'GROUP BY sale_items.sale_id' not in sql
+    assert sql.count('GROUP BY EXTRACT(year FROM dashboard_scope.sale_date), EXTRACT(month FROM dashboard_scope.sale_date)') == 2
     assert '2026-01-01' in sql and '2027-01-01' in sql
-    assert "IN ('client')" in sql
+    assert "= ANY (CAST(ARRAY['client']" in sql
 
 
 def test_selected_manager_scope_and_zero_months(monkeypatch):
@@ -43,7 +44,10 @@ def test_no_selection_does_not_query_or_load_directory(monkeypatch):
     db.execute.assert_not_awaited()
 
 
-def test_real_sql_does_not_multiply_checks_or_revenue():
+def test_real_sql_does_not_multiply_checks_or_revenue(monkeypatch):
+    from sqlalchemy import func
+    # SQLite-only membership adapter; aggregation SQL itself is executed intact.
+    monkeypatch.setattr(service, "dashboard_client_condition", lambda names: func.lower(func.trim(func.regexp_replace(service.Sale.client, r"\s+", " ", "g"))).in_(names))
     import re
     from decimal import Decimal
     from sqlalchemy import create_engine, event, text
@@ -67,8 +71,8 @@ def test_comparison_query_has_two_year_bounds_and_selected_names():
     sql = str(service.monthly_sales_query(2026, ["one"], compare=True, as_of=date(2026,10,19))
               .compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds":True}))
     assert "2025-01-01" in sql and "2026-10-20" in sql
-    assert "GROUP BY EXTRACT(year FROM sales.sale_date), EXTRACT(month FROM sales.sale_date)" in sql
-    assert sql.count("IN ('one')")==2
+    assert "GROUP BY EXTRACT(year FROM dashboard_scope.sale_date), EXTRACT(month FROM dashboard_scope.sale_date)" in sql
+    assert sql.count("= ANY (CAST(ARRAY['one']") == 1
 
 
 def test_business_date_uses_volgograd_at_utc_day_boundary(monkeypatch):

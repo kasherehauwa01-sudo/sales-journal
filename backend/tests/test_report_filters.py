@@ -72,10 +72,15 @@ def test_product_report_accepts_legacy_and_multiple_values(monkeypatch):
         conditions = asyncio.run(_conditions(data))
         compiled = select(Sale.id).where(*conditions).compile(dialect=asyncpg.dialect())
         # No expanded IN parameters for the ClientsVR client names.
-        assert str(compiled).count("ANY (") == 2
+        assert str(compiled).count("ANY (") == 3
 
 
-def test_brand_totals_exclude_other_positions_and_ambiguous_catalog_matches():
+def test_brand_totals_exclude_other_positions_and_ambiguous_catalog_matches(monkeypatch):
+    from app.services import report_filters
+    # SQLite has no PostgreSQL arrays. Adapt membership only; exercise the real
+    # nested EXISTS, resolution rules and receipt SUM. Large ANY binds are tested
+    # separately with the asyncpg compiler.
+    monkeypatch.setattr(report_filters, "array_membership", lambda column, values, **kwargs: column.in_(values))
     # Ephemeral in-memory SQLite exercises the actual EXISTS and correlated SUM,
     # not a mocked result. PostgreSQL-specific ANY is covered separately above.
     engine = create_engine("sqlite://")

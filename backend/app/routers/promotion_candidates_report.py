@@ -39,6 +39,7 @@ from app.services.promotion_candidates import (
     table_rows,
 )
 from app.services.sales_client_filters import get_sales_filter_clients
+from app.services.report_filters import client_names_condition
 from app.services.vrcatalog import VrCatalogError, get_catalog_batch_info
 
 
@@ -89,7 +90,7 @@ def _conditions(data, clients):
     if clients is not None:
         names = [x.strip().casefold() for x in clients if x.strip()]
         conditions.append(
-            func.lower(func.trim(Sale.client)).in_(names) if names else false()
+            client_names_condition(Sale.client, names) if names else false()
         )
     return conditions
 
