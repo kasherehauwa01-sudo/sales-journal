@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, func, text
 
 from app.config import settings
 from app.database import get_db
@@ -41,6 +41,8 @@ def test_http_contract_actual_router_and_sql(monkeypatch, contract):
     monkeypatch.setattr(service, "get_client_managers", AsyncMock(return_value={"one": "Alice", "two": "Bob"}))
     from datetime import date
     monkeypatch.setattr(service,"business_today",lambda:date(2026,10,19))
+    # Membership is adapted only for SQLite; PostgreSQL ANY is compiled/tested separately.
+    monkeypatch.setattr(service, "dashboard_client_condition", lambda names: func.lower(func.trim(func.regexp_replace(service.Sale.client, r"\s+", " ", "g"))).in_(names))
     engine = create_engine("sqlite://")
 
     @event.listens_for(engine, "connect")

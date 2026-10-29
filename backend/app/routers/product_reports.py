@@ -7,15 +7,17 @@ from pydantic import BaseModel,Field
 from sqlalchemy import delete,distinct,func,or_,select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
+from app.services.report_execution import ReportRoute, get_report_db
+from app.services.product_analytics_runtime import ensure_headroom
 from app.models import ProductReportSet,Sale,SaleItem
 from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_managers,get_manager_clients
-from app.services.report_filters import client_names_condition, brand_item_condition
+from app.services.report_filters import client_names_condition, brand_item_condition, array_membership
 from app.services.sales_client_filters import selected_values
 from app.services.report_periods import comparison_period
 from app.services.product_report_utils import localized_summary_rows,normalize_identifier as _norm,percent_change as _change,product_key as _product_key
 from app.services.vrcatalog import VrCatalogError,get_catalog_brands,get_catalog_tree,get_product_filter_options,get_product_filters,search_catalog_products
 
-router=APIRouter(prefix="/reports/product-sales",tags=["Отчеты"])
+router=APIRouter(route_class=ReportRoute,prefix="/reports/product-sales",tags=["Отчеты"])
 
 class ProductRef(BaseModel):article:str|None=None;code:str|None=None;name:str;image_url:str|None=None
 class ReportRequest(BaseModel):
@@ -25,15 +27,35 @@ class SetIn(BaseModel):name:str=Field(min_length=1,max_length=255);products:list
 class CatalogSearch(BaseModel):filters:dict[str,list[str]]=Field(default_factory=dict);search:str="";page:int=Field(1,ge=1);page_size:int=Field(50,ge=1,le=500)
 
 def _product_condition(products):
- codes={_norm(x.code) for x in products if _norm(x.code)};articles={_norm(x.article) for x in products if not _norm(x.code) and _norm(x.article)};names={_norm(x.name) for x in products if not _norm(x.code) and not _norm(x.article)};parts=[]
- if codes:parts.append(func.lower(func.trim(SaleItem.code)).in_(codes))
- if articles:parts.append(func.lower(func.trim(SaleItem.article)).in_(articles))
- if names:parts.append(func.lower(func.trim(SaleItem.name)).in_(names))
- return or_(*parts) if parts else None
+    # One pass and one normalized identity per selected product. Preserve the
+    # original precedence and matching semantics: code, otherwise article/name.
+    codes, articles, names = set(), set(), set()
+    for index, product in enumerate(products):
+        if index % 1024 == 0:
+            ensure_headroom()
+        code = _norm(product.code)
+        article = _norm(product.article) if not code else ""
+        if code:
+            codes.add(code)
+        elif article:
+            articles.add(article)
+        else:
+            names.add(_norm(product.name))
+    parts = []
+    for column, values, label in (
+        (SaleItem.code, codes, "product_codes"),
+        (SaleItem.article, articles, "product_articles"),
+        (SaleItem.name, names, "product_names"),
+    ):
+        if values:
+            parts.append(array_membership(func.lower(func.trim(column)), sorted(values), parameter_name=label))
+    return or_(*parts) if parts else None
+
+
 async def _conditions(data:ReportRequest,start=None,end=None):
  conditions=[Sale.sale_date>=(start or data.date_from),Sale.sale_date<=(end or data.date_to)]
  if data.brands:conditions.append(brand_item_condition(data.brands))
- if data.departments:conditions.append(Sale.department.in_(data.departments))
+ if data.departments:conditions.append(array_membership(Sale.department, data.departments, parameter_name="report_departments"))
  product_condition=_product_condition(data.products)
  if product_condition is None:conditions.append(False)
  else:conditions.append(product_condition)
@@ -47,7 +69,7 @@ async def _conditions(data:ReportRequest,start=None,end=None):
  return conditions
 
 @router.get("/products/search")
-async def search_products(search:str="",page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),db:AsyncSession=Depends(get_db)):
+async def search_products(search:str="",page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),db:AsyncSession=Depends(get_report_db)):
  base=select(SaleItem.article,SaleItem.code,SaleItem.name).group_by(SaleItem.article,SaleItem.code,SaleItem.name)
  if search.strip():
   value=f"%{search.strip()}%";base=base.where(or_(SaleItem.article.ilike(value),SaleItem.code.ilike(value),SaleItem.name.ilike(value)))
@@ -55,12 +77,38 @@ async def search_products(search:str="",page:int=Query(1,ge=1),page_size:int=Que
  rows=(await db.execute(base.order_by(SaleItem.name).offset((page-1)*page_size).limit(page_size))).all()
  return {"items":[{"key":_product_key(*row),"article":row[0],"code":row[1],"name":row[2]} for row in rows],"total":total,"page":page,"page_size":page_size,"pages":max(1,(total+page_size-1)//page_size)}
 
-async def _summary(data,db,start=None,end=None):
- c=await _conditions(data,start,end);revenue=func.coalesce(func.sum(SaleItem.quantity*SaleItem.actual_price),0);units=func.coalesce(func.sum(SaleItem.quantity),0);base=func.coalesce(func.sum(SaleItem.quantity*SaleItem.base_price),0)
- row=(await db.execute(select(revenue,units,func.count(distinct(Sale.id)),func.count(distinct(Sale.client)),base).join(Sale,Sale.id==SaleItem.sale_id).where(*c))).one();rev=float(row[0]);qty=float(row[1]);checks=row[2];discount=float(row[4])-rev
- return {"revenue":rev,"units":qty,"checks":checks,"clients":row[3],"average_price":rev/qty if qty else 0,"items_per_check":qty/checks if checks else 0,"discount_amount":discount,"average_discount":discount/float(row[4])*100 if row[4] else 0}
+def _summary_query(conditions):
+    # Collapse matching positions to one row per receipt before DISTINCT client
+    # counting. No wide sales projection, product join duplication or per-SKU
+    # query fan-out. Nullable prices, returns and raw client identity are retained.
+    receipts = select(
+        Sale.id.label("sale_id"), Sale.client.label("client"),
+        func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"),
+        func.sum(SaleItem.quantity).label("units"),
+        func.sum(SaleItem.quantity * SaleItem.base_price).label("base"),
+    ).select_from(SaleItem).join(Sale, Sale.id == SaleItem.sale_id).where(
+        *conditions
+    ).group_by(Sale.id, Sale.client).subquery("product_receipts")
+    return select(
+        func.coalesce(func.sum(receipts.c.revenue), 0).label("revenue"),
+        func.coalesce(func.sum(receipts.c.units), 0).label("units"),
+        func.count(receipts.c.sale_id).label("checks"),
+        func.count(distinct(receipts.c.client)).label("clients"),
+        func.coalesce(func.sum(receipts.c.base), 0).label("base"),
+    )
+
+
+async def _summary(data, db, start=None, end=None):
+    conditions = await _conditions(data, start, end)
+    row = (await db.execute(_summary_query(conditions))).one()
+    rev, qty, checks, clients, base = float(row[0]), float(row[1]), row[2], row[3], float(row[4])
+    discount = base - rev
+    return {"revenue":rev, "units":qty, "checks":checks, "clients":clients,
+            "average_price":rev/qty if qty else 0, "items_per_check":qty/checks if checks else 0,
+            "discount_amount":discount, "average_discount":discount/base*100 if base else 0}
+
 @router.post("/summary")
-async def summary(data:ReportRequest,db:AsyncSession=Depends(get_db)):
+async def summary(data:ReportRequest,db:AsyncSession=Depends(get_report_db)):
  previous_dates=comparison_period(data.date_from,data.date_to,data.comparison_mode) if data.compare else None
  current=await _summary(data,db);previous=await _summary(data,db,*previous_dates) if previous_dates else None
  return {"current":current,"previous":previous,"changes":{key:{"absolute":current[key]-previous[key],"percent":_change(current[key],previous[key])} for key in current} if previous else None,"period":{"start":data.date_from,"end":data.date_to},"comparison_period":{"start":previous_dates[0],"end":previous_dates[1]} if previous_dates else None}
@@ -71,7 +119,7 @@ async def _products(data,db,start=None,end=None):
  rows=(await db.execute(q)).all();total=sum(float(x.revenue or 0) for x in rows)
  return [{**dict(x._mapping),"key":_product_key(x.article,x.code,x.name),"units":float(x.units or 0),"revenue":float(x.revenue or 0),"average_price":float(x.average_price or 0),"discount_amount":float(x.discount_amount or 0),"average_discount":float(x.average_discount or 0),"revenue_share":float(x.revenue or 0)/total*100 if total else 0} for x in rows]
 @router.post("/products")
-async def products(data:ReportRequest,sort_by:str="revenue",sort_dir:str="desc",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500),db:AsyncSession=Depends(get_db)):
+async def products(data:ReportRequest,sort_by:str="revenue",sort_dir:str="desc",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500),db:AsyncSession=Depends(get_report_db)):
  current=await _products(data,db);previous=await _products(data,db,*comparison_period(data.date_from,data.date_to,data.comparison_mode)) if data.compare else [];previous_by={x["key"]:x for x in previous}
  for item in current:
   old=previous_by.get(item["key"],{});item["previous_revenue"]=old.get("revenue",0);item["previous_units"]=old.get("units",0);item["revenue_change_percent"]=_change(item["revenue"],item["previous_revenue"]);item["units_change_percent"]=_change(item["units"],item["previous_units"])
@@ -79,17 +127,17 @@ async def products(data:ReportRequest,sort_by:str="revenue",sort_dir:str="desc",
  start=(page-1)*page_size;return {"items":current[start:start+page_size],"total":len(current),"page":page,"pages":max(1,(len(current)+page_size-1)//page_size)}
 
 @router.post("/dynamics")
-async def dynamics(data:ReportRequest,group_by:str=Query("day",pattern="^(day|week|month)$"),db:AsyncSession=Depends(get_db)):
+async def dynamics(data:ReportRequest,group_by:str=Query("day",pattern="^(day|week|month)$"),db:AsyncSession=Depends(get_report_db)):
  c=await _conditions(data);period=func.date_trunc(group_by,Sale.sale_date).label("period");q=select(period,func.sum(SaleItem.quantity*SaleItem.actual_price).label("revenue"),func.sum(SaleItem.quantity).label("units")).join(Sale,Sale.id==SaleItem.sale_id).where(*c).group_by(period).order_by(period)
  return [{"period":x.period.date(),"revenue":float(x.revenue or 0),"units":float(x.units or 0)} for x in (await db.execute(q))]
 
 @router.post("/departments")
-async def departments(data:ReportRequest,db:AsyncSession=Depends(get_db)):
+async def departments(data:ReportRequest,db:AsyncSession=Depends(get_report_db)):
  c=await _conditions(data);q=select(Sale.department,func.sum(SaleItem.quantity*SaleItem.actual_price),func.sum(SaleItem.quantity),func.count(distinct(Sale.id)),func.count(distinct(Sale.client))).join(Sale,Sale.id==SaleItem.sale_id).where(*c).group_by(Sale.department).order_by(func.sum(SaleItem.quantity*SaleItem.actual_price).desc())
  return [{"department":x[0],"revenue":float(x[1] or 0),"units":float(x[2] or 0),"checks":x[3],"clients":x[4]} for x in (await db.execute(q))]
 
 @router.post("/managers")
-async def managers(data:ReportRequest,db:AsyncSession=Depends(get_db)):
+async def managers(data:ReportRequest,db:AsyncSession=Depends(get_report_db)):
  c=await _conditions(data);q=select(Sale.client,func.sum(SaleItem.quantity*SaleItem.actual_price),func.sum(SaleItem.quantity),func.count(distinct(Sale.id))).join(Sale,Sale.id==SaleItem.sale_id).where(*c).group_by(Sale.client);rows=(await db.execute(q)).all()
  if isinstance(data.manager,str):
   return [{"manager":data.manager,"revenue":sum(float(x[1] or 0) for x in rows),"units":sum(float(x[2] or 0) for x in rows),"checks":sum(x[3] for x in rows),"clients":sum(1 for x in rows if x[0])}] if rows else []
@@ -101,7 +149,7 @@ async def managers(data:ReportRequest,db:AsyncSession=Depends(get_db)):
  return sorted(totals.values(),key=lambda x:-x["revenue"])
 
 @router.post("/details")
-async def details(data:DetailRequest,page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),db:AsyncSession=Depends(get_db)):
+async def details(data:DetailRequest,page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),db:AsyncSession=Depends(get_report_db)):
  scoped=ReportRequest(**data.model_dump(exclude={"product","products"}),products=[data.product]);c=await _conditions(scoped);q=select(Sale.id,Sale.sale_date,Sale.document_number,Sale.client,Sale.department,SaleItem.quantity,(SaleItem.quantity*SaleItem.actual_price).label("amount"),SaleItem.actual_price,((SaleItem.base_price-SaleItem.actual_price)/func.nullif(SaleItem.base_price,0)*100).label("discount")).join(Sale,Sale.id==SaleItem.sale_id).where(*c).order_by(Sale.sale_date.desc());total=await db.scalar(select(func.count()).select_from(q.subquery())) or 0;rows=(await db.execute(q.offset((page-1)*page_size).limit(page_size))).all()
  try:mapping=await get_client_managers()
  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
@@ -155,7 +203,7 @@ def _sheet(book,title,headers,rows):
  sheet.freeze_panes="A2";sheet.auto_filter.ref=sheet.dimensions
  for index,column in enumerate(sheet.columns,1):sheet.column_dimensions[get_column_letter(index)].width=min(40,max(12,max(len(str(cell.value or "")) for cell in column)+2))
 @router.post("/export")
-async def export(data:ReportRequest,db:AsyncSession=Depends(get_db)):
+async def export(data:ReportRequest,db:AsyncSession=Depends(get_report_db)):
  summary_data=await _summary(data,db);product_data=await _products(data,db);department_data=await departments(data,db);manager_data=await managers(data,db);c=await _conditions(data);detail_q=select(Sale.sale_date,Sale.document_number,Sale.client,Sale.department,SaleItem.quantity,(SaleItem.quantity*SaleItem.actual_price).label("amount"),SaleItem.actual_price,((SaleItem.base_price-SaleItem.actual_price)/func.nullif(SaleItem.base_price,0)*100).label("discount")).join(Sale,Sale.id==SaleItem.sale_id).where(*c).order_by(Sale.sale_date.desc());detail_source=(await db.execute(detail_q)).all()
  try:client_managers=await get_client_managers()
  except ClientsVrError:client_managers={}  # менеджеры в детализации необязательны для формирования Excel
