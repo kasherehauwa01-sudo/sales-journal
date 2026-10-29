@@ -1,3 +1,4 @@
+import { serializeReportSelection } from "../utils/reportFilters";
 import { BrandFilter } from "../components/BrandFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload,ReportHttpError} from '../hooks/useExplicitReport';
@@ -41,8 +42,8 @@ export function ProductSalesReportPage() {
   const payload = (f: Filters) => ({
     date_from: f.date_from,
     date_to: f.date_to,
-    manager: f.manager,
-    buyer_type: f.buyer_type,
+    manager: serializeReportSelection(f.manager),
+    buyer_type: serializeReportSelection(f.buyer_type),
     brands: f.brands,
     departments: f.departments,
     compare: f.compare,

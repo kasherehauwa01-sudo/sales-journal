@@ -677,12 +677,42 @@ it("product sales explains a stale backend rejecting multiple buyer types and st
   const label = screen.getByText("Вид покупателя", { selector: "label" });
   fireEvent.click(within(label).getByRole("button"));
   fireEvent.click(await within(label).findByRole("checkbox", { name: "Розница" }));
+  fireEvent.click(await within(label).findByRole("checkbox", { name: "Оптовик" }));
   fireEvent.mouseDown(document.body);
   heavy.mockResolvedValueOnce(json({ detail: [
-    { type: "string_type", loc: ["body", "buyer_type"], input: ["Розница"] },
+    { type: "string_type", loc: ["body", "buyer_type"], input: ["Розница", "Оптовик"] },
   ] }, 422));
   fireEvent.click(build());
   expect(await screen.findByText(/Работающий backend не поддерживает множественный выбор/)).toBeTruthy();
   expect(heavy).toHaveBeenCalledTimes(1);
   expect(screen.queryByText("Ошибка 500")).toBeNull();
 });
+
+for (const selected of [[], ["Розница"], ["Розница", "Оптовик"]]) {
+  it(`product sales sends ${selected.length} buyer choices in a compatible shape for report and Excel`, async () => {
+    render(<ProductSalesReportPage />);
+    await prepare("Товары");
+    if (selected.length) {
+      const label = screen.getByText("Вид покупателя", { selector: "label" });
+      fireEvent.click(within(label).getByRole("button"));
+      for (const value of selected) fireEvent.click(await within(label).findByRole("checkbox", { name: value }));
+      fireEvent.mouseDown(document.body);
+    }
+    fireEvent.click(build());
+    await finish(5);
+    const expected = selected.length === 0 ? null : selected.length === 1 ? selected[0] : selected;
+    for (const [, init] of heavy.mock.calls) {
+      const sent = JSON.parse(String(init.body));
+      expect(sent.manager).toBeNull();
+      expect(sent.buyer_type).toEqual(expected);
+      // This models the old backend's actual nullable string schema, without
+      // changing or flattening the multiple-selection contract.
+      if (selected.length <= 1) expect(sent.buyer_type === null || typeof sent.buyer_type === "string").toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Выгрузить Excel" }));
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls.find(([url]) => String(url).includes("/product-sales/export"))!;
+    expect(JSON.parse(String(init.body)).buyer_type).toEqual(expected);
+    expect(JSON.parse(String(init.body)).manager).toBeNull();
+  });
+}
