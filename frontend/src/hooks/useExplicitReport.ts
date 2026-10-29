@@ -14,6 +14,25 @@ export class ReportHttpError extends Error {
   }
 }
 
+export function reportErrorMessage(body: unknown, status: number): string {
+  const detail = body && typeof body === "object" && "detail" in body
+    ? (body as { detail: unknown }).detail : undefined;
+  if (typeof detail === "string") return detail;
+  if (status === 422 && Array.isArray(detail)) {
+    const labels: Record<string, string> = { manager: "Менеджер", buyer_type: "Вид покупателя" };
+    const legacyFilters = detail.filter(issue =>
+      issue && issue.type === "string_type" && Array.isArray(issue.loc) &&
+      issue.loc.length === 2 && issue.loc[0] === "body" && labels[issue.loc[1]],
+    ).map(issue => labels[issue.loc[1]]);
+    if (legacyFilters.length) {
+      return `Работающий backend не поддерживает множественный выбор фильтров: ${[...new Set(legacyFilters)].join(", ")}. Требуется обновить backend и frontend до одной версии.`;
+    }
+    // Never show validation "input" values: they may contain client data.
+    return "Некорректные параметры отчёта. Проверьте выбранные фильтры, товары и период.";
+  }
+  return `Ошибка ${status}`;
+}
+
 export async function reportResponse(
   path: string,
   signal: AbortSignal,
@@ -30,11 +49,7 @@ export async function reportResponse(
     throw new ReportHttpError(
       await response
         .json()
-        .then((body) =>
-          typeof body.detail === "string"
-            ? body.detail
-            : `Ошибка ${response.status}`,
-        )
+        .then((body) => reportErrorMessage(body, response.status))
         .catch(() => `Ошибка ${response.status}`),
       response.status,
     );

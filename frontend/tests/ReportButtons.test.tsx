@@ -107,7 +107,7 @@ const metrics = Object.fromEntries(
 function fixture(path: string): unknown {
   const route = path.split("?")[0];
   if (route.includes("/sales-dynamics/client-directory")) return {items:["Клиент1","Клиент2"],next_cursor:null};
-  if (route === "/reports/brands") return ["Бренд1", "Бренд2"];
+  if (route === "/reports/product-analytics/catalog-options/brand") return ["Бренд1", "Бренд2"];
   if (route === "/filters") return { departments: ["Магазин1", "Магазин2"], clients: ["Клиент1","Клиент2"] };
   if (route.endsWith("/managers") && !route.includes("product-sales"))
     return ["Менеджер1", "Менеджер2"];
@@ -670,3 +670,19 @@ for (const page of pages.filter(page => ["Товары", "Категории", "
       }
     }
   });
+
+it("product sales explains a stale backend rejecting multiple buyer types and stops the request sequence", async () => {
+  render(<ProductSalesReportPage />);
+  await prepare("Товары");
+  const label = screen.getByText("Вид покупателя", { selector: "label" });
+  fireEvent.click(within(label).getByRole("button"));
+  fireEvent.click(await within(label).findByRole("checkbox", { name: "Розница" }));
+  fireEvent.mouseDown(document.body);
+  heavy.mockResolvedValueOnce(json({ detail: [
+    { type: "string_type", loc: ["body", "buyer_type"], input: ["Розница"] },
+  ] }, 422));
+  fireEvent.click(build());
+  expect(await screen.findByText(/Работающий backend не поддерживает множественный выбор/)).toBeTruthy();
+  expect(heavy).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("Ошибка 500")).toBeNull();
+});
