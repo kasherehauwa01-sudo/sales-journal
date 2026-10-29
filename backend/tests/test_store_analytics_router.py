@@ -26,7 +26,7 @@ def test_sales_query_keeps_store_and_client_filters():
     sql = str(compiled)
 
     assert "sales.department IN" in sql
-    assert "lower(trim(sales.client)) IN" in sql
+    assert "lower(trim(sales.client)) = ANY" in sql
     assert date(2026, 9, 1) in compiled.params.values()
     assert date(2026, 9, 30) in compiled.params.values()
 

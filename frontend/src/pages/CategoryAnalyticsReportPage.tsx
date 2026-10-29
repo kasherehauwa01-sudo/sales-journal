@@ -1,3 +1,4 @@
+import { BrandFilter } from "../components/BrandFilter";
 import {SaleDrawer} from "../components/SaleDrawer";
 import type {Sale} from "../types";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
@@ -25,13 +26,14 @@ const signedPercent=(value:number|null)=>value==null?'—':`${value>0?'+':''}${p
 const Memo=({title,children}:{title:string;children:string})=><div className="category-memo"><b>{title}</b><span>{children}</span></div>;
 
 export function CategoryAnalyticsReportPage() {
+  const [brands, setBrands] = useState<string[]>([]);
   const initial = periodDates("current_month");
   const [kind, setKind] = useState<PeriodKind>("current_month"),
     [from, setFrom] = useState(initial.from),
     [to, setTo] = useState(initial.to),
     [stores, setStores] = useState<string[]>([]),
-    [manager, setManager] = useState(""),
-    [buyerType, setBuyerType] = useState(""),
+    [manager, setManager] = useState<string[]>([]),
+    [buyerType, setBuyerType] = useState<string[]>([]),
     [category, setCategory] = useState(""),
     [chartLimit, setChartLimit] = useState("10"),
     [chartComparison, setChartComparison] = useState("previous_period"),
@@ -55,6 +57,7 @@ export function CategoryAnalyticsReportPage() {
     stores,
     manager,
     buyer_type: buyerType,
+    brands,
     category,
   };
   const controller = useExplicitReport(params, (p, signal) => {setSelected(undefined);setSalesProduct(undefined);setSale(undefined);return reportJson<Report>(`/reports/category-analytics?${query(p)}`, signal)},
@@ -176,32 +179,14 @@ export function CategoryAnalyticsReportPage() {
               placeholder="Все магазины"
             />
           </label>
+          <BrandFilter value={brands} onChange={setBrands} />
           <label>
             Менеджер
-            <select
-              value={manager}
-              onChange={(event) => setManager(event.target.value)}
-            >
-              <option value="">Все менеджеры</option>
-              {managers?.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
+            <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />
           </label>
           <label>
             Вид покупателя
-            <select
-              value={buyerType}
-              onChange={(event) => setBuyerType(event.target.value)}
-            >
-              <option value="">Все виды покупателей</option>
-              <option value="Нет">Нет</option>
-              {buyerTypes
-                ?.filter((value) => value.toLocaleLowerCase("ru") !== "нет")
-                .map((value) => (
-                  <option key={value}>{value}</option>
-                ))}
-            </select>
+            <MultiSelect options={[...new Set(["Нет", ...(buyerTypes || [])])]} value={buyerType} onChange={setBuyerType} placeholder="Все виды покупателей" searchable showActions />
           </label>
           <label>
             Категория

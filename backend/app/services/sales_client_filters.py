@@ -56,29 +56,30 @@ async def get_sales_buyer_type_clients(
     ]
 
 
+def selected_values(value: str | list[str] | None) -> list[str]:
+    """Accept legacy single values and repeated query parameters."""
+    return list(dict.fromkeys(v.strip() for v in ([value] if isinstance(value, str) else value or []) if v and v.strip()))
+
+
 async def get_sales_filter_clients(
     db: AsyncSession,
-    manager: str | None,
-    buyer_type: str | None,
+    manager: str | list[str] | None,
+    buyer_type: str | list[str] | None,
 ) -> list[str] | None:
-    manager_clients = await get_manager_clients(manager) if manager else None
-
-    buyer_clients = (
-        await get_sales_buyer_type_clients(db, buyer_type)
-        if buyer_type
-        else None
-    )
-
-    if manager_clients is None:
-        return buyer_clients
-
-    if buyer_clients is None:
-        return manager_clients
-
-    allowed = _normalized(buyer_clients)
-
-    return [
-        value
-        for key, value in _normalized(manager_clients).items()
-        if key in allowed
-    ]
+    """OR inside each selection, AND between manager and buyer selections."""
+    groups = []
+    for values, loader in (
+        (selected_values(manager), get_manager_clients),
+        (selected_values(buyer_type), lambda value: get_sales_buyer_type_clients(db, value)),
+    ):
+        if values:
+            combined = {}
+            for value in values:
+                combined.update(_normalized(await loader(value)))
+            groups.append(combined)
+    if not groups:
+        return None
+    allowed = set(groups[0])
+    for group in groups[1:]:
+        allowed.intersection_update(group)
+    return [name for key, name in groups[0].items() if key in allowed]

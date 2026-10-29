@@ -1,3 +1,5 @@
+import { BrandFilter } from "../components/BrandFilter";
+import { MultiSelect } from "../components/MultiSelect";
 import {SalesClientSelect} from "../components/SalesClientSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
@@ -21,13 +23,14 @@ const periodOptions:Array<[PeriodKind,string]>=[['yesterday','Вчера'],['cur
 const metricOptions:Array<[Metric,string]>=[['revenue','Выручка'],['sales_count','Количество продаж'],['items_count','Количество товаров'],['average_check','Средний чек'],['average_items_per_sale','Товаров в чеке']];
 const metricMoney=(key:Metric)=>key==='revenue'||key==='average_check';const formatMetric=(key:Metric,value:number)=>metricMoney(key)?money(value):number(value);
 export function SalesDynamicsReportPage() {
+  const [brands, setBrands] = useState<string[]>([]);
   const initial = dates("current_month");
   const [periodKind, setPeriodKind] = useState<PeriodKind>("current_month");
   const [dateFrom, setDateFrom] = useState(initial.date_from);
   const [dateTo, setDateTo] = useState(initial.date_to);
   const [department, setDepartment] = useState("");
-  const [manager, setManager] = useState("");
-  const [buyerType, setBuyerType] = useState("");
+  const [manager, setManager] = useState<string[]>([]);
+  const [buyerType, setBuyerType] = useState<string[]>([]);
   const [showPrevious,setShowPrevious]=useState(true),[showYear,setShowYear]=useState(true);
   const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [group, setGroup] = useState<Group | "">("");
@@ -47,6 +50,7 @@ export function SalesDynamicsReportPage() {
     department,
     manager,
     buyer_type: buyerType,
+    brands,
     clients: selectedClients,
     include_both: true,
   };
@@ -136,29 +140,14 @@ export function SalesDynamicsReportPage() {
               ))}
             </select>
           </label>
+          <BrandFilter value={brands} onChange={setBrands} />
           <label>
             Менеджер
-            <select
-              value={manager}
-              onChange={(e) => setManager(e.target.value)}
-            >
-              <option value="">Все менеджеры</option>
-              {managers?.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />
           </label>
           <label>
             Вид покупателя
-            <select
-              value={buyerType}
-              onChange={(e) => setBuyerType(e.target.value)}
-            >
-              <option value="">Все виды покупателей</option>
-              {buyerTypes?.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={[...new Set(["Нет", ...(buyerTypes || [])])]} value={buyerType} onChange={setBuyerType} placeholder="Все виды покупателей" searchable showActions />
           </label>
           <label>
             Клиент

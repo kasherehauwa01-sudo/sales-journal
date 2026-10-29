@@ -33,8 +33,8 @@ export function PromotionCandidatesPage() {
     [category, setCategory] = useState(""),
     [brand, setBrand] = useState(""),
     [manufacturer, setManufacturer] = useState(""),
-    [manager, setManager] = useState(""),
-    [buyerType, setBuyerType] = useState(""),
+    [manager, setManager] = useState<string[]>([]),
+    [buyerType, setBuyerType] = useState<string[]>([]),
     [selected, setSelected] = useState<Row>(),
     [sort, setSort] = useState<keyof Row|"recommendation"|"seasonal_priority">("recommendation"),
     [useSeasonality,setUseSeasonality]=useState(true),
@@ -221,27 +221,11 @@ export function PromotionCandidatesPage() {
           </label>
           <label>
             Менеджер
-            <select
-              value={manager}
-              onChange={(e) => setManager(e.target.value)}
-            >
-              <option value="">Все менеджеры</option>
-              {managers?.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />
           </label>
           <label>
             Вид покупателя
-            <select
-              value={buyerType}
-              onChange={(e) => setBuyerType(e.target.value)}
-            >
-              <option value="">Все виды</option>
-              {buyerTypes?.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={[...new Set(["Нет", ...(buyerTypes || [])])]} value={buyerType} onChange={setBuyerType} placeholder="Все виды покупателей" searchable showActions />
           </label>
           <label>
             Категория

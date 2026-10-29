@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import ProductReportSet,Sale,SaleItem
 from app.services.clients_vr import ClientsVrError,get_buyer_type_clients,get_client_managers,get_manager_clients
+from app.services.report_filters import client_names_condition, brand_item_condition
+from app.services.sales_client_filters import selected_values
 from app.services.report_periods import comparison_period
 from app.services.product_report_utils import localized_summary_rows,normalize_identifier as _norm,percent_change as _change,product_key as _product_key
 from app.services.vrcatalog import VrCatalogError,get_catalog_brands,get_catalog_tree,get_product_filter_options,get_product_filters,search_catalog_products
@@ -17,7 +19,7 @@ router=APIRouter(prefix="/reports/product-sales",tags=["Отчеты"])
 
 class ProductRef(BaseModel):article:str|None=None;code:str|None=None;name:str;image_url:str|None=None
 class ReportRequest(BaseModel):
- date_from:date;date_to:date;manager:str|None=None;buyer_type:str|None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False;comparison_mode:str=Field("previous_period",pattern="^(previous_period|previous_year)$")
+ date_from:date;date_to:date;brands:list[str]=Field(default_factory=list);manager: str | list[str] | None=None;buyer_type: str | list[str] | None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False;comparison_mode:str=Field("previous_period",pattern="^(previous_period|previous_year)$")
 class DetailRequest(ReportRequest):product:ProductRef
 class SetIn(BaseModel):name:str=Field(min_length=1,max_length=255);products:list[ProductRef]
 class CatalogSearch(BaseModel):filters:dict[str,list[str]]=Field(default_factory=dict);search:str="";page:int=Field(1,ge=1);page_size:int=Field(50,ge=1,le=500)
@@ -30,18 +32,18 @@ def _product_condition(products):
  return or_(*parts) if parts else None
 async def _conditions(data:ReportRequest,start=None,end=None):
  conditions=[Sale.sale_date>=(start or data.date_from),Sale.sale_date<=(end or data.date_to)]
+ if data.brands:conditions.append(brand_item_condition(data.brands))
  if data.departments:conditions.append(Sale.department.in_(data.departments))
  product_condition=_product_condition(data.products)
  if product_condition is None:conditions.append(False)
  else:conditions.append(product_condition)
- if data.manager:
-  try:clients=await get_manager_clients(data.manager)
-  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
-  normalized=[_norm(x) for x in clients];conditions.append(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False)
- if data.buyer_type:
-  try:clients=await get_buyer_type_clients(data.buyer_type)
-  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
-  normalized=[_norm(x) for x in clients];conditions.append(func.lower(func.trim(Sale.client)).in_(normalized) if normalized else False)
+ for value, loader in ((data.manager, get_manager_clients), (data.buyer_type, get_buyer_type_clients)):
+  if value:
+   try:
+    clients=[]
+    for selected in selected_values(value):clients.extend(await loader(selected))
+   except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
+   conditions.append(client_names_condition(Sale.client, clients))
  return conditions
 
 @router.get("/products/search")
@@ -89,7 +91,7 @@ async def departments(data:ReportRequest,db:AsyncSession=Depends(get_db)):
 @router.post("/managers")
 async def managers(data:ReportRequest,db:AsyncSession=Depends(get_db)):
  c=await _conditions(data);q=select(Sale.client,func.sum(SaleItem.quantity*SaleItem.actual_price),func.sum(SaleItem.quantity),func.count(distinct(Sale.id))).join(Sale,Sale.id==SaleItem.sale_id).where(*c).group_by(Sale.client);rows=(await db.execute(q)).all()
- if data.manager:
+ if isinstance(data.manager,str):
   return [{"manager":data.manager,"revenue":sum(float(x[1] or 0) for x in rows),"units":sum(float(x[2] or 0) for x in rows),"checks":sum(x[3] for x in rows),"clients":sum(1 for x in rows if x[0])}] if rows else []
  try:mapping=await get_client_managers()
  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc

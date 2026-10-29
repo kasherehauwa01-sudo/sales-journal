@@ -1,3 +1,4 @@
+import { BrandFilter } from "../components/BrandFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {useMemo,useState} from 'react';
@@ -14,13 +15,14 @@ type PeriodKind='today'|'yesterday'|'current_week'|'previous_week'|'current_mont
 const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='year')from.setMonth(0,1);if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {from:iso(from),to:iso(to)}}
 const periods:Array<[PeriodKind,string]>=[['today','Сегодня'],['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Предыдущая неделя'],['current_month','Текущий месяц'],['previous_month','Предыдущий месяц'],['year','Год'],['custom','Произвольный период']];const labels:Record<Metric,string>={revenue:'Выручка',checks:'Количество чеков',average_check:'Средний чек',items:'Продано товаров',items_per_check:'Товаров в чеке',average_discount:'Средняя скидка'};const format=(key:Metric,value:number)=>key==='revenue'||key==='average_check'?money(value):key==='average_discount'?percent(value):number(value);const change=(value:number|null)=>value==null?'—':`${value>0?'+':''}${percent(value)} ${value>0?'↑':value<0?'↓':'→'}`;
 export function StoreAnalyticsReportPage() {
+  const [brands, setBrands] = useState<string[]>([]);
   const initial = dates("current_month");
   const [periodKind, setPeriodKind] = useState<PeriodKind>("current_month");
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
   const [stores, setStores] = useState<string[]>([]);
-  const [manager, setManager] = useState("");
-  const [buyerType, setBuyerType] = useState("");
+  const [manager, setManager] = useState<string[]>([]);
+  const [buyerType, setBuyerType] = useState<string[]>([]);
   const [showPrevious,setShowPrevious]=useState(true),[showYear,setShowYear]=useState(true);
   const [sort, setSort] = useState("revenue");
   const [descending, setDescending] = useState(true);
@@ -44,6 +46,7 @@ export function StoreAnalyticsReportPage() {
     stores,
     manager,
     buyer_type: buyerType,
+    brands,
     include_both: true,
   };
   const controller = useExplicitReport(params, (p, signal) => {setSelected(undefined);return reportJson<Report>(`/reports/store-analytics?${query(p)}`, signal)},
@@ -61,6 +64,7 @@ export function StoreAnalyticsReportPage() {
       date_to: data.period.end,
       manager: controller.snapshot.manager,
       buyer_type: controller.snapshot.buyer_type,
+      brands: controller.snapshot.brands,
       group_by: selectedGroup || undefined,
     });
     void controller.perform(
@@ -208,32 +212,14 @@ export function StoreAnalyticsReportPage() {
               placeholder="Все магазины"
             />
           </label>
+          <BrandFilter value={brands} onChange={setBrands} />
           <label>
             Менеджер
-            <select
-              value={manager}
-              onChange={(e) => setManager(e.target.value)}
-            >
-              <option value="">Все менеджеры</option>
-              {managers?.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
+            <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />
           </label>
           <label>
             Вид покупателя
-            <select
-              value={buyerType}
-              onChange={(e) => setBuyerType(e.target.value)}
-            >
-              <option value="">Все виды покупателей</option>
-              <option value="Нет">Нет</option>
-              {buyerTypes
-                ?.filter((x) => x.toLocaleLowerCase("ru") !== "нет")
-                .map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-            </select>
+            <MultiSelect options={[...new Set(["Нет", ...(buyerTypes || [])])]} value={buyerType} onChange={setBuyerType} placeholder="Все виды покупателей" searchable showActions />
           </label>
         </div>
         <ReportActions report={controller} />
