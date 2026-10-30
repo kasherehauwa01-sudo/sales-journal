@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/data/imports")
     import_temp_dir: Path = Path("/tmp/sales-journal-imports")
     log_level: str = "INFO"
+    churn_monitor_status_file: Path = Path("/run/sales-churn-monitor/status.json")
     analytics_automation_enabled: bool = False
     analytics_automation_manifest_key: str = ""
     analytics_signals_enabled: bool = False

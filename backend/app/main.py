@@ -40,3 +40,6 @@ async def health():return {"status":"ok"}
 
 from app.routers.analytics_delivery import router as analytics_delivery_router
 app.include_router(analytics_delivery_router, prefix="/api")
+
+from app.routers.churn_scenario import router as churn_scenario_router
+app.include_router(churn_scenario_router, prefix="/api")

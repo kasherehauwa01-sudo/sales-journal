@@ -1,0 +1,3 @@
+# EXAMPLE: replace <existing-backend-group> after inspecting SALES_BACKEND_GID.
+# Provision only the observer's directory; never change existing project paths.
+d /run/sales-churn-monitor 2750 root <existing-backend-group> -

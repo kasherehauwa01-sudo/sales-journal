@@ -1,0 +1,6 @@
+# EXAMPLE DROP-IN, not a replacement service and not a second timer.
+# Inspect the actual unit's User/Group/sandbox and audit this command before use.
+# Do not add a '+' privilege override or automatically grant Docker/systemd access.
+[Service]
+# '-' makes an observation failure independent of the existing pilot's result.
+ExecStopPost=-/usr/bin/python3 /usr/local/libexec/sales-churn-status.py --output /run/sales-churn-monitor/status.json --manifest /etc/sales/churn-pilot/runtime-code-sha256.json --calltrack-root /var/www/html/vr/calltrack-v3-20261026
