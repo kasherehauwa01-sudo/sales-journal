@@ -1,0 +1,6 @@
+# EXAMPLE ONLY. Add this volume to the existing last backend override after review.
+# Do not replace the file's existing volumes/image/churn/Calltrack/mTLS settings.
+services:
+  backend:
+    volumes:
+      - /run/sales-churn-monitor:/run/sales-churn-monitor:ro
