@@ -1,0 +1,50 @@
+--- a/api/analytics_integration.php
++++ b/api/analytics_integration.php
+@@ -146,6 +146,18 @@
+             $existing=findAutomaticManagerTask($pdo,(string)$gate['client_id'],['signal_key'=>$signalKey,'evidence'=>['signal'=>$event,'identity_peer_ids'=>$peers,'matching'=>json_decode($binding['evidence'],true)['matching']??null]]);
+             if($existing)$taskId=$existing['id'];
+         }
++        $permanent=isset($event['permanent_policy']);
++        $budgetReason=null;
++        if($permanent){
++            require_once __DIR__.'/analytics_permanent.php';
++            try{
++                analyticsPermanentPolicy($pdo,$event);
++                if(!$taskId&&$gate['allowed'])analyticsPermanentBudget($pdo,$event,false,$peers);
++            }catch(Throwable $e){
++                $budgetReason=in_array($e->getMessage(),['PERMANENT_DAILY_LIMIT','PERMANENT_REPEAT_NOT_ALLOWED'],true)?$e->getMessage():'PERMANENT_POLICY_NOT_APPROVED';
++                $gate['allowed']=false;$gate['reasons'][]=$budgetReason;
++            }
++        }else{
+         $budgetReason=null;try{$budgetReason=analyticsBudgetReason(analyticsBudget($pdo,true));}catch(Throwable $e){$budgetReason='BUDGET_UNAVAILABLE';}
+         if(!$budgetReason){try{$budgetReason=analyticsDailyBudgetReason($pdo);}catch(Throwable $e){$budgetReason='DAILY_BUDGET_UNAVAILABLE';}}
+         if(!$budgetReason&&!$taskId&&$gate['allowed']){
+@@ -156,6 +168,7 @@
+                 if($e->getMessage()!=='MANAGER_PILOT_BUDGET_EXHAUSTED')throw $e;
+                 $budgetReason=$e->getMessage();
+             }
++        }
+         }
+         if($budgetReason&&!$taskId){$gate['allowed']=false;$gate['reasons'][]=$budgetReason;}
+         $decision=$gate['allowed']?'READY':'BLOCKED';$reasons=$gate['reasons'];
+--- a/api/manager_tasks_service.php
++++ b/api/manager_tasks_service.php
+@@ -81,12 +81,18 @@
+             if($existing=$s->fetch(PDO::FETCH_ASSOC)){if($own)$pdo->commit();return ['task'=>$existing,'existing'=>true];}
+         }
+         if($automatic!==null){
++            $createdAt=new DateTimeImmutable('now',new DateTimeZone('UTC'));
++            if(isset($signal['permanent_policy'])){
++                require_once __DIR__.'/analytics_permanent.php';
++                analyticsPermanentBudget($pdo,$signal,true,$automatic['evidence']['identity_peer_ids']??[]);
++            }else{
+             require_once __DIR__.'/analytics_manager_pilot_budget.php';
+             assertAnalyticsManagerPilotBudget($pdo, $assignee);
+             reserveAnalyticsBudget($pdo);
+             analyticsDailyBudgetPolicy($pdo);
+             $createdAt=new DateTimeImmutable('now',new DateTimeZone('UTC'));
+             reserveAnalyticsDailyBudget($pdo,$createdAt,$automatic['signal_key']);
++            }
+             if(($signal['generator_version']??null)==='inactivity/aviator-churn-pilot/1'){
+                 if(($policy['due_days_by_type']['CHURN_RISK']??null)!==3)throw new DomainException('Pilot requires three calendar days');
+                 $due=analyticsPilotDue($createdAt,3);

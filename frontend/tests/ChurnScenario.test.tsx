@@ -4,6 +4,9 @@ import {MemoryRouter} from 'react-router-dom';
 import {ChurnScenarioPage} from '../src/pages/ChurnScenarioPage';
 import {ChurnScenarioCard} from '../src/components/ChurnScenarioCard';
 import {ScenariosPage} from '../src/pages/ScenariosPage';
+// Legacy observation contract is tested independently of permanent control API.
+// The latter has its own network, approval and action tests.
+vi.mock('../src/components/ChurnAutomationControl',()=>({ChurnAutomationControl:()=>null}));
 
 const diagnostic={code:'ALGORITHM_POLICY_NOT_APPROVED',title:'Версия алгоритма не утверждена',component:'Sales Journal',explanation:'Требуется отдельное утверждение /2.',recommendation:'Проверить новую политику.',severity:'blocking',detected_at:'2026-10-30T07:00:00Z',impact:'Передача заблокирована.'};
 const good={api_version:1,read_only:true,status:'ENABLED',observed_at:'2026-10-30T07:00:00Z',

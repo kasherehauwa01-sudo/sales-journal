@@ -5,6 +5,7 @@ export type Diagnostic = {code:string;title:string;component:string;explanation:
 type Budget = {limit:number|null;used:number|null;remaining:number|null;business_date?:string|null;policy_version?:string|null};
 export type ChurnStatus = {
   api_version:1;read_only:true;status:'ENABLED'|'DISABLED'|'ERROR'|'NEEDS_SETUP';observed_at:string;
+  permanent?:{policy:{enabled:boolean;approved:boolean;revision:number};next_run:string|null;history:{kind:string;status:string;updated_at:string}[]};
   configuration:{automation_enabled:boolean;shadow_worker_enabled:boolean;calltrack_token_configured:boolean;mode:string;delivery_mode:string|null;active_algorithm:string;generator_version:string};
   policy:{enabled?:boolean;approved?:boolean;revision?:number;algorithm_policy?:string|null;min_confidence?:number|null;approved_at:string|null};
   calculations:{last_attempt:string|null;last_success:string|null;active_run_id:string|null};

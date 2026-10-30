@@ -1,0 +1,28 @@
+[Unit]
+Description=Sales Journal permanent churn oneshot (explicit operator opt-in)
+After=docker.service network-online.target
+Requires=docker.service
+ConditionPathExists=/etc/sales/churn-permanent/host.json
+
+[Service]
+Type=oneshot
+User=root
+RuntimeDirectory=sales-churn-permanent
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 /usr/local/libexec/run_churn_automation.py
+# Independent read-only observer runs even if the worker failed. No secrets in argv.
+ExecStopPost=-/usr/bin/python3 /usr/local/libexec/collect_churn_status.py --output /run/sales-churn-monitor/status.json --manifest /etc/sales/churn-permanent/runtime-code-sha256.json --calltrack-root /var/www/html/vr/calltrack-v3-20261026 --service sales-churn-permanent.service --timer sales-churn-permanent.timer
+TimeoutStartSec=240
+TimeoutStopSec=15
+KillMode=control-group
+Nice=15
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/sales-churn-permanent /run/sales-churn-monitor
+# Calltrack persists its existing private cache locks outside the read-only code tree.
+# Operator must review/add the actual storage path and compatible AppArmor/SELinux rules.
+# No Docker socket is mounted into the backend. Host-root access is deployment-only.

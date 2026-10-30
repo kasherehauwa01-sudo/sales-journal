@@ -47,7 +47,7 @@ async def read_model(db):
     decisions = (await db.execute(select(Decision.id, Decision.source_run_id, Decision.created_at,
         Decision.data['status'].as_string().label('status'), Decision.data['reasons'].label('reasons'),
         Decision.data['ready'].as_integer().label('ready'), Decision.data['candidates'].as_integer().label('candidates'))
-        .where(Decision.source_run_id != 'POLICY', Decision.source_run_id != 'IDENTITY')
+        .where(Decision.source_run_id.not_in(['POLICY', 'IDENTITY', 'PERMANENT_POLICY', 'PERMANENT_RETRY']))
         .order_by(Decision.created_at.desc()).limit(20))).mappings().all()
     identity_conflict = await db.scalar(select(Identity.client_id).where(Identity.status == 'VERIFIED')
         .group_by(Identity.client_id).having(func.count() > 1).limit(1))
@@ -243,7 +243,10 @@ async def status(db, now=None):
     now = now or datetime.now(timezone.utc)
     model = await read_model(db)
     telemetry, error = load_telemetry(settings.churn_monitor_status_file, now)
-    return build_status(model, telemetry, error, now=now, config=dict(
+    result = build_status(model, telemetry, error, now=now, config=dict(
         automation_enabled=settings.analytics_automation_enabled,
         shadow_worker_enabled=settings.analytics_signals_enabled, mode=settings.analytics_signals_mode,
         calltrack_token_configured=bool(settings.calltrack_integration_token)))
+    from app.services.churn_schedule import overview
+    result['permanent'] = await overview(db, now=now)
+    return result

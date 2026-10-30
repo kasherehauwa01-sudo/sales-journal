@@ -1,0 +1,13 @@
+[Unit]
+Description=Bounded churn scheduling/recovery and read-only monitoring
+
+[Timer]
+# Daily due time is checked against approved PostgreSQL policy (Europe/Moscow).
+# Five-minute wakeups resume bounded batches, not a new daily calculation each time.
+OnCalendar=*-*-* *:0/5:00 Europe/Moscow
+Persistent=false
+AccuracySec=30s
+Unit=sales-churn-permanent.service
+
+[Install]
+WantedBy=timers.target
