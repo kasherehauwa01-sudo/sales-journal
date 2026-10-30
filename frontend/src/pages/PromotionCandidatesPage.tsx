@@ -1,3 +1,5 @@
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
+import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import {ProductPhoto} from "../components/ProductPhoto";
 import {CatalogValueSelect} from "../components/CatalogValueSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
@@ -109,7 +111,17 @@ export function PromotionCandidatesPage() {
           };
     },
   );
-  const { data: result, loading } = controller;
+  const { data: baseResult, loading } = controller;
+  const [result,setPdfData]=usePdfData(baseResult);
+  async function preparePdf(signal:AbortSignal) {
+    if(!baseResult?.report) return;
+    const {tab:_,...payload}=controller.snapshot!;
+    const full=await reportJson<Report>("/reports/promotion-candidates?full=true",signal,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    assertComplete(full.items,full.total);
+    assertSameSnapshot(baseResult.report.summary,full.summary);
+    assertVisibleRows(baseResult.report.items,full.items,"key");
+    setPdfData({report:full});
+  }
   const data = result?.report,
     history = result?.history;
   const rows = useMemo(
@@ -119,7 +131,7 @@ export function PromotionCandidatesPage() {
       ),
     [data, sort],
   );
-  useEffect(()=>setCheckedKeys(new Set()),[data,tab]);
+  useEffect(()=>setCheckedKeys(new Set()),[baseResult,tab]);
   const checkedRows=rows.filter(row=>checkedKeys.has(row.key));
   const allChecked=rows.length>0&&checkedRows.length===rows.length;
   useEffect(()=>{if(allCheckbox.current)allCheckbox.current.indeterminate=checkedRows.length>0&&!allChecked;},[checkedRows.length,allChecked]);
@@ -155,6 +167,7 @@ export function PromotionCandidatesPage() {
   return (
     <div className={`page ${checkedRows.length>0&&tab==="candidates"?"promotion-has-selection":""}`}>
       <div className="page-title">
+        <PdfExportButton report="promotion-candidates" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty} prepare={preparePdf} restore={()=>setPdfData(undefined)}/>
         <div>
           <h1>Кандидаты в акцию</h1>
           <p>Объяснимые сигналы для маркетолога, а не автоматическое решение</p>
@@ -500,7 +513,7 @@ export function PromotionCandidatesPage() {
                   <XAxis dataKey="period" />
                   <YAxis />
                   <Tooltip />
-                  <Bar dataKey="units" fill="#2878ff" />
+                  <Bar isAnimationActive={false} dataKey="units" fill="#2878ff" />
                 </BarChart>
               </ResponsiveContainer>
             </div>

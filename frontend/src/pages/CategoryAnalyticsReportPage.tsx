@@ -1,3 +1,5 @@
+import { assertComplete, assertVisibleRows, assertSameSnapshot } from "../services/reportPdf";
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
 import {SaleDrawer} from "../components/SaleDrawer";
 import type {Sale} from "../types";
@@ -42,9 +44,15 @@ export function CategoryAnalyticsReportPage() {
     [growthMode, setGrowthMode] = useState("previous_period"),
     [declineMode, setDeclineMode] = useState("previous_period"),
     [detailMode, setDetailMode] = useState("previous_period"),
-    [productSales, setProductSales] = useState<{items:Sale[];page:number;pages:number;total:number}>(),
+    [baseProductSales, setProductSales] = useState<{items:Sale[];page:number;pages:number;total:number}>(),
     [salesProduct, setSalesProduct] = useState<Detail["products"][number]>(),
     [sale, setSale] = useState<Sale>();
+  const [productSales,setPdfSales]=usePdfData(baseProductSales);
+  async function preparePdf(signal:AbortSignal) {
+    if(!salesProduct||!baseProductSales) return;
+    const full=await reportJson<NonNullable<typeof baseProductSales>>(`/reports/category-analytics/product-sales/list?${query({...controller.snapshot!,code:salesProduct.code||undefined,article:salesProduct.article||undefined,name:salesProduct.name,full:true})}`,signal);
+    assertComplete(full.items,full.total);assertSameSnapshot(baseProductSales.total,full.total);assertVisibleRows(baseProductSales.items,full.items,"id");setPdfSales(full);
+  }
   const { data: filters } = useApi<{ departments: string[] }>("/filters"),
     { data: managers } = useApi<string[]>("/integrations/clients-vr/managers"),
     { data: buyerTypes } = useApi<string[]>(
@@ -124,6 +132,7 @@ export function CategoryAnalyticsReportPage() {
   return (
     <div className="page category-report">
       <div className="page-title">
+        <PdfExportButton report="category-analytics" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty} prepare={preparePdf} restore={()=>setPdfSales(undefined)}/>
         <div>
           <h1>Аналитика категорий</h1>
           <p>Структура продаж и вклад товарных групп в изменение выручки</p>
@@ -244,7 +253,7 @@ export function CategoryAnalyticsReportPage() {
             </Memo>
             <ResponsiveContainer width="100%" height={340}>
               <PieChart>
-                <Pie
+                <Pie isAnimationActive={false}
                   data={data.structure}
                   dataKey="revenue"
                   nameKey="category"
@@ -306,12 +315,12 @@ export function CategoryAnalyticsReportPage() {
                     <YAxis type="number" width={95} tickFormatter={number} />
                     <Tooltip formatter={(value) => money(Number(value))} />
                     <Legend verticalAlign="top" itemSorter={(item) => item.dataKey === "previous_revenue" ? 0 : 1} />
-                    <Bar
+                    <Bar isAnimationActive={false}
                       dataKey="current_revenue"
                       name="Текущий период"
                       fill="#2878ff"
                     />
-                    <Bar
+                    <Bar isAnimationActive={false}
                       dataKey="previous_revenue"
                       name={chartComparison === "previous_year" ? "Предыдущий год" : "Предыдущий период"}
                       fill="#9b6cff"
@@ -522,7 +531,7 @@ export function CategoryAnalyticsReportPage() {
                           <Tooltip
                             formatter={(value) => money(Number(value))}
                           />
-                          <Line
+                          <Line isAnimationActive={false}
                             dataKey="revenue"
                             name="Выручка"
                             stroke="#2878ff"

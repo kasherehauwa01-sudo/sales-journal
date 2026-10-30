@@ -390,12 +390,12 @@ async def _dataset(data, db):
 
 
 @router.post("")
-async def report(data: Request, db: AsyncSession = Depends(get_db)):
+async def report(data: Request, db: AsyncSession = Depends(get_db), full: bool = False):
     rows, available = await _dataset(data, db)
     return {
-        "items": table_rows(rows),
+        "items": rows if full else table_rows(rows),
         "total": len(rows),
-        "table_limit": TABLE_ROW_LIMIT,
+        "table_limit": len(rows) if full else TABLE_ROW_LIMIT,
         "summary": {
             "candidates": sum(x["status"] == "Кандидат" for x in rows),
             "stale": sum("Давно не продавался" in x["reasons"] for x in rows),

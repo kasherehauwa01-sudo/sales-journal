@@ -1,3 +1,5 @@
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
+import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import { useEffect, useState } from "react";
 import {
   CartesianGrid,
@@ -311,9 +313,9 @@ export function ProductAnalyticsPage() {
     [detail, setDetail] = useState<Detail>(),
     [detailError, setDetailError] = useState(""),
     [detailRange, setDetailRange] = useState(() => detailDates("month"));
-  const loading = request.operation === "report",
-    table = reportData,
-    summaryData = reportData;
+  const loading = request.operation === "report";
+  const [table,setPdfData]=usePdfData(reportData);
+  const summaryData=table;
   const filtersChanged = Boolean(
     displayed &&
       JSON.stringify(payload) !== JSON.stringify(displayed.parameters),
@@ -392,6 +394,14 @@ export function ProductAnalyticsPage() {
     else if (result) setDetailError(result.error);
   }
   const rows = table?.items || [];
+  async function preparePdf(signal:AbortSignal) {
+    const p=displayed!;
+    const full=await (await analyticsResponse(await fetch(`${API}/reports/product-analytics/report?${query({section:p.tab,sort_by:p.tab==="top"?p.sort:undefined,full:true})}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p.parameters),signal}))).json() as Report;
+    assertComplete(full.items,full.total);
+    assertSameSnapshot(reportData?.summary,full.summary);
+    assertVisibleRows(reportData?.items||[],full.items,"key");
+    setPdfData(full);
+  }
   async function exportExcel() {
     if (!displayed) return;
     const result = await request.run("export", async (signal) => {
@@ -465,6 +475,7 @@ export function ProductAnalyticsPage() {
   return (
     <div className="page product-analytics">
       <div className="page-title">
+        <PdfExportButton report="product-analytics" snapshot={displayed} disabled={request.busy || filtersChanged || viewChanged} prepare={preparePdf} restore={()=>setPdfData(undefined)}/>
         <div>
           <h1>Товарная аналитика</h1>
           <p>Лидеры, рост, падение и новые товарные позиции</p>
@@ -849,6 +860,7 @@ export function ProductAnalyticsPage() {
           <div className="backdrop" onClick={() => setSelected(undefined)} />
           <section className="product-detail">
             <div className="drawer-head">
+              <PdfExportButton report="product-analytics" snapshot={displayed} disabled={request.busy || filtersChanged || viewChanged} prepare={preparePdf} restore={()=>setPdfData(undefined)}/>
               <div>
                 <small>Карточка товара</small>
                 <h2>{selected.name}</h2>
@@ -1025,13 +1037,13 @@ export function ProductAnalyticsPage() {
                   <YAxis yAxisId="units" orientation="right" />
                   <Tooltip />
                   <Legend />
-                  <Line
+                  <Line isAnimationActive={false}
                     yAxisId="money"
                     dataKey="revenue"
                     name="Выручка"
                     stroke="#2878ff"
                   />
-                  <Line
+                  <Line isAnimationActive={false}
                     yAxisId="units"
                     dataKey="units"
                     name="Количество"

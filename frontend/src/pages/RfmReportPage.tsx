@@ -1,3 +1,5 @@
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
+import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {Download, HelpCircle, X} from 'lucide-react';
@@ -80,7 +82,16 @@ export function RfmReportPage() {
     (p, signal) => {setSelected(undefined);return reportJson<Response>(`/reports/rfm?${query(p)}`, signal)},
     (p) => ({ ...p, page: 1 }),
   );
-  const { data, loading } = controller;
+  const { data: baseData, loading } = controller;
+  const [data, setPdfData] = usePdfData(baseData);
+  async function preparePdf(signal:AbortSignal) {
+    const full=await reportJson<Response>(`/reports/rfm?${query({...controller.snapshot!,page:1,full:true})}`,signal);
+    assertComplete(full.clients.items,full.clients.total);
+    assertSameSnapshot(baseData?.kpi,full.kpi);
+    assertSameSnapshot(baseData?.segments,full.segments);
+    assertVisibleRows(baseData?.clients.items||[],full.clients.items,"client_key");
+    setPdfData(full);
+  }
   function openClient(client: Client) {
     if (!controller.snapshot) return;
     const p = controller.snapshot;
@@ -114,6 +125,7 @@ export function RfmReportPage() {
   return (
     <div className="page rfm-page">
       <div className="page-title">
+        <PdfExportButton report="rfm-analysis" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty} prepare={preparePdf} restore={()=>setPdfData(undefined)}/>
         <div>
           <h1>RFM-анализ клиентов</h1>
           <p>Рабочие сегменты для маркетинговых коммуникаций</p>

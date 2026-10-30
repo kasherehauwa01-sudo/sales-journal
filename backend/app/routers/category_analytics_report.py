@@ -1,3 +1,4 @@
+from app.services.report_execution import FullReportRoute
 from typing import Annotated
 from datetime import date, datetime
 from io import BytesIO
@@ -34,7 +35,7 @@ from app.services.vrcatalog import (
     get_catalog_category_map,
 )
 
-router = APIRouter(prefix="/reports/category-analytics", tags=["Отчеты"])
+router = APIRouter(route_class=FullReportRoute, prefix="/reports/category-analytics", tags=["Отчеты"])
 
 
 def _sale_conditions(start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None):
@@ -460,7 +461,7 @@ async def product_sales(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None):
+    brands: Annotated[list[str] | None, Query()] = None, full: bool = False):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     start, end, _ = effective_period(
@@ -506,8 +507,8 @@ async def product_sales(
             )
             .where(*conditions)
             .order_by(Sale.sale_date.desc(), Sale.id.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            .offset(0 if full else (page - 1) * page_size)
+            .limit(None if full else page_size)
         )
     ).all()
     return {
