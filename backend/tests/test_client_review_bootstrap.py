@@ -16,6 +16,7 @@ import urllib.request
 import urllib.error
 
 import pytest
+from app.services.churn_pilot import ALGORITHM_POLICY
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from sqlalchemy import insert, select
@@ -114,7 +115,7 @@ def test_native_shadow_existing_admin_review_and_external_identity(monkeypatch):
                 identity['evidence'].update({k:True for k in ('all_sales_reviewed','complete_client_history_reviewed','client_unique','manager_unique','nontechnical','no_name_phone_conflict')})
                 async with factory() as db:
                     await review_identity(db,identity,actor='synthetic-admin',expected_revision=0)
-                    await manage_policy(db,'draft',dict(algorithm_policy='aviator-churn-pilot/1',min_confidence=.3,max_manifest_age_seconds=600,issuer='synthetic-upstream',required_sources=['synthetic-1c']),actor='synthetic-admin',expected_revision=0)
+                    await manage_policy(db,'draft',dict(algorithm_policy=ALGORITHM_POLICY,min_confidence=.3,max_manifest_age_seconds=600,issuer='synthetic-upstream',required_sources=['synthetic-1c']),actor='synthetic-admin',expected_revision=0)
                     await manage_policy(db,'approve',{'confirm_business_approval':True},actor='synthetic-admin',expected_revision=1);await db.commit()
                 expected=[dict(client_key='synthetic customer',day=r['sale_date'],checks=1,positive_checks=1,revenue='1000.00') for r in sorted(rows,key=lambda r:r['sale_date'])]
                 assignments=[dict(subject_hash=digest(candidate.client_key),client_id='client-100',manager_id=3,revision=1)]
