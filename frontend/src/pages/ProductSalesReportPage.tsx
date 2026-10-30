@@ -1,3 +1,5 @@
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
+import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import { serializeReportSelection } from "../utils/reportFilters";
 import { BrandFilter } from "../components/BrandFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
@@ -26,7 +28,9 @@ export function ProductSalesReportPage() {
   const [group, setGroup] = useState("day");
   const [topMetric, setTopMetric] = useState("revenue");
   const [topLimit, setTopLimit] = useState(10);
-  const [details, setDetails] = useState<any>();
+  const [baseDetails, setDetails] = useState<any>();
+  const [detailProduct,setDetailProduct]=useState<any>();
+  const [details,setPdfDetails]=usePdfData(baseDetails);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [revision, setRevision] = useState(0);
   const { data: options } = useApi<{ departments: string[] }>("/filters");
@@ -112,7 +116,25 @@ export function ProductSalesReportPage() {
       } as Report;
     },
   );
-  const { data: report, loading } = controller;
+  const { data: baseReport, loading } = controller;
+  const [report,setPdfData]=usePdfData(baseReport);
+  async function preparePdf(signal:AbortSignal) {
+    const init={method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload(controller.snapshot!.filters))};
+    const summary=await reportJson<any>("/reports/product-sales/summary",signal,init);
+    assertSameSnapshot(baseReport?.summary,summary);
+    const full=await reportJson<any>("/reports/product-sales/products?full=true",signal,init);
+    assertComplete(full.items,full.total);
+    const images=new Map(controller.snapshot!.filters.products.map(item=>[item.key,item.image_url]));
+    const products=full.items.map((item:any)=>({...item,image_url:images.get(item.key)||null}));
+    assertVisibleRows(baseReport?.products||[],products,"key");
+    if(baseDetails) {
+      const fullDetails=await reportJson<any>("/reports/product-sales/details?full=true",signal,{...init,body:JSON.stringify({...payload(controller.snapshot!.filters),product:detailProduct})});
+      assertComplete(fullDetails.items,fullDetails.total);
+      assertSameSnapshot(baseDetails.total,fullDetails.total);
+      setPdfDetails(fullDetails);
+    }
+    setPdfData({...baseReport!,products});
+  }
 
   function add(products: Product[]) {
     const map = new Map(filters.products.map((x) => [x.key, x]));
@@ -202,7 +224,7 @@ export function ProductSalesReportPage() {
               }),
             },
           ),
-        setDetails,
+        value=>{setDetails(value);setDetailProduct({article:product.article,code:product.code,name:product.name})},
       );
   }
   const totals = report?.summary.current || {};
@@ -218,14 +240,15 @@ export function ProductSalesReportPage() {
   ];
   const top = useMemo(
     () =>
-      [...(report?.products || [])]
+      [...(baseReport?.products || [])]
         .sort((a, b) => b[topMetric] - a[topMetric])
         .slice(0, topLimit),
-    [report, topMetric, topLimit],
+    [baseReport, topMetric, topLimit],
   );
   return (
     <div className="page product-report">
       <div className="page-title">
+        <PdfExportButton report="product-sales" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty} prepare={preparePdf} restore={()=>{setPdfData(undefined);setPdfDetails(undefined)}}/>
         <div>
           <h1>Продажи по товарам</h1>
           <p>Отчеты · Продажи по товарам</p>
@@ -460,7 +483,7 @@ export function ProductSalesReportPage() {
                         : number(Number(v))
                     }
                   />
-                  <Bar dataKey={metric} fill="#2878ff" />
+                  <Bar isAnimationActive={false} dataKey={metric} fill="#2878ff" />
                 </BarChart>
               </ResponsiveContainer>
             </section>
@@ -543,4 +566,4 @@ function CatalogFilter({definition,value,onChange}:{definition:CatalogFilterDef;
 function ProductPicker({current,close,add}:{current:Product[];close:()=>void;add:(x:Product[])=>void}){const [search,setSearch]=useState('');const [page,setPage]=useState(1);const [selected,setSelected]=useState<Map<string,Product>>(()=>new Map(current.map(x=>[x.key,x])));const {data,loading,error}=useApi<ProductPage>(`/reports/product-sales/products/search?${query({search,page,page_size:50})}`);const pageSelected=data?.items.every(x=>selected.has(x.key))||false;function toggle(x:Product){setSelected(old=>{const next=new Map(old);next.has(x.key)?next.delete(x.key):next.set(x.key,x);return next})}return <><div className="backdrop" onClick={close}/><div className="report-modal"><div className="period-modal-head"><div><h2>Выбрать товары</h2><p>Выбрано: {selected.size}</p></div><button onClick={close}><X/></button></div><input className="report-search" placeholder="Артикул, код или наименование" value={search} onChange={e=>{setSearch(e.target.value);setPage(1)}}/>{loading?<Loading/>:error?<ErrorBox text={error}/>:<div className="table-wrap"><table><thead><tr><th><input type="checkbox" checked={pageSelected} onChange={()=>setSelected(old=>{const next=new Map(old);data?.items.forEach(x=>pageSelected?next.delete(x.key):next.set(x.key,x));return next})}/></th><th>Артикул</th><th>Код</th><th>Наименование</th></tr></thead><tbody>{data?.items.map(x=><tr key={x.key}><td><input type="checkbox" checked={selected.has(x.key)} onChange={()=>toggle(x)}/></td><td>{x.article||'—'}</td><td>{x.code||'—'}</td><td>{x.name}</td></tr>)}</tbody></table></div>}<div className="pagination"><button disabled={page<=1} onClick={()=>setPage(page-1)}>Назад</button><span>{page} / {data?.pages||1}</span><button disabled={page>=(data?.pages||1)} onClick={()=>setPage(page+1)}>Далее</button></div><div className="actions"><button onClick={close}>Отмена</button><button className="primary" onClick={()=>add([...selected.values()])}>Добавить в отчет ({selected.size})</button></div></div></>}
 function ReportTable({rows,compare,selected,setSelected,openDetails}:{rows:any[];compare:boolean;selected:Set<string>;setSelected:(x:Set<string>)=>void;openDetails:(x:any)=>void}){const [sort,setSort]=useState('revenue');const [desc,setDesc]=useState(true);const sorted=[...rows].sort((a,b)=>{const left=a[sort]??'',right=b[sort]??'';return (left>right?1:left<right?-1:0)*(desc?-1:1)});const columns=[['article','Артикул'],['code','Код'],['name','Наименование'],['units','Продано, шт.'],...(compare?[['previous_units','Предыдущий период, шт.'],['units_change_percent','Изменение, %']]:[]),['revenue','Продажи, ₽'],...(compare?[['previous_revenue','Предыдущий период, ₽'],['revenue_change_percent','Изменение, %']]:[]),['checks','Чеков'],['clients','Клиентов'],['average_price','Средняя цена'],['discount_amount','Скидка, ₽'],['average_discount','Средний % скидки'],['last_sale','Последняя продажа'],['revenue_share','Доля в выручке']];function sortBy(key:string){if(!['units','revenue','checks','clients','average_price','discount_amount','last_sale'].includes(key))return;setDesc(sort===key?!desc:true);setSort(key)}function value(row:any,key:string){if(['units','previous_units'].includes(key))return number(row[key]);if(['revenue','previous_revenue','average_price','discount_amount'].includes(key))return money(row[key]);if(['units_change_percent','revenue_change_percent','average_discount','revenue_share'].includes(key))return row[key]==null?'—':percent(row[key]);if(key==='last_sale')return date(row[key]);return row[key]||'—'}return <section className="panel"><h2>Товары</h2>{!rows.length?<Empty/>:<div className="table-wrap product-report-table"><table><thead><tr><th></th>{columns.map(([key,label])=><th key={key} onClick={()=>sortBy(key)}>{label}{sort===key?(desc?' ↓':' ↑'):''}</th>)}</tr></thead><tbody>{sorted.map(x=><tr key={x.key} onClick={()=>openDetails(x)}><td onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selected.has(x.key)} onChange={()=>{const next=new Set(selected);next.has(x.key)?next.delete(x.key):next.add(x.key);setSelected(next)}}/></td>{columns.map(([key])=><td key={key}>{value(x,key)}</td>)}</tr>)}<tr><th>Итого</th>{columns.map(([key])=><th key={key}>{key==='units'?number(rows.reduce((a,x)=>a+x.units,0)):key==='previous_units'?number(rows.reduce((a,x)=>a+x.previous_units,0)):key==='revenue'?money(rows.reduce((a,x)=>a+x.revenue,0)):key==='previous_revenue'?money(rows.reduce((a,x)=>a+x.previous_revenue,0)):''}</th>)}</tr></tbody></table></div>}</section>}
 function SimpleTable({title,rows}:{title:string;rows:any[]}){if(!rows.length)return null;const labels:any={manager:'Менеджер',department:'Подразделение',revenue:'Продажи, ₽',units:'Продано, шт.',checks:'Количество чеков',clients:'Количество клиентов'};const keys=Object.keys(rows[0]);const max=Math.max(...rows.map(x=>x.revenue));return <section className="panel"><h2>{title}</h2>{rows[0].department&&<div className="department-bars">{rows.map(row=><div className="bar" key={row.department}><span>{row.department}</span><i style={{width:`${row.revenue/max*100}%`}}/><b>{money(row.revenue)}</b></div>)}</div>}<div className="table-wrap"><table><thead><tr>{keys.map(x=><th key={x}>{labels[x]||x}</th>)}</tr></thead><tbody>{rows.map((row,i)=><tr key={i}>{keys.map(x=><td key={x}>{x==='revenue'?money(row[x]):x==='units'?number(row[x]):row[x]}</td>)}</tr>)}</tbody></table></div></section>}
-function Details({data,close}:{data:any;close:()=>void}){return <><div className="backdrop" onClick={close}/><div className="report-modal"><div className="period-modal-head"><h2>Детализация продаж</h2><button onClick={close}><X/></button></div><div className="table-wrap"><table><thead><tr>{['Дата','Документ','Клиент','Менеджер','Подразделение','Количество','Сумма','Цена','Скидка'].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{data.items.map((x:any)=><tr key={`${x.id}-${x.document_number}`}><td>{date(x.sale_date)}</td><td>{x.document_number}</td><td>{x.client}</td><td>{x.manager}</td><td>{x.department}</td><td>{number(x.quantity)}</td><td>{money(x.amount)}</td><td>{money(x.actual_price)}</td><td>{percent(x.discount)}</td></tr>)}</tbody></table></div></div></>}
+function Details({data,close}:{data:any;close:()=>void}){return <><div className="backdrop" onClick={close}/><div className="report-modal" data-pdf-detail><div className="period-modal-head"><h2>Детализация продаж</h2><button onClick={close}><X/></button></div><div className="table-wrap"><table><thead><tr>{['Дата','Документ','Клиент','Менеджер','Подразделение','Количество','Сумма','Цена','Скидка'].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{data.items.map((x:any)=><tr key={`${x.id}-${x.document_number}`}><td>{date(x.sale_date)}</td><td>{x.document_number}</td><td>{x.client}</td><td>{x.manager}</td><td>{x.department}</td><td>{number(x.quantity)}</td><td>{money(x.amount)}</td><td>{money(x.actual_price)}</td><td>{percent(x.discount)}</td></tr>)}</tbody></table></div></div></>}

@@ -1,4 +1,5 @@
 """Read-only, bounded browsing of precomputed all-history seasonal data."""
+from app.services.report_execution import FullReportRoute
 
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -18,7 +19,7 @@ from app.services.seasonality import describe, ALGORITHM_VERSION
 from app.services.seasonality_storage import metadata
 from app.services.product_analytics_runtime import ensure_headroom
 
-router = APIRouter(prefix="/reports/seasonality", tags=["Отчеты"])
+router = APIRouter(route_class=FullReportRoute, prefix="/reports/seasonality", tags=["Отчеты"])
 
 
 async def read_snapshot(db):
@@ -54,6 +55,7 @@ async def products(
     after: Annotated[str | None, Query(pattern="^[a-f0-9]{64}$")] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     db: AsyncSession = Depends(get_db),
+    full: bool = False,
 ):
     ensure_headroom()
     await read_snapshot(db)
@@ -87,13 +89,13 @@ async def products(
                 search.strip().casefold(), autoescape=True
             )
         )
-    if after:
+    if after and not full:
         query = query.where(SeasonalityProfile.identity > after)
     rows = (
-        await db.execute(query.order_by(SeasonalityProfile.identity).limit(limit + 1))
+        await db.execute(query.order_by(SeasonalityProfile.identity) if full else query.order_by(SeasonalityProfile.identity).limit(limit + 1))
     ).all()
     items = []
-    for profile in rows[:limit]:
+    for profile in (rows if full else rows[:limit]):
         fresh = bool(
             status["ready"]
             and not profile.dirty
@@ -112,7 +114,7 @@ async def products(
         )
     return {
         "items": items,
-        "next_cursor": rows[limit - 1].identity if len(rows) > limit else None,
+        "next_cursor": rows[limit - 1].identity if not full and len(rows) > limit else None,
         "metadata": status,
     }
 
@@ -128,6 +130,7 @@ async def history(
     after_month: Annotated[int | None, Query(ge=1, le=12)] = None,
     limit: Annotated[int, Query(ge=1, le=120)] = 120,
     db: AsyncSession = Depends(get_db),
+    full: bool = False,
 ):
     import re
 
@@ -161,12 +164,12 @@ async def history(
         )
     if years:
         query = query.where(model.year.in_(years))
-    if after_year is not None:
+    if after_year is not None and not full:
         query = query.where(tuple_(model.year, model.month) > (after_year, after_month))
     rows = (
-        await db.scalars(query.order_by(model.year, model.month).limit(limit + 1))
+        await db.scalars(query.order_by(model.year, model.month) if full else query.order_by(model.year, model.month).limit(limit + 1))
     ).all()
-    page = rows[:limit]
+    page = rows if full else rows[:limit]
     fresh = valid_profile(profile, status, state)
     data = profile.data if fresh else None
     return {
@@ -189,7 +192,7 @@ async def history(
         ],
         "next_cursor": (
             {"year": page[-1].year, "month": page[-1].month}
-            if len(rows) > limit
+            if not full and len(rows) > limit
             else None
         ),
     }

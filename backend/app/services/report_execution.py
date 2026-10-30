@@ -65,3 +65,15 @@ async def report_transaction(db: AsyncSession):
 async def get_report_db(db: AsyncSession = Depends(get_db)):
     async with report_transaction(db) as session:
         yield session
+
+class FullReportRoute(APIRoute):
+    """Guard full export datasets only; ordinary page browsing is unchanged."""
+    async def handle(self, scope, receive, send):
+        from urllib.parse import parse_qs
+        from app.services.product_analytics_runtime import ensure_headroom
+        values = parse_qs(scope.get('query_string', b'').decode('ascii', errors='ignore')).get('full', [])
+        if any(value.lower() in {'true','1','yes','on'} for value in values):
+            async with heavy_operation('full_report_pdf_data'):
+                ensure_headroom()
+                return await super().handle(scope, receive, send)
+        return await super().handle(scope, receive, send)

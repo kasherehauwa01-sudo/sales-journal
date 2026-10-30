@@ -336,7 +336,7 @@ async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
 
 @router.post("/report")
 async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(top|growth|decline|stopped|new)$"),
-                      sort_by:str="revenue",limit:int=Query(20,ge=10,le=500),db:AsyncSession=Depends(get_db)):
+                      sort_by:str="revenue",limit:int=Query(20,ge=10,le=500),db:AsyncSession=Depends(get_db),full:bool=False):
  """Возвращает KPI и активную вкладку из одного рассчитанного набора."""
  if data.group_by not in GROUP_FIELDS:raise HTTPException(422,"Неизвестная группировка")
  product_data=data.model_copy(update={"group_by":"product"})
@@ -354,8 +354,9 @@ async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(t
    "current":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0,
    "previous":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0,
   }
- items=await run_cpu(_sorted,grouped,section,sort_by,limit)
- total=len(await run_cpu(_sorted,grouped,section,sort_by,1000000))
+ all_items=await run_cpu(_sorted,grouped,section,sort_by,None)
+ items=all_items if full else all_items[:limit]
+ total=len(all_items)
  return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},
          "summary":result,"items":items,"total":total,"catalog":coverage(product_rows) if settings.product_analytics_local_catalog_enabled else None}
 
