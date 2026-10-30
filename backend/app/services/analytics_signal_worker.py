@@ -11,7 +11,7 @@ from app.models import (AnalyticsSignalRun, AnalyticsSignalState, AnalyticsPurch
 from app.services.client_identity import analytical_name_sql, ANALYTICAL_NORMALIZATION_VERSION
 from app.services.client_features import load_inactivity_features
 from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, POLICY
-from app.services.churn_pilot import algorithm
+from app.services.churn_pilot import algorithm, GENERATOR_VERSION as PILOT_GENERATOR_VERSION
 from app.services.analytics_signal_store import reconcile_batch
 from app.services.seasonality_worker import advisory, SOURCE_LOCK, verify
 from app.services.product_analytics_runtime import ensure_headroom
@@ -108,7 +108,7 @@ async def scan_batch(db, run, size):
     counters["scanned_sales"] = counters.get("scanned_sales", 0)+len(ids)
     run.counters = counters
     positive = Sale.total_amount > 0
-    if algorithm(scope)[0] == "inactivity/aviator-churn-pilot/1":
+    if algorithm(scope)[0] == PILOT_GENERATOR_VERSION:
         for prefix in ("ВЗВ-", "РНВ-", "ВРМ-"):
             positive = positive & ~Sale.document_number.startswith(prefix)
     query = select(literal(run.id), key, Sale.sale_date, func.min(Sale.client), func.count(),

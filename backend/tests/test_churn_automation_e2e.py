@@ -16,6 +16,7 @@ import threading
 import time
 
 import pytest
+from app.services.churn_pilot import ALGORITHM_POLICY
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from sqlalchemy import insert, select, text, func
@@ -67,7 +68,7 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
             app.dependency_overrides[get_db]=sessions
             day=last_closed_day();now=datetime.now(timezone.utc)
             rows=[]
-            for i,delay in enumerate([45]*6+[8,2] if pilot else [45,46,8,2]):
+            for i,delay in enumerate([45]*6+[5,2] if pilot else [45,46,5,2]):
                 for n in range(3 if pilot else 21):
                     rows.append(dict(id=len(rows)+1,sale_date=day-timedelta(days=delay+5*n),
                         document_number=str(len(rows)),client='Fixture '+str(i),department='Авиаторов',
@@ -85,7 +86,7 @@ def test_real_worker_release_http_mariadb_budget_replay_and_completion(monkeypat
                 fullscope=run.metadata_json['scope'];scope={k:v for k,v in fullscope.items() if k!='client_keys'}
                 evaluations=(await db.scalars(select(AnalyticsClientEvaluation).where(AnalyticsClientEvaluation.run_id==rid,AnalyticsClientEvaluation.signal_type=='CHURN_RISK').order_by(AnalyticsClientEvaluation.client_key))).all()
                 db.add(Policy(id=1,enabled=True,approved=True,revision=1,sequence=0,
-                    settings_json={'algorithm_policy':'aviator-churn-pilot/1','min_confidence':(.3 if pilot else .5),'max_manifest_age_seconds':7200,'issuer':'synthetic-upstream','required_sources':['synthetic-1c']}))
+                    settings_json={'algorithm_policy':ALGORITHM_POLICY,'min_confidence':(.3 if pilot else .5),'max_manifest_age_seconds':7200,'issuer':'synthetic-upstream','required_sources':['synthetic-1c']}))
                 assignments=[]
                 for i,c in enumerate(evaluations):
                     binding=Identity(subject_key=identity_key(c.client_key,scope),client_id=f'fixture-id-{i}',manager_id=3+i%2,revision=1,status='VERIFIED',

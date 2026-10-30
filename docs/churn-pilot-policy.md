@@ -1,63 +1,110 @@
-# Aviatorov pilot policy v1
+# Авиаторов: индивидуальный цикл покупок, v2
 
-PRODUCTION DEPLOYMENT = BLOCKED — NO VERIFIED RECOVERY.
+Генератор `inactivity/aviator-churn-pilot/2`, версия параметров `3`,
+бизнес-политика `aviator-churn-pilot/2`.
 
-Generator `inactivity/aviator-churn-pilot/1`, parameters version 2, business policy
-`aviator-churn-pilot/1`. Scope remains `aviatorov-wholesale-corporate/2`: department
-Авиаторов, ClientsVR buyer_type Оптовик/Корпоративный, both target types ambiguous
-and excluded. price_type is not used as buyer_type.
+## Правило
 
-Only this exact scope selects the pilot. Legacy `inactivity/1` evaluator is unchanged
-and remains available for other scopes. The pilot emits CHURN_RISK only, at >=45
-calendar days since the last positive store purchase, with >=3 distinct positive
-purchase days within the existing 365-day observation window. No cadence, MAD or
-history-span eligibility limits apply to this pilot. Counts aggregate checks by
-client/day: three receipts on one day count once. Zero/negative receipts and known
-excluded document prefixes ВЗВ-/РНВ-/ВРМ- cannot add a positive day. A positive
-purchase and a return on one day still constitute a positive purchase day; net
-revenue remains unchanged. Unknown upstream return encodings require source review.
-Other-store sales do not add days or reset the store anchor. Global RFM is not used.
+Типичный цикл — **медиана интервалов между уникальными положительными днями
+покупок клиента** в существующем окне 365 календарных дней включительно:
+`as_of - 364 ... as_of`. Несколько чеков в один день дают один день покупки.
+Медиана сохраняет существующее определение цикла и меньше зависит от единичного
+длинного перерыва, чем среднее. Это не среднее по всей истории из карточки клиента.
 
-Descriptive interval statistics and commercial score components are retained.
-Confidence retains its old quality model and UNKNOWN coverage weight of zero;
-three purchase days do not imply confidence >=0.5, verified identity or complete
-history. The synthetic three-day E2E explicitly approves 0.3 only inside the test;
-this is NOT a recommended or configured production threshold.
+Сигнал создаётся только при **строгом превышении** цикла:
 
-Runs freeze generator, parameter version and full parameters. Resume supersedes an
-old-policy checkpoint before further scanning/evaluation. Reuse and publication
-check the selected algorithm. Old SHADOW rows/history remain SHADOW; same-policy
-reruns reuse the run. Re-evaluation of an existing episode retains identity and
-revises evidence rather than duplicating an open episode.
+```text
+days_without_purchase > median_interval
+churn_threshold = floor(median_interval) + 1
+```
 
-Independent release now additionally requires an explicitly drafted and approved
-`algorithm_policy: aviator-churn-pilot/1` in producer policy settings. Old approved
-settings cannot authorize this algorithm. Existing release HTTP endpoints reject
-old policy settings (503) and old release metadata (410); publication listing
-filters incompatible releases. All prior source/manifest/identity/manager guards
-remain. Raw coverage/freshness remain UNKNOWN and automation_allowed=false.
-An approved synthetic release is a separate stream, never an update of raw signals.
+Порог в метриках — первый целый календарный день допустимого сигнала.
 
-## Verification
+| Медиана | Дней без покупки | Сигнал |
+| --- | --- | --- |
+| 90 | 50 | Нет |
+| 90 | 90 | Нет |
+| 90 | 91 | CHURN_RISK |
+| 90 | 103 | CHURN_RISK |
+| 17,5 | 17 | Нет |
+| 17,5 | 18 | CHURN_RISK |
+| 10 | 11 | CHURN_RISK |
 
-Use the existing opt-in, explicitly named local PostgreSQL/MariaDB test stand.
-Tests never use application DATABASE_URL. See test_churn_pilot.py for 44/45/46,
-positive day aggregation, returns, store/category exclusions and checkpoint guards.
-The parameterized test_churn_automation_e2e.py verifies both the lifetime-cap case
-and a six-client/three-day pilot through the native worker, independently signed
-fixture facts, release HTTP API, and concurrent PHP consumers. The pilot creates
-five tasks globally, blocks the sixth, preserves replay and sets due_at to +3 days.
-The admin bootstrap regression retains external_id A != client_id B rejection.
+Фиксированные 45 дней из v1 **отключены**, включая нижний предел и резервное
+правило. При медиане 42 и 55 днях без покупки сигнал остаётся: 55 > 42.
+Новая политика не обязана снимать все ранее созданные сигналы.
 
-## Future controlled adoption (not performed)
+Нужны минимум три положительных дня, два интервала и положительная конечная
+медиана. Нет корректного цикла — `INSUFFICIENT_HISTORY`, без сигнала. Прежние
+ограничения общего `inactivity/1` (минимум восемь дней, медиана не более 60 дней,
+порог 3×цикл) не вводятся: цикл 90 дней поддерживается.
 
-No PostgreSQL migration is needed for this policy: existing JSON settings carry
-its version. First review verified recovery, actual deployed commits/schema,
-source registry/completeness/currentness, full-history identity reviews and manager
-bindings. Independently approve confidence, priority, lifetime budget, source list,
-TTL/expiry, stop and retry rules. Retain disabled SHADOW defaults until separate
-permission. Explicitly draft/approve the producer algorithm policy and approve
-this generator and exact scope on the consumer; old approvals are insufficient.
-Calltrack also needs its new daily-budget SQL after its existing budget migration.
-Do not reset cursors or promote old SHADOW payloads. First process a new independently
-approved fresh release after dry-run review. No production work is authorized here.
+## Неизменённые условия
+
+Scope `aviatorov-wholesale-corporate/2`: Авиаторов, текущий тип клиента ClientsVR
+Оптовик/Корпоративный; принадлежность к обоим типам неоднозначна и исключается.
+Тип цены не заменяет тип покупателя. Нулевые/отрицательные чеки и документы
+ВЗВ-/РНВ-/ВРМ- не добавляют положительный день. Покупка и возврат в один день
+оставляют положительный день при наличии подходящей положительной покупки;
+суммарная выручка не меняется. Другие магазины не меняют опорную дату Авиаторов.
+Нормализация имени и сопоставление клиента/менеджера сохраняются.
+
+Среднее, медиана, квартиль, MAD, формулы confidence и коммерческих компонентов
+score сохранены. Confidence — качество данных, не вероятность ухода. Меняются
+условие сигнала и `churn_threshold`. `PURCHASE_OVERDUE` в пилоте не включается.
+Другие scope по-прежнему используют неизменённый `inactivity/1`.
+
+Новых запросов, сканирований, таблиц или загрузок истории в Python нет. Размеры
+пакетов, блокировки, контроль RAM, таймауты, Docker/PostgreSQL не меняются.
+
+## Старые состояния и автоматизация
+
+Существующий механизм версионирования переводит checkpoint v1 в `SUPERSEDED`
+до обработки, не переиспользует завершённый run v1 как v2 и не публикует его
+под новой версией. История сохраняется. Совместимый run v2 можно переиспользовать.
+
+Следующий штатный расчёт разрешает старый активный эпизод, ещё укладывающийся
+в цикл, как `MODEL_REEVALUATION`. Просроченный действующий эпизод обновляется
+без дубля; после разрешённого может начаться следующий. Новая положительная
+покупка сохраняет разрешение `PURCHASE_OCCURRED`. Снятие аналитического сигнала
+не закрывает автоматически задачу Calltrack.
+
+Расчёт остаётся SHADOW с `automation_allowed=false`. Старая producer-политика
+`/1` не утверждает `/2`: release и HTTP-выдача проверяют `ALGORITHM_POLICY`.
+Старые approved release v1 не выдаются как v2. Feature flags, confidence, подписи
+источников, идентичность и назначение остаются независимыми условиями.
+
+## Безопасное внедрение и откат
+
+1. После слияния и отдельного разрешения сверить фактический backend image,
+   исходники и серверные расширения. Выполнить существующую процедуру обновления
+   backend. Миграций для этого PR нет. Автоматизацию не включать автоматически.
+2. Следующий отдельно разрешённый запуск существующего worker рассчитает v2.
+   Историю/каталог/курсоры других процессов не сбрасывать. Не запускать пересчёт
+   при открытии страницы. Проверить 90/50, 90/103, границы и старые эпизоды.
+3. Для создания задач отдельно согласовать producer-политику
+   `algorithm_policy: aviator-churn-pilot/2` и конфигурацию consumer Calltrack для
+   `inactivity/aviator-churn-pilot/2`. Старые approvals не переносить автоматически,
+   confidence для обхода отказов не снижать. До обновления разрешений выдача может
+   отвечать 503/410, а Calltrack — отвергать новый generator: это запрещающее
+   поведение, не причина отключать проверки. Production-настройки PR не меняет.
+4. Старые opt-in PHP/MariaDB E2E-фикстуры `/1` также требуют независимого обновления
+   разрешённой версии. Проверить replay и отсутствие дублей в локальном стенде.
+   Другой репозиторий этим PR не изменяется.
+5. Для отката вернуть предыдущий согласованный backend image и соответствующую
+   утверждённую политику через существующую процедуру. Не удалять историю и не
+   выполнять Alembic downgrade/stamp. Не переименовывать события v2 в v1.
+   Предыдущий образ возвращает правило 45 дней; не делать это незаметно при
+   включённой автоматизации. Разрешения Calltrack сверить отдельно.
+
+## Проверки
+
+`test_churn_pilot.py`: пользовательские примеры, равенство, дробная медиана,
+отсутствие порога 45 дней, неполная история, невалидный цикл, score/confidence,
+legacy scope; реальные worker/reconciliation/approval/HTTP-guard функции с
+подставными DB-границами проверяют отказ старым версиям, разрешение эпизода,
+новый эпизод, повторный расчёт и новую покупку. Это не тест PostgreSQL-блокировок.
+
+Нативные PostgreSQL и PHP/MariaDB тесты требуют явного локального изолированного
+стенда и не используют приложение DATABASE_URL. Production-запуск, deployment,
+миграции и изменения настроек автоматизации этой работой не выполняются.
