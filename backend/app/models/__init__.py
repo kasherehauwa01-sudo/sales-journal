@@ -21,3 +21,4 @@ __all__ += ["AnalyticsSignalRun", "AnalyticsSignalState", "AnalyticsPurchaseDay"
 from .analytics_delivery import AnalyticsDeliveryHead, AnalyticsDeliveryPublication
 from .analytics_automation import (AnalyticsAutomationPolicy, AnalyticsAutomationIdentity,
     AnalyticsAutomationRelease, AnalyticsAutomationEvent, AnalyticsAutomationDecision)
+from .churn_schedule import ChurnSchedule, ChurnJob, ChurnReceipt

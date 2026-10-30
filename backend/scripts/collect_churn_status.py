@@ -24,12 +24,12 @@ class ObservationError(Exception):
         self.code = code
 
 
-def command(args, *, input_text=None, timeout=5):
+def command(args, *, input_text=None, timeout=5, environment=None, max_output=MAX_OUTPUT):
     """Fixed caller-owned argv, bounded pipes and deadline; never echo stderr."""
     with tempfile.TemporaryFile() as source:
         source.write((input_text or '').encode()); source.seek(0)
         process = subprocess.Popen(args, stdin=source, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, env={'TZ': 'UTC', 'LC_ALL': 'C'})
+                                   stderr=subprocess.PIPE, env={'TZ': 'UTC', 'LC_ALL': 'C', **(environment or {})})
         selector = selectors.DefaultSelector()
         data = {process.stdout: bytearray(), process.stderr: bytearray()}
         try:
@@ -47,7 +47,7 @@ def command(args, *, input_text=None, timeout=5):
                         selector.unregister(event.fileobj)
                         continue
                     data[event.fileobj].extend(chunk)
-                    if sum(map(len, data.values())) > MAX_OUTPUT:
+                    if sum(map(len, data.values())) > max_output:
                         raise ObservationError('RUNTIME_ERROR')
             process.wait(timeout=max(0.01, deadline-time.monotonic()))
             if process.returncode:
@@ -289,13 +289,17 @@ def write_snapshot(path, snapshot):
 
 
 def main():
+    global SERVICE, TIMER
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--calltrack-root', type=Path, required=True)
     parser.add_argument('--receiver-defaults', type=Path, help='Root-only MariaDB SELECT-only credentials file; never printed')
     parser.add_argument('--receiver-policy', type=Path, help='Existing protected consumer policy; allowlisted keys only')
+    parser.add_argument('--service', choices=['calltrack-churn-pilot.service', 'sales-churn-permanent.service'], default=SERVICE)
+    parser.add_argument('--timer', choices=['calltrack-churn-pilot.timer', 'sales-churn-permanent.timer'], default=TIMER)
     args = parser.parse_args()
+    SERVICE, TIMER = args.service, args.timer
     if args.output != Path('/run/sales-churn-monitor/status.json'):
         parser.exit(1, 'Only the dedicated monitoring output path is allowed\n')
     if os.geteuid() != 0:

@@ -1,6 +1,7 @@
 import {useEffect} from 'react';
 import {Link,useLocation} from 'react-router-dom';
 import {Diagnostic,stamp,statusNames,useChurnStatus,valueText} from '../hooks/useChurnStatus';
+import {ChurnAutomationControl} from '../components/ChurnAutomationControl';
 
 const runNames:Record<string,string>={RUNNING:'Работает',SUCCEEDED:'Успешно',FAILED:'Ошибка',BLOCKED:'Заблокировано',PAUSED:'Приостановлено',SUPERSEDED:'Заменён новым расчётом',success:'Успешное завершение процесса',failed:'Ошибка',blocked:'Заблокировано',unknown:'Нет подтверждённого результата'};
 function Metrics({rows}:{rows:[string,unknown][]}){return <dl className="catalog-sync-metrics">{rows.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{valueText(value)}</dd></div>)}</dl>}
@@ -11,7 +12,9 @@ export function ChurnScenarioPage(){
   useEffect(()=>{if(data && hash==='#history'){const block=document.getElementById('history');block?.scrollIntoView?.();block?.focus()}},[data,hash]);
   return <div className="page churn-scenario-page"><div className="page-title"><div><h1>Сигнал Риск ухода</h1><p>Настройки → Сценарии · мониторинг существующего процесса</p></div><button disabled={loading} onClick={refresh}>Обновить статус</button></div>
     <Link to="/settings/scenarios">← Все сценарии</Link>
-    <p className="muted">Эта страница только читает состояние. Она не запускает расчёт, не отправляет сигналы и не меняет разрешения. Время — по Москве.</p>
+    <p className="muted">Время — по Москве. Изменения постоянного сценария требуют утверждённой политики. Доставка подтверждается отдельно от расчёта.</p>
+    <ChurnAutomationControl/>
+    <p className="muted">Ниже — диагностика аналитического контура и исторических бюджетов пилота. Постоянный сценарий использует отдельный утверждаемый бюджет; его этапы и подтверждения доставки показаны выше.</p>
     {loading&&<p role="status">Загрузка состояния…</p>}{error&&<div className="filter-error" role="alert">{error}</div>}
     {data&&<>
       <section className="panel settings-panel"><h2>Общее состояние — {statusNames[data.status]}</h2>
