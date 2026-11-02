@@ -1,5 +1,10 @@
 # ROLLBACK_COMPATIBILITY_REPORT
 
+Historical schema23/24 rehearsal report. The current launcher additionally supports
+reviewed schema25; installation and maintenance rollback25 are documented in
+[churn_schema25_deployment.md](churn_schema25_deployment.md). The original results
+below do not verify the operator's current image or server updater on schema25.
+
 PRODUCTION DEPLOYMENT = BLOCKED — NO VERIFIED RECOVERY.
 No merge, production migration, backup, restart or deployment is authorized by this report.
 
