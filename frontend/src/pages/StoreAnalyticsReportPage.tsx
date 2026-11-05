@@ -1,4 +1,4 @@
-import { assertComplete, assertVisibleRows } from "../services/reportPdf";
+import { assertComplete, assertVisibleRows, assertSameSnapshot } from "../services/reportPdf";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
@@ -58,12 +58,12 @@ export function StoreAnalyticsReportPage() {
     group_by: string;
     points: Array<Record<string, string | number>>;
   }>();
-  const [baseSales, setSales] = useState<{ items: DetailSale[] }>();
+  const [baseSales, setSales] = useState<{ items: DetailSale[]; total:number }>();
   const [sales,setPdfSales]=usePdfData(baseSales);
   async function preparePdf(signal:AbortSignal) {
     if(!selected||!data) return;
     const full=await reportJson<{items:DetailSale[];total:number}>(`/reports/store-analytics/stores/${encodeURIComponent(selected.store)}/sales?${query({...controller.snapshot!,date_from:data.period.start,date_to:data.period.end,full:true})}`,signal);
-    assertComplete(full.items,full.total);assertVisibleRows(baseSales?.items||[],full.items,"id");setPdfSales(full);
+    assertComplete(full.items,full.total);assertSameSnapshot(baseSales?.total,full.total);assertVisibleRows(baseSales?.items||[],full.items,"id");setPdfSales(full);
   }
   function openStore(row: StoreRow, selectedGroup = group) {
     if (!controller.snapshot || !data) return;
@@ -83,7 +83,7 @@ export function StoreAnalyticsReportPage() {
           `${base}/dynamics?${detailParams}`,
           signal,
         );
-        const sales = await reportJson<{ items: DetailSale[] }>(
+        const sales = await reportJson<{ items: DetailSale[]; total:number }>(
           `${base}/sales?${detailParams}`,
           signal,
         );
@@ -373,7 +373,7 @@ export function StoreAnalyticsReportPage() {
             <div className="drawer-head">
               <div>
                 <small>Детализация магазина</small>
-                <h2>{selected.store}</h2>
+                <h2>{selected.store}</h2><PdfExportButton report="store-analytics" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty} prepare={preparePdf} restore={()=>setPdfSales(undefined)}/>
               </div>
               <button onClick={() => setSelected(undefined)}>Закрыть</button>
             </div>

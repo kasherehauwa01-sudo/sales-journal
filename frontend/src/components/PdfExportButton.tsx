@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Download } from 'lucide-react';
-import { captureReport, downloadReportPdf } from '../services/reportPdf';
+import { assertSameSnapshot, PdfValidationError, captureReport, downloadReportPdf } from '../services/reportPdf';
 
 export function usePdfData<T>(data:T) {
  const [override,setOverride]=useState<T>();
@@ -10,6 +10,7 @@ export function usePdfData<T>(data:T) {
 type Props={report:string;snapshot?:object;disabled?:boolean;prepare?:(signal:AbortSignal)=>Promise<void>;restore?:()=>void};
 export function PdfExportButton({report,snapshot,disabled,prepare,restore}:Props) {
  const pending=useRef<AbortController|null>(null),button=useRef<HTMLButtonElement>(null);
+ const latest=useRef({snapshot,disabled});latest.current={snapshot,disabled};
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  useEffect(()=>()=>pending.current?.abort(),[]);
  async function run() {
@@ -22,10 +23,16 @@ export function PdfExportButton({report,snapshot,disabled,prepare,restore}:Props
   const timeout=setTimeout(()=>controller.abort(),120000);
   try {
    await prepare?.(controller.signal);
+   const verifyParameters=()=>{
+    if(latest.current.disabled) throw new PdfValidationError('parameters_changed','Изменились параметры фильтрации. Сформируйте отчёт заново.');
+    assertSameSnapshot(frozen,JSON.parse(JSON.stringify(latest.current.snapshot??null)),'parameters');
+   };
+   verifyParameters();
    const html=await captureReport(root,frozen,controller.signal);
+   verifyParameters();
    await downloadReportPdf(report,html,frozen,controller.signal);
-  } catch(e) { if(!controller.signal.aborted) setError(e instanceof Error?e.message:'Не удалось скачать PDF. Повторите позже.'); else setError('Экспорт PDF прерван по времени или при закрытии отчёта. Файл не был сокращён.'); }
-  finally { clearTimeout(timeout);restore?.();root.inert=originalInert;root.removeAttribute('data-pdf-busy');pending.current=null;setBusy(false); }
+  } catch(e) { if(!controller.signal.aborted) setError(e instanceof PdfValidationError?`${e.message} [${e.code}:${e.check}]`:e instanceof Error?`Ошибка подготовки PDF: ${e.message}`:'Ошибка подготовки PDF. Повторите позже.'); else setError('Экспорт PDF прерван по времени или при закрытии отчёта. Файл не был сокращён.'); }
+  finally { clearTimeout(timeout);try {restore?.();} finally {root.inert=originalInert;root.removeAttribute('data-pdf-busy');pending.current=null;setBusy(false);} }
  }
  return <div data-pdf-exclude className="pdf-export-action"><button ref={button} className="primary" disabled={disabled||!snapshot||busy} onClick={()=>void run()}><Download size={17}/>{busy?'Формируется PDF…':'Скачать PDF'}</button>{busy&&<span role="status">Подготовка полного отчёта…</span>}{error&&<p role="alert">{error}</p>}</div>;
 }

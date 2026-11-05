@@ -264,6 +264,10 @@ return detail?{identity:product.identity,product_key:product.product_key,metadat
 }
 export function pdfFixture(path:string):unknown {
  const route=path.split('?')[0],full=path.includes('full=true');
+ if(route==='/reports/product-sales/details'||route==='/reports/category-analytics/product-sales/list'||/\/store-analytics\/stores\/.+\/sales$/.test(route)) {
+  return {items:Array.from({length:full?120:50},(_,i)=>({id:i+1,sale_date:'2026-10-01',document_number:`PDFSALE-${i}`,client:'Синтетический клиент',department:'Магазин1',total_amount:100,base_amount:100,discount_percent:0,discount:0,author:'Тест',price_type:'Базовая',quantity:2,items:2,amount:100,actual_price:50,manager:'Тест'})),total:120,page:1,pages:3};
+ }
+
  if(route==='/reports/product-analytics/details') return {product:analyticsFixture().items[0],points:[{period:'2026-10-01',revenue:100,units:2},{period:'2026-10-02',revenue:200,units:4}]};
  if(route==='/reports/product-analytics/report') {const r=analyticsFixture();return {...r,items:Array.from({length:full?550:20},(_,i)=>({...r.items[0],key:`code:${i}`,name:`Тестовый товар ${i}`})),total:550};}
  if(route.startsWith('/reports/product-analytics/catalog-options')) return ['Бренд1'];

@@ -118,6 +118,9 @@ export function PromotionCandidatesPage() {
     const {tab:_,...payload}=controller.snapshot!;
     const full=await reportJson<Report>("/reports/promotion-candidates?full=true",signal,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     assertComplete(full.items,full.total);
+    assertSameSnapshot(baseResult.report.total,full.total);
+    assertSameSnapshot(baseResult.report.seasonality,full.seasonality);
+    assertSameSnapshot(baseResult.report.catalog_available,full.catalog_available);
     assertSameSnapshot(baseResult.report.summary,full.summary);
     assertVisibleRows(baseResult.report.items,full.items,"key");
     setPdfData({report:full});
