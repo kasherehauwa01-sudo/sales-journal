@@ -1,7 +1,7 @@
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {PdfExportButton} from '../src/components/PdfExportButton';
-import {assertComplete,assertSameSnapshot,assertVisibleRows,filterText,pdfFilename,splitWideTables,captureReport} from '../src/services/reportPdf';
+import {assertComplete,assertSameSnapshot,assertVisibleRows,filterText,pdfFilename,splitWideTables,captureReport,downloadReportPdf} from '../src/services/reportPdf';
 vi.mock('../src/services/reportPdf',async original=>({...await original<typeof import('../src/services/reportPdf')>(),captureReport:vi.fn(async()=>'<h1>Тест</h1>'),downloadReportPdf:vi.fn(async()=>{})}));
 afterEach(()=>{cleanup();vi.restoreAllMocks()});
 it('captures filters and period and rejects incomplete or changed data',()=>{
@@ -30,4 +30,54 @@ it('blocks double click and restores the page after failure',async()=>{
 it('disables export before report generation',()=>{
  render(<div className="page"><PdfExportButton report="rfm-analysis" disabled /></div>);
  expect((screen.getByRole('button') as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('accepts identical response values regardless of nested object key order',()=>{
+ const initial={key:'code:1',revenue:100,metrics:{current:4,previous:2},image_url:null};
+ const full={image_url:null,metrics:{previous:2,current:4},revenue:100,key:'code:1'};
+ expect(()=>assertSameSnapshot(initial,full)).not.toThrow();
+ expect(()=>assertVisibleRows([initial],[full],'key')).not.toThrow();
+});
+
+it('matches legitimate duplicate product keys as a multiset without discarding rows',()=>{
+ const before=[{key:'code:1',name:'old name',amount:10},{key:'code:1',name:'new name',amount:20}];
+ expect(()=>assertVisibleRows(before,[...before].reverse(),'key')).not.toThrow();
+ expect(()=>assertVisibleRows(before,[before[1]],'key')).toThrow();
+ expect(()=>assertVisibleRows([before[0],before[0]],[before[0]],'key')).toThrow();
+ expect(()=>assertVisibleRows(before,[before[0],{...before[1],amount:21}],'key')).toThrow();
+});
+it.each([
+ [{n:1},{n:'1'}], [{n:null},{}], [{n:1},{n:1.0000000001}],
+ [{a:[1,2]},{a:[2,1]}], [{id:'01'},{id:'1'}], [{n:null},{n:0}],
+])('rejects genuine field, type, identity and ordered array changes', (before,after)=>{
+ expect(()=>assertSameSnapshot(before,after)).toThrow();
+});
+it('reports filter changes separately without exposing values',()=>{
+ expect(()=>assertSameSnapshot({clients:['private-A']},{clients:['private-B']},'parameters')).toThrow('параметры');
+ try {assertSameSnapshot({clients:['private-A']},{clients:['private-B']},'parameters')} catch(e) {expect(String(e)).not.toContain('private-')}
+});
+
+it('rejects parameters changed during prepare and restores interaction',async()=>{
+ let finish!:()=>void;
+ const prepare=()=>new Promise<void>(r=>finish=r),restore=vi.fn();
+ vi.mocked(downloadReportPdf).mockClear();
+ const view=render(<div className="page"><PdfExportButton report="rfm-analysis" snapshot={{manager:['A']}} prepare={prepare} restore={restore}/></div>);
+ fireEvent.click(screen.getByRole('button'));
+ view.rerender(<div className="page"><PdfExportButton report="rfm-analysis" snapshot={{manager:['B']}} prepare={prepare} restore={restore}/></div>);
+ finish();
+ await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain('parameters_changed'));
+ expect(downloadReportPdf).not.toHaveBeenCalled();
+ expect(restore).toHaveBeenCalledOnce();
+ expect(screen.getByRole('button').closest<HTMLElement>('.page')!.inert).toBeFalsy();
+});
+it('allows a successful manual retry after preparation fails',async()=>{
+ vi.mocked(captureReport).mockResolvedValue('<h1>Complete</h1>');
+ vi.mocked(downloadReportPdf).mockClear();
+ const prepare=vi.fn().mockRejectedValueOnce(new Error('Не удалось загрузить все строки')).mockResolvedValueOnce(undefined);
+ render(<div className="page"><PdfExportButton report="rfm-analysis" snapshot={{page:1}} prepare={prepare}/></div>);
+ fireEvent.click(screen.getByRole('button'));
+ await screen.findByRole('alert');
+ fireEvent.click(screen.getByRole('button'));
+ await waitFor(()=>expect(downloadReportPdf).toHaveBeenCalledOnce());
+ expect(screen.queryByRole('alert')).toBeNull();
 });

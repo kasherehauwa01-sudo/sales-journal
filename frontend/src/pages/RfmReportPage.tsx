@@ -87,6 +87,7 @@ export function RfmReportPage() {
   async function preparePdf(signal:AbortSignal) {
     const full=await reportJson<Response>(`/reports/rfm?${query({...controller.snapshot!,page:1,full:true})}`,signal);
     assertComplete(full.clients.items,full.clients.total);
+    assertSameSnapshot(baseData?.clients.total,full.clients.total);
     assertSameSnapshot(baseData?.kpi,full.kpi);
     assertSameSnapshot(baseData?.segments,full.segments);
     assertVisibleRows(baseData?.clients.items||[],full.clients.items,"client_key");

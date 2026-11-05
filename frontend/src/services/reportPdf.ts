@@ -35,12 +35,28 @@ export function pdfFilename(report:string,snapshot:Record<string,unknown>) {
  const dates=[p.date_from,p.date_to].filter(v=>typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v as string));
  return `${report}_${dates.length?dates.join('_'):'all-history'}.pdf`;
 }
-export function assertSameSnapshot(before:unknown, after:unknown) {
- if(JSON.stringify(before)!==JSON.stringify(after)) throw new Error('Данные изменились после формирования отчёта. Сформируйте отчёт заново перед экспортом PDF.');
+export type PdfValidationCode = 'data_changed' | 'parameters_changed' | 'incomplete_rows' | 'invalid_row_identity';
+export class PdfValidationError extends Error {
+ constructor(readonly code:PdfValidationCode,message:string,readonly check='snapshot') {super(message);this.name='PdfValidationError';}
+}
+// JSON objects are unordered, arrays are ordered. No coercion, rounding, field
+// omission or sorting of row arrays: every value and every field must agree.
+export function sameJsonValue(before:unknown,after:unknown):boolean {
+ if(before===after) return true;
+ if(before===null||after===null||typeof before!=='object'||typeof after!=='object') return false;
+ if(Array.isArray(before)||Array.isArray(after))
+  return Array.isArray(before)&&Array.isArray(after)&&before.length===after.length&&before.every((value,i)=>sameJsonValue(value,after[i]));
+ const left=before as Record<string,unknown>,right=after as Record<string,unknown>;
+ const keys=Object.keys(left);
+ return keys.length===Object.keys(right).length&&keys.every(key=>Object.hasOwn(right,key)&&sameJsonValue(left[key],right[key]));
+}
+export function assertSameSnapshot(before:unknown, after:unknown,kind:'data'|'parameters'='data') {
+ if(!sameJsonValue(before,after)) throw new PdfValidationError(kind==='parameters'?'parameters_changed':'data_changed',
+  kind==='parameters'?'Изменились параметры фильтрации. Повторите формирование отчёта.':'Данные отчёта изменились после формирования. Сформируйте отчёт заново перед экспортом PDF.');
 }
 export function assertComplete(items:unknown[],total:number) {
  if(!Number.isSafeInteger(total)||total<0||items.length!==total)
-  throw new Error('Сервер не вернул все строки отчёта. Обновите backend; неполный PDF не создан.');
+  throw new PdfValidationError('incomplete_rows','Не удалось загрузить все строки отчёта. Неполный PDF не создан.','row_count');
 }
 
 // Split wide tables into column bands; every row and column is retained. Repeat
@@ -150,6 +166,24 @@ export async function downloadReportPdf(report:string,html:string,snapshot:Recor
  setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 export function assertVisibleRows(before:unknown[],after:unknown[],key:string) {
- const found=new Map(after.map(row=>[(row as Record<string,unknown>)[key],row]));
- for(const row of before) assertSameSnapshot(row,found.get((row as Record<string,unknown>)[key]));
+ // SQL can group by code+article+name while the report key uses code alone.
+ // Keep every occurrence; a Map<key,row> silently discards legitimate rows.
+ const found=new Map<unknown,unknown[]>();
+ function identity(row:unknown) {
+  const id=row&&typeof row==='object'?(row as Record<string,unknown>)[key]:undefined;
+  if((typeof id!=='string'&&typeof id!=='number')||id==='')
+   throw new PdfValidationError('invalid_row_identity','Не удалось сопоставить идентификаторы строк отчёта. PDF не создан.','row_identity');
+  return id;
+ }
+ for(const row of after) {
+  const id=identity(row),bucket=found.get(id);
+  if(bucket) bucket.push(row);else found.set(id,[row]);
+ }
+ for(const row of before) {
+  const bucket=found.get(identity(row));
+  if(!bucket?.length) throw new PdfValidationError('incomplete_rows','Не удалось загрузить все строки: строка сформированного отчёта отсутствует. Данные изменились; сформируйте отчёт заново.','row_presence');
+  const match=bucket.findIndex(candidate=>sameJsonValue(row,candidate));
+  if(match<0) throw new PdfValidationError('data_changed','Данные отчёта изменились после формирования. Сформируйте отчёт заново перед экспортом PDF.','row_content');
+  bucket.splice(match,1);
+ }
 }

@@ -83,6 +83,8 @@ type ReportRequest = {
   limit: number;
 };
 type Report = {
+  period: {start:string;end:string};
+  comparison: {start:string;end:string};
   catalog?: { warning: string | null; missing: number; counts: Record<string, number> }; summary: Summary; items: Row[]; total: number };
 type Detail = {
   product: Row | null;
@@ -398,6 +400,9 @@ export function ProductAnalyticsPage() {
     const p=displayed!;
     const full=await (await analyticsResponse(await fetch(`${API}/reports/product-analytics/report?${query({section:p.tab,sort_by:p.tab==="top"?p.sort:undefined,full:true})}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p.parameters),signal}))).json() as Report;
     assertComplete(full.items,full.total);
+    assertSameSnapshot(reportData?.total,full.total);
+    assertSameSnapshot(reportData?.period,full.period);
+    assertSameSnapshot(reportData?.comparison,full.comparison);
     assertSameSnapshot(reportData?.summary,full.summary);
     assertVisibleRows(reportData?.items||[],full.items,"key");
     setPdfData(full);

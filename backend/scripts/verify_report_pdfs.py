@@ -53,6 +53,16 @@ async def run(base_url, output):
                         response=await client.post('/api/reports/pdf',json=data)
                         return await route.fulfill(status=response.status_code,headers=dict(response.headers),body=response.content)
                     fixture=await resolver.evaluate('path=>window.pdfFixture(path)',endpoint)
+                    # JSON key order is not part of the API contract. Exercise a
+                    # fresh/full response serialized differently from the screen.
+                    def reordered(value):
+                        if isinstance(value, dict):
+                            return {key: reordered(item) for key, item in reversed(list(value.items()))}
+                        if isinstance(value, list):
+                            return [reordered(item) for item in value]
+                        return value
+                    if 'full=true' in endpoint:
+                        fixture = reordered(fixture)
                     await route.fulfill(content_type='application/json',body=json.dumps(fixture,ensure_ascii=False))
                 await page.route('**/*',handle)
                 await page.goto(base_url+'/reports/'+path)
@@ -73,6 +83,17 @@ async def run(base_url, output):
                     await page.locator('.product-analytics-table tbody tr').first.click()
                     await page.get_by_role('heading',name='Тестовый товар 0',exact=True).wait_for()
                     await page.wait_for_function("()=>!document.querySelector('.pdf-export-action button')?.disabled")
+                if path=='product-sales':
+                    await page.locator('.product-report-table tbody tr').first.click()
+                    await page.get_by_role('heading',name='Детализация продаж',exact=True).wait_for()
+                if path=='category-analytics':
+                    await page.locator('tr').filter(has_text='Категория1').last.click()
+                    await page.get_by_role('button',name='Продажи товара Товар1',exact=True).click()
+                    await page.get_by_role('heading',name='Продажи: Товар1',exact=True).wait_for()
+                if path=='store-analytics':
+                    await page.locator('tbody tr').filter(has_text='Магазин1').last.click()
+                    await page.get_by_role('heading',name='Продажи магазина',exact=True).wait_for()
+                await page.wait_for_function("()=>!document.querySelector('.pdf-export-action button')?.disabled")
                 await page.screenshot(path=str(output/(slug+'-html.png')),full_page=True)
                 button=page.get_by_role('button',name='Скачать PDF',exact=True).last
                 async with page.expect_download(timeout=120000) as download:
@@ -81,6 +102,8 @@ async def run(base_url, output):
                 file=output/(slug+'.pdf');await download.save_as(file)
                 assert download.suggested_filename.startswith(slug+'_')
                 text=subprocess.run(['pdftotext','-raw',str(file),'-'],capture_output=True,text=True,check=True).stdout
+                if path in {'product-sales','category-analytics','store-analytics'}:
+                    assert 'PDFSALE-119' in text,(path,'Missing last drilldown row')
                 assert title in ' '.join(text.split()) and last in ' '.join(text.split()),(path,'Missing content',last)
                 info=subprocess.run(['pdfinfo',str(file)],capture_output=True,text=True,check=True).stdout
                 pages=int(next(line.split(':')[1] for line in info.splitlines() if line.startswith('Pages:')))
