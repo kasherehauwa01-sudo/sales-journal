@@ -1,3 +1,5 @@
+import { assertComplete, assertVisibleRows } from "../services/reportPdf";
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
@@ -56,7 +58,13 @@ export function StoreAnalyticsReportPage() {
     group_by: string;
     points: Array<Record<string, string | number>>;
   }>();
-  const [sales, setSales] = useState<{ items: DetailSale[] }>();
+  const [baseSales, setSales] = useState<{ items: DetailSale[] }>();
+  const [sales,setPdfSales]=usePdfData(baseSales);
+  async function preparePdf(signal:AbortSignal) {
+    if(!selected||!data) return;
+    const full=await reportJson<{items:DetailSale[];total:number}>(`/reports/store-analytics/stores/${encodeURIComponent(selected.store)}/sales?${query({...controller.snapshot!,date_from:data.period.start,date_to:data.period.end,full:true})}`,signal);
+    assertComplete(full.items,full.total);assertVisibleRows(baseSales?.items||[],full.items,"id");setPdfSales(full);
+  }
   function openStore(row: StoreRow, selectedGroup = group) {
     if (!controller.snapshot || !data) return;
     const detailParams = query({
@@ -157,6 +165,7 @@ export function StoreAnalyticsReportPage() {
   return (
     <div className="page store-report">
       <div className="page-title">
+        <PdfExportButton report="store-analytics" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty} prepare={preparePdf} restore={()=>setPdfSales(undefined)}/>
         <div>
           <h1>Аналитика по магазинам</h1>
           <p>Отчеты · сравнение эффективности подразделений</p>
@@ -280,17 +289,17 @@ export function StoreAnalyticsReportPage() {
                       <YAxis type="number" tickFormatter={number} width={95} />
                       <Tooltip formatter={(v) => money(Number(v))} />
                       <Legend />
-                      <Bar
+                      <Bar isAnimationActive={false}
                         dataKey="current"
                         name="Текущий период"
                         fill="#2878ff"
                       />
-                      {showPrevious && <Bar
+                      {showPrevious && <Bar isAnimationActive={false}
                         dataKey="previous"
                         name="Предыдущий период"
                         fill="#9b6cff"
                       />}
-                      {showYear && <Bar dataKey="year" name="Прошлый год" fill="#10a877" />}
+                      {showYear && <Bar isAnimationActive={false} dataKey="year" name="Прошлый год" fill="#10a877" />}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -432,7 +441,7 @@ export function StoreAnalyticsReportPage() {
                           : number(Number(v))
                       }
                     />
-                    <Line
+                    <Line isAnimationActive={false}
                       dataKey={detailMetric}
                       stroke="#2878ff"
                       strokeWidth={3}

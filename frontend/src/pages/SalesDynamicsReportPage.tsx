@@ -1,3 +1,4 @@
+import { PdfExportButton } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
 import { MultiSelect } from "../components/MultiSelect";
 import {SalesClientSelect} from "../components/SalesClientSelect";
@@ -89,6 +90,7 @@ export function SalesDynamicsReportPage() {
   return (
     <div className="page sales-dynamics-report">
       <div className="page-title">
+        <PdfExportButton report="sales-dynamics" snapshot={controller.snapshot} disabled={controller.busy || controller.dirty}/>
         <div>
           <h1>Динамика продаж</h1>
           <p>Отчеты · сравнение с предыдущим периодом и прошлым годом</p>
@@ -242,14 +244,14 @@ export function SalesDynamicsReportPage() {
                     formatter={(value,name,item)=>[`${formatMetric(metric,Number(value))} · ${date(name==="Прошлый год"?item.payload.year_period:name==="Предыдущий период"?item.payload.previous_period:item.payload.period)}`,String(name)]}
                   />
                   <Legend />
-                  <Line
+                  <Line isAnimationActive={false}
                     type="monotone"
                     dataKey="currentValue"
                     name="Текущий период"
                     stroke="#2878ff"
                     strokeWidth={3}
                   />
-                  {showPrevious&&(<Line
+                  {showPrevious&&(<Line isAnimationActive={false}
                     type="monotone"
                     dataKey="previousValue"
                     name="Предыдущий период"
@@ -257,7 +259,7 @@ export function SalesDynamicsReportPage() {
                     strokeDasharray="6 4"
                     strokeWidth={2}
                   />)}
-                  {showYear&&<Line type="monotone" dataKey="yearValue" name="Прошлый год" stroke="#10a087" strokeDasharray="3 3" strokeWidth={2}/>}
+                  {showYear&&<Line isAnimationActive={false} type="monotone" dataKey="yearValue" name="Прошлый год" stroke="#10a087" strokeDasharray="3 3" strokeWidth={2}/>}
                 </LineChart>
               </ResponsiveContainer>
             ) : (

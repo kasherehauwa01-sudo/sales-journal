@@ -1,3 +1,4 @@
+from app.services.report_execution import FullReportRoute
 from datetime import date, datetime
 from io import BytesIO
 from math import ceil
@@ -17,7 +18,7 @@ from app.services.clients_vr import (ClientsVrError, cached_client_buyer_types,
 from app.services.rfm import SEGMENTS, SegmentSettings, enrich
 from app.services.rfm_data import rfm_rows as _rows
 
-router = APIRouter(prefix="/reports/rfm", tags=["Отчеты"])
+router = APIRouter(route_class=FullReportRoute, prefix="/reports/rfm", tags=["Отчеты"])
 SORTS = {"client", "segment", "recency_days", "frequency", "monetary", "average_check", "last_purchase"}
 
 
@@ -70,7 +71,7 @@ async def report(date_from: date, date_to: date, department: str | None = None, 
                  max_recency: int | None = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=10, le=200),
                  sort: str = "monetary", direction: str = Query("desc", pattern="^(asc|desc)$"), new_days: int = Query(30, ge=1),
                  lost_days: int = Query(180, ge=1), sleeping_cycle: float = Query(1.5, ge=1), lost_cycle: float = Query(3, ge=1),
-                 db: AsyncSession = Depends(get_db)):
+                 db: AsyncSession = Depends(get_db), full: bool = False):
     department_values = departments or ([department] if department else [])
     manager_values = managers or ([manager] if manager else [])
     buyer_type_values = buyer_types or ([buyer_type] if buyer_type else [])
@@ -93,7 +94,7 @@ async def report(date_from: date, date_to: date, department: str | None = None, 
             "active_revenue": sum(r["monetary"] for r in rows if r["segment"] not in inactive),
             "sleeping_revenue": sum(r["monetary"] for r in rows if r["segment"] == "Засыпающие"),
             "lost_historical_value": sum(r["monetary"] for r in rows if r["segment"] in inactive), **counts}, "segments": segments,
-            "clients": {"items": selected[offset:offset+page_size], "total": len(selected), "page": page,
+            "clients": {"items": selected if full else selected[offset:offset+page_size], "total": len(selected), "page": page,
                         "page_size": page_size, "pages": ceil(len(selected)/page_size) if selected else 0},
             "settings": {"levels": 5, "new_days": new_days, "lost_days": lost_days, "sleeping_cycle": sleeping_cycle,
                          "lost_cycle": lost_cycle, "boundaries": boundaries},

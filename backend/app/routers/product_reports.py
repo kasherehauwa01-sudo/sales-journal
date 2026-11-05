@@ -119,12 +119,12 @@ async def _products(data,db,start=None,end=None):
  rows=(await db.execute(q)).all();total=sum(float(x.revenue or 0) for x in rows)
  return [{**dict(x._mapping),"key":_product_key(x.article,x.code,x.name),"units":float(x.units or 0),"revenue":float(x.revenue or 0),"average_price":float(x.average_price or 0),"discount_amount":float(x.discount_amount or 0),"average_discount":float(x.average_discount or 0),"revenue_share":float(x.revenue or 0)/total*100 if total else 0} for x in rows]
 @router.post("/products")
-async def products(data:ReportRequest,sort_by:str="revenue",sort_dir:str="desc",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500),db:AsyncSession=Depends(get_report_db)):
+async def products(data:ReportRequest,sort_by:str="revenue",sort_dir:str="desc",page:int=Query(1,ge=1),page_size:int=Query(100,ge=1,le=500),db:AsyncSession=Depends(get_report_db),full:bool=False):
  current=await _products(data,db);previous=await _products(data,db,*comparison_period(data.date_from,data.date_to,data.comparison_mode)) if data.compare else [];previous_by={x["key"]:x for x in previous}
  for item in current:
   old=previous_by.get(item["key"],{});item["previous_revenue"]=old.get("revenue",0);item["previous_units"]=old.get("units",0);item["revenue_change_percent"]=_change(item["revenue"],item["previous_revenue"]);item["units_change_percent"]=_change(item["units"],item["previous_units"])
  allowed={"revenue","units","checks","clients","average_price","discount_amount","last_sale"};key=sort_by if sort_by in allowed else "revenue";current.sort(key=lambda x:(x[key] is not None,x[key]),reverse=sort_dir=="desc")
- start=(page-1)*page_size;return {"items":current[start:start+page_size],"total":len(current),"page":page,"pages":max(1,(len(current)+page_size-1)//page_size)}
+ start=(page-1)*page_size;return {"items":current if full else current[start:start+page_size],"total":len(current),"page":page,"pages":max(1,(len(current)+page_size-1)//page_size)}
 
 @router.post("/dynamics")
 async def dynamics(data:ReportRequest,group_by:str=Query("day",pattern="^(day|week|month)$"),db:AsyncSession=Depends(get_report_db)):
@@ -149,8 +149,8 @@ async def managers(data:ReportRequest,db:AsyncSession=Depends(get_report_db)):
  return sorted(totals.values(),key=lambda x:-x["revenue"])
 
 @router.post("/details")
-async def details(data:DetailRequest,page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),db:AsyncSession=Depends(get_report_db)):
- scoped=ReportRequest(**data.model_dump(exclude={"product","products"}),products=[data.product]);c=await _conditions(scoped);q=select(Sale.id,Sale.sale_date,Sale.document_number,Sale.client,Sale.department,SaleItem.quantity,(SaleItem.quantity*SaleItem.actual_price).label("amount"),SaleItem.actual_price,((SaleItem.base_price-SaleItem.actual_price)/func.nullif(SaleItem.base_price,0)*100).label("discount")).join(Sale,Sale.id==SaleItem.sale_id).where(*c).order_by(Sale.sale_date.desc());total=await db.scalar(select(func.count()).select_from(q.subquery())) or 0;rows=(await db.execute(q.offset((page-1)*page_size).limit(page_size))).all()
+async def details(data:DetailRequest,page:int=Query(1,ge=1),page_size:int=Query(50,ge=1,le=200),db:AsyncSession=Depends(get_report_db),full:bool=False):
+ scoped=ReportRequest(**data.model_dump(exclude={"product","products"}),products=[data.product]);c=await _conditions(scoped);q=select(Sale.id,Sale.sale_date,Sale.document_number,Sale.client,Sale.department,SaleItem.quantity,(SaleItem.quantity*SaleItem.actual_price).label("amount"),SaleItem.actual_price,((SaleItem.base_price-SaleItem.actual_price)/func.nullif(SaleItem.base_price,0)*100).label("discount")).join(Sale,Sale.id==SaleItem.sale_id).where(*c).order_by(Sale.sale_date.desc());total=await db.scalar(select(func.count()).select_from(q.subquery())) or 0;rows=(await db.execute(q if full else q.offset((page-1)*page_size).limit(page_size))).all()
  try:mapping=await get_client_managers()
  except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  return {"items":[{**dict(x._mapping),"manager":mapping.get(_norm(x.client),"Нет менеджера"),"quantity":float(x.quantity),"amount":float(x.amount or 0),"actual_price":float(x.actual_price or 0),"discount":float(x.discount or 0)} for x in rows],"total":total,"page":page,"pages":max(1,(total+page_size-1)//page_size)}

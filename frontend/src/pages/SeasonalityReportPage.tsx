@@ -1,3 +1,5 @@
+import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
+import { assertSameSnapshot, assertVisibleRows } from "../services/reportPdf";
 import { useMemo, useState } from "react";
 import {
   CartesianGrid,
@@ -115,6 +117,7 @@ export function SeasonalityReportPage() {
       metadata: Meta;
     }>(`/reports/seasonality?${query(params)}`, signal);
   });
+  const [pdfList,setPdfList]=usePdfData(report.data);
   const { data: filters } = useApi<{ departments: string[] }>("/filters");
   const range = useMemo(() => {
     if (display === "all") return {};
@@ -135,7 +138,7 @@ export function SeasonalityReportPage() {
     selected && !invalid
       ? `/reports/seasonality/${selected.identity}?${query({ ...range, store, after_year: cursor?.year, after_month: cursor?.month })}`
       : "";
-  const { data: detail, loading, error } = useApi<Detail>(path);
+  const { data: baseDetail, loading, error } = useApi<Detail>(path);
   const {
     data: comparison,
     loading: comparing,
@@ -145,6 +148,21 @@ export function SeasonalityReportPage() {
       ? `/reports/seasonality/${selected.identity}?${query({ ...range, store, years })}`
       : "",
   );
+  const [detail,setPdfDetail]=usePdfData(baseDetail);
+  async function preparePdf(signal:AbortSignal) {
+    const full=await reportJson<NonNullable<typeof report.data>>(`/reports/seasonality?${query({search:report.snapshot!.search,full:true})}`,signal);
+    if(full.next_cursor) throw new Error("Получен неполный список сезонности.");
+    assertSameSnapshot(report.data?.metadata,full.metadata);
+    assertVisibleRows(report.data?.items||[],full.items,"identity");
+    if(selected) {
+      const fullDetail=await reportJson<Detail>(`/reports/seasonality/${selected.identity}?${query({...range,store,full:true})}`,signal);
+      if(fullDetail.next_cursor) throw new Error("Получена неполная месячная история.");
+      assertSameSnapshot(baseDetail?.profile,fullDetail.profile);
+      assertVisibleRows((baseDetail?.months||[]).map(row=>({...row,key:`${row.year}-${row.month}`})),fullDetail.months.map(row=>({...row,key:`${row.year}-${row.month}`})),"key");
+      setPdfDetail(fullDetail);
+    }
+    setPdfList(full);
+  }
   const points = useMemo(
     () =>
       Array.from({ length: 12 }, (_, index) => {
@@ -202,6 +220,7 @@ export function SeasonalityReportPage() {
   return (
     <div className="page seasonality-report">
       <div className="page-title">
+        <PdfExportButton report="seasonality" snapshot={report.snapshot ? {...report.snapshot,...range,store,years}:undefined} disabled={report.busy || report.dirty || loading || comparing || !!error || !!comparisonError} prepare={preparePdf} restore={()=>{setPdfList(undefined);setPdfDetail(undefined)}}/>
         <div>
           <h1>Сезонность</h1>
           <p>Автоматическая модель по всей доступной истории продаж</p>
@@ -250,7 +269,7 @@ export function SeasonalityReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.data.items.map((product) => (
+                  {pdfList!.items.map((product) => (
                     <tr
                       key={product.identity}
                       className="clickable-row"
@@ -276,7 +295,7 @@ export function SeasonalityReportPage() {
                 </tbody>
               </table>
             </div>
-            {!report.data.items.length && (
+            {!pdfList!.items.length && (
               <p>
                 Готовые товары не найдены. Проверьте состояние фонового расчёта.
               </p>
@@ -295,9 +314,9 @@ export function SeasonalityReportPage() {
                 К началу списка
               </button>
               <button
-                disabled={report.busy || !report.data.next_cursor}
+                disabled={report.busy || !pdfList!.next_cursor}
                 onClick={() => {
-                  const next = report.data!.next_cursor!;
+                  const next = pdfList!.next_cursor!;
                   setAfter(next);
                   void report.generate({
                     search: report.snapshot?.search ?? search,
@@ -434,13 +453,13 @@ export function SeasonalityReportPage() {
                         <YAxis />
                         <Tooltip />
                         <Legend />
-                        <Line
+                        <Line isAnimationActive={false}
                           dataKey="current"
                           name="С учётом актуальности"
                           stroke="#2878ff"
                           connectNulls={false}
                         />
-                        <Line
+                        <Line isAnimationActive={false}
                           dataKey="historical"
                           name="Исторический профиль"
                           stroke="#9b6cff"
@@ -475,7 +494,7 @@ export function SeasonalityReportPage() {
                           <Tooltip />
                           <Legend />
                           {years.map((year, index) => (
-                            <Line
+                            <Line isAnimationActive={false}
                               key={year}
                               dataKey={year}
                               name={year}

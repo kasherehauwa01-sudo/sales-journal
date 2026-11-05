@@ -1,3 +1,4 @@
+from app.services.report_execution import FullReportRoute
 from datetime import date, datetime
 from io import BytesIO
 from zoneinfo import ZoneInfo
@@ -20,7 +21,7 @@ from app.services.sales_client_filters import get_sales_filter_clients
 from app.services.sales_dynamics_report import default_grouping, effective_period
 from app.services.store_analytics_report import METRIC_KEYS, calculated_store_metrics, compare_metrics, merge_store_rows
 
-router = APIRouter(prefix="/reports/store-analytics", tags=["Отчеты"])
+router = APIRouter(route_class=FullReportRoute, prefix="/reports/store-analytics", tags=["Отчеты"])
 
 
 async def _clients(db: AsyncSession, manager: str | None, buyer_type: str | None):
@@ -141,9 +142,10 @@ async def dynamics(store: str, date_from: date, date_to: date, group_by: str | N
 
 
 @router.get("/stores/{store}/sales")
-async def store_sales(store: str, date_from: date, date_to: date, manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db), brands: Annotated[list[str] | None, Query()] = None):
+async def store_sales(store: str, date_from: date, date_to: date, manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db), brands: Annotated[list[str] | None, Query()] = None, full: bool = False):
     clients = await _clients(db, manager, buyer_type); sales = _sales(date_from, date_to, [store], clients, **({"brands": brands} if brands else {})); total = await db.scalar(select(func.count()).select_from(sales)) or 0
-    rows = (await db.execute(select(sales).order_by(sales.c.sale_date.desc(), sales.c.id.desc()).offset((page - 1) * page_size).limit(page_size))).all()
+    q = select(sales).order_by(sales.c.sale_date.desc(), sales.c.id.desc())
+    rows = (await db.execute(q if full else q.offset((page - 1) * page_size).limit(page_size))).all()
     return {"items": [{**dict(x._mapping), "total_amount": float(x.total_amount), "items": float(x.items), "discount": float(x.discount)} for x in rows], "total": total, "page": page, "pages": max(1, (total + page_size - 1) // page_size)}
 
 
