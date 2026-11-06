@@ -1,4 +1,4 @@
-"""Print a browser-authorized snapshot; never query data or accept a URL."""
+"""Print an authorized snapshot; only bounded Catalog static photo resolution."""
 import json
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -29,7 +29,8 @@ class Snapshot(BaseModel):
 @router.post('/pdf')
 async def export_pdf(request: Request):
     # Same protected ingress as ordinary reports; no service token bypass, no URL
-    # fetch and no access to another report/user's data. Stream size is bounded
+    # data fetch or access to another report/user's data. Static Catalog photos
+    # are resolved under a separate strict allowlist. Stream size is bounded
     # before JSON parsing (also for requests without Content-Length).
     body = bytearray()
     async for chunk in request.stream():

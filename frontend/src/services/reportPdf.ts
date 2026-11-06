@@ -1,3 +1,4 @@
+import {createPhotoEncoder,PHOTO_UNAVAILABLE} from './pdfImages';
 import { reportResponse } from "../hooks/useExplicitReport";
 
 export const FILTER_LABELS: Record<string,string> = {
@@ -98,14 +99,12 @@ async function waitFor<T>(promise:Promise<T>|undefined,signal:AbortSignal):Promi
 }
 export async function captureReport(root:HTMLElement,snapshot:Record<string,unknown>,signal:AbortSignal) {
  await waitFor(document.fonts?.ready,signal);
- await waitFor(Promise.all([...root.querySelectorAll('img')].map(async image=>{
-  try {await image.decode();} catch {if(root.contains(image)) throw new Error('Не удалось загрузить изображение отчёта. PDF не создан.');}
- })),signal);
  // Fonts, layout and Recharts (animations explicitly disabled on report pages).
  await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
  if(signal.aborted) throw new DOMException('Aborted','AbortError');
  if(root.querySelector('[aria-busy="true"],.loading')) throw new Error('Дождитесь загрузки всех блоков отчёта.');
  const clone=root.cloneNode(true) as HTMLElement;
+ const encodePhoto=createPhotoEncoder(signal);
  const originals=[root,...root.querySelectorAll('*')];
  const copies=[clone,...clone.querySelectorAll('*')];
  for(let i=0;i<originals.length;i++) {
@@ -130,15 +129,12 @@ export async function captureReport(root:HTMLElement,snapshot:Record<string,unkn
    copy.replaceWith(document.createTextNode(value));
   } else if(original instanceof HTMLCanvasElement) {
    const img=document.createElement('img');img.src=original.toDataURL('image/png');img.width=original.width;img.height=original.height;copy.replaceWith(img);
-  } else if(original instanceof HTMLImageElement && original.currentSrc) {
-   if(!original.complete||!original.naturalWidth) throw new Error('Не все изображения загружены. Повторите экспорт после загрузки.');
-   const canvas=document.createElement('canvas');canvas.width=original.naturalWidth;canvas.height=original.naturalHeight;
-   const context=canvas.getContext('2d');if(!context) throw new Error('Не удалось сохранить изображение.');
-   context.drawImage(original,0,0);
-   try {copy.setAttribute('src',canvas.toDataURL('image/png'));} catch {throw new Error('Источник изображения запрещает включение в PDF (CORS). Требуется разрешение источника; изображение не было пропущено.');}
+  } else if(original instanceof HTMLImageElement) {
+   await encodePhoto(original,copy);
   }
  }
  clone.querySelectorAll('[data-pdf-hidden], [data-pdf-exclude],script,style,iframe,object,embed,.backdrop,.pagination,.analytics-build-actions,.analytics-request-error,.report-filters,.filter-grid,.filters,.dynamics-filters,.period-picker,.product-selector,.promotion-selected-download,.report-modal:not([data-pdf-detail])').forEach(node=>node.remove());
+ clone.querySelectorAll('.analytics-photo-placeholder,.photo-placeholder').forEach(node=>{node.textContent=PHOTO_UNAVAILABLE});
  // Dialogs/drawers that are displayed become ordinary report sections.
  clone.querySelectorAll('.drawer,.store-detail,.rfm-detail,.category-detail,.analytics-detail,.product-detail,.report-help-modal,.report-modal').forEach(node=>(node as HTMLElement).style.cssText+=';position:static!important;width:100%!important;height:auto!important;overflow:visible!important;');
  clone.querySelectorAll('details').forEach(node=>node.setAttribute('open',''));

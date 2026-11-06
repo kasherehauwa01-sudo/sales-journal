@@ -1,4 +1,4 @@
-"""Private HTML snapshot printing. No database, navigation or executable page code."""
+"""Private snapshot printing with bounded trusted photos; Chromium stays offline."""
 import asyncio
 import html
 import os
@@ -47,8 +47,9 @@ def safe_style(value):
 
 
 class SnapshotParser(HTMLParser):
-    def __init__(self):
+    def __init__(self, image_loader=None):
         super().__init__(convert_charrefs=True)
+        self.image_loader = image_loader
         self.output = []
         self.stack = []
         self.blocked = 0
@@ -59,6 +60,18 @@ class SnapshotParser(HTMLParser):
                 self.stack.append((tag, False))
                 self.blocked += 1
             return
+        if tag == 'img':
+            values = dict(attrs)
+            source = values.get('data-pdf-image')
+            if source:
+                embedded = self.image_loader(source) if self.image_loader else None
+                if not embedded:
+                    self.output.append('<span style="font-size:10px;color:#53627b">Фото недоступно</span>')
+                    return
+                attrs = [(key, value) for key, value in attrs if key not in ('src', 'data-pdf-image')] + [('src', embedded)]
+            elif not re.fullmatch(r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+', values.get('src') or ''):
+                self.output.append('<span style="font-size:10px;color:#53627b">Фото недоступно</span>')
+                return
         safe = []
         for key, value in attrs:
             value = value or ''
@@ -90,8 +103,8 @@ class SnapshotParser(HTMLParser):
         if not self.blocked: self.output.append(html.escape(data))
 
 
-def safe_document(snapshot):
-    parser = SnapshotParser()
+def safe_document(snapshot, image_loader=None):
+    parser = SnapshotParser(image_loader)
     try:
         parser.feed(snapshot)
         parser.close()
@@ -117,7 +130,8 @@ async def render_pdf(snapshot, title, period):
         browser = None
         try:
             async with asyncio.timeout(90):
-                document = await asyncio.to_thread(safe_document, snapshot)
+                from app.services.pdf_images import image_document
+                document = await asyncio.to_thread(image_document, snapshot)
                 async with async_playwright() as playwright:
                     try:
                         browser = await playwright.chromium.launch(

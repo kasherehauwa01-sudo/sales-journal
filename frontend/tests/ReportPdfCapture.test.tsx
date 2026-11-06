@@ -12,3 +12,13 @@ it('retains informational segment cards and SVG while removing action controls a
   expect(html).toContain('Менеджер: Тестовый менеджер');
  } finally {root.remove()}
 });
+
+it('normalizes already failed photo placeholders only in the PDF copy',async()=>{
+ const root=document.createElement('div');root.innerHTML='<table><tr><td>Товар</td><td><span class="analytics-photo-placeholder">Нет фото</span></td><td>123.45</td></tr></table>';
+ document.body.append(root);
+ try {
+  const html=await captureReport(root,{},new AbortController().signal);
+  expect(html).toContain('Фото недоступно');expect(html).toContain('Товар');expect(html).toContain('123.45');
+  expect(root.textContent).toContain('Нет фото');
+ } finally {root.remove()}
+});
