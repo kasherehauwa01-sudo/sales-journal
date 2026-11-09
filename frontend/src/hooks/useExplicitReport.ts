@@ -9,6 +9,7 @@ export class ReportHttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -33,6 +34,33 @@ export function reportErrorMessage(body: unknown, status: number): string {
   return `Ошибка ${status}`;
 }
 
+const PDF_ERRORS:Record<string,string>={
+ memory_headroom:'Недостаточно свободной памяти для PDF: требуется не менее 512 МиБ. Повторите позже.',
+ timeout:'Сервер не успел сформировать PDF за отведённое время. Повторите позже.',
+ browser_unavailable:'Не удалось запустить Chromium для PDF. Требуется проверка backend.',
+ browser_failed:'Chromium не смог сформировать PDF. Требуется проверка backend.',
+};
+const ANALYTICS_ERRORS:Record<string,string>={
+ memory_headroom:'Недостаточно свободной памяти для выполнения тяжёлого запроса. Повторите позже.',
+ wait_timeout:'Не удалось дождаться завершения другого тяжёлого запроса. Повторите позже.',
+ queue_full:'Очередь тяжёлых запросов заполнена. Повторите позже.',
+ lock_unavailable:'Защита тяжёлых операций временно недоступна. Требуется проверка backend.',
+};
+export function unavailableReportError(response:Response,body:unknown):ReportHttpError {
+ const pdf=response.headers.get('X-Sales-PDF-Error')||'';
+ if(Object.hasOwn(PDF_ERRORS,pdf)) return new ReportHttpError(PDF_ERRORS[pdf],503,`pdf_${pdf}`);
+ const analytics=response.headers.get('X-Sales-Analytics-Error')||'';
+ if(Object.hasOwn(ANALYTICS_ERRORS,analytics)) return new ReportHttpError(ANALYTICS_ERRORS[analytics],503,`analytics_${analytics}`);
+ const detail=body&&typeof body==='object'&&'detail' in body?(body as {detail:unknown}).detail:undefined;
+ // Safe compatibility with old PDF backends: do not echo arbitrary proxy HTML,
+ // exception text or request values into a 503 error.
+ if(detail==='Недостаточно свободной памяти для PDF. Повторите позже.')
+  return new ReportHttpError(PDF_ERRORS.memory_headroom,503,'pdf_memory_headroom');
+ if(detail==='Не удалось сформировать PDF за отведённое время. Повторите позже.')
+  return new ReportHttpError('Backend не смог сформировать PDF: таймаут или ошибка Chromium. Требуется проверка журналов.',503,'pdf_legacy_failure');
+ return new ReportHttpError('Сервер занят или недостаточно памяти. Подождите и повторите запрос вручную.',503);
+}
+
 export async function reportResponse(
   path: string,
   signal: AbortSignal,
@@ -41,10 +69,7 @@ export async function reportResponse(
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
   const response = await fetch(`${API}${path}`, { ...init, signal });
   if (response.status === 503)
-    throw new ReportHttpError(
-      "Сервер занят или недостаточно памяти. Подождите и повторите запрос вручную.",
-      response.status,
-    );
+    throw unavailableReportError(response,await response.json().catch(()=>null));
   if (!response.ok)
     throw new ReportHttpError(
       await response

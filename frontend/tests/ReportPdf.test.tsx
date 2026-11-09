@@ -81,3 +81,20 @@ it('allows a successful manual retry after preparation fails',async()=>{
  await waitFor(()=>expect(downloadReportPdf).toHaveBeenCalledOnce());
  expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it.each([
+ ['prepare','Ошибка подготовки данных PDF'],['capture','Ошибка печатной версии PDF'],['render','Ошибка формирования PDF на сервере'],
+])('identifies the %s failure stage and does not retry automatically',async(stage,label)=>{
+ const {ReportHttpError}=await import('../src/hooks/useExplicitReport');
+ const failure=new ReportHttpError('TEST SAFE ERROR',503,'pdf_browser_unavailable');
+ const prepare=vi.fn().mockImplementation(async()=>{if(stage==='prepare')throw failure});
+ vi.mocked(captureReport).mockImplementation(async()=>{if(stage==='capture')throw failure;return '<h1>Complete</h1>'});
+ vi.mocked(downloadReportPdf).mockImplementation(async()=>{if(stage==='render')throw failure});
+ const restore=vi.fn();
+ render(<div className="page"><PdfExportButton report="rfm-analysis" snapshot={{page:1}} prepare={prepare} restore={restore}/></div>);
+ fireEvent.click(screen.getByRole('button'));
+ await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain(label));
+ expect(prepare).toHaveBeenCalledTimes(1);
+ expect(restore).toHaveBeenCalledTimes(1);
+ expect((screen.getByRole('button') as HTMLButtonElement).disabled).toBe(false);
+});

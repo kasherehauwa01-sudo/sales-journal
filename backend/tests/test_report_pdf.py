@@ -57,3 +57,129 @@ def test_real_chromium_500_rows_and_cyrillic(tmp_path):
     info=subprocess.run(['pdfinfo',str(path)],capture_output=True,text=True,check=True).stdout
     assert 'A4' in info
     assert int(next(line.split(':')[1] for line in info.splitlines() if line.startswith('Pages:')))>1
+
+
+def test_json_body_is_released_before_rendering(monkeypatch):
+    import weakref
+    bodies=[]
+    class Body(bytearray):
+        def __init__(self,*args,**kwargs):
+            super().__init__(*args,**kwargs)
+            bodies.append(weakref.ref(self))
+    monkeypatch.setattr(router,'bytearray',Body,raising=False)
+    async def render(snapshot,title,period):
+        assert bodies and bodies[-1]() is None
+        assert snapshot=='<h1>Полные данные</h1>'
+        return b'%PDF-'+b'x'*200
+    monkeypatch.setattr(router,'render_pdf',render)
+    app=FastAPI();app.include_router(router.router)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+            result=await client.post('/reports/pdf',json={'report':'rfm-analysis','filename':'rfm.pdf','period':'Тест','html':'<h1>Полные данные</h1>'})
+            assert result.status_code==200
+            assert result.headers['content-disposition']=='attachment; filename="rfm.pdf"'
+    asyncio.run(run())
+
+
+def test_pdf_memory_floor_is_kept_and_reports_safe_metrics(monkeypatch,caplog):
+    import logging
+    monkeypatch.setattr(service,'available_memory',lambda:511*1024*1024)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(service.render_pdf('PRIVATE REPORT','title','period'))
+    assert failure.value.status_code==503
+    assert failure.value.headers['X-Sales-PDF-Error']=='memory_headroom'
+    assert '512' in failure.value.detail
+    assert any(getattr(r,'pdf_stage',None)=='preflight' for r in caplog.records)
+    assert 'PRIVATE REPORT' not in caplog.text
+
+
+@pytest.mark.parametrize('kind,expected',[('launch','browser_unavailable'),('timeout','timeout'),('print','browser_failed')])
+def test_pdf_failures_distinguish_browser_and_timeout_without_private_details(monkeypatch,caplog,kind,expected):
+    from contextlib import asynccontextmanager
+    import logging
+    from unittest.mock import Mock
+    from playwright import async_api
+    from app.services import pdf_images
+    monkeypatch.setattr(service,'available_memory',lambda:1024*1024*1024)
+    monkeypatch.setattr(pdf_images,'image_document',lambda _: '<p>Full data</p>')
+    browser=Mock();browser.close=AsyncMock()
+    page=Mock();page.set_content=AsyncMock();page.emulate_media=AsyncMock()
+    page.pdf=AsyncMock(side_effect=async_api.Error('PRIVATE REPORT TOKEN'))
+    context=Mock();context.route=AsyncMock();context.new_page=AsyncMock(return_value=page)
+    browser.new_context=AsyncMock(return_value=context)
+    launcher=AsyncMock(return_value=browser)
+    if kind!='print':launcher.side_effect=TimeoutError('PRIVATE REPORT TOKEN') if kind=='timeout' else async_api.Error('PRIVATE REPORT TOKEN')
+    @asynccontextmanager
+    async def playwright():
+        yield Mock(chromium=Mock(launch=launcher))
+    monkeypatch.setattr(async_api,'async_playwright',playwright)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(service.render_pdf('PRIVATE REPORT TOKEN','title','period'))
+    assert failure.value.status_code==503
+    assert failure.value.headers['X-Sales-PDF-Error']==expected
+    assert 'PRIVATE' not in failure.value.detail and 'PRIVATE' not in caplog.text
+    assert any(getattr(r,'pdf_reason',None)==expected for r in caplog.records)
+    if kind=='print':browser.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize('failure',[False,True])
+def test_browser_environment_is_private_scoped_and_cleaned(monkeypatch,failure):
+    from pathlib import Path
+    import stat
+    variables=('HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_RUNTIME_DIR','CHROME_CONFIG_HOME')
+    for key in variables:monkeypatch.setenv(key,'/proc/1/pdf-unwritable-'+key)
+    before={key:os.environ[key] for key in variables}
+    paths=[]
+    def enter():
+        with service.chromium_environment() as environment:
+            for key in variables:
+                path=Path(environment[key]);paths.append(path)
+                assert path.is_dir() and stat.S_IMODE(path.stat().st_mode)==0o700
+                assert environment[key]!=before[key]
+            assert len({path.parent for path in paths})==1
+            if failure:raise RuntimeError('synthetic cleanup')
+    if failure:
+        with pytest.raises(RuntimeError):enter()
+    else:enter()
+    assert all(not path.exists() for path in paths)
+    assert all(os.environ[key]==before[key] for key in variables)
+
+
+def test_browser_environment_failure_is_controlled_503(monkeypatch,caplog):
+    from contextlib import contextmanager
+    from app.services import pdf_images
+    monkeypatch.setattr(service,'available_memory',lambda:1024*1024*1024)
+    monkeypatch.setattr(pdf_images,'image_document',lambda _: '<p>Full data</p>')
+    @contextmanager
+    def unavailable():
+        raise PermissionError('PRIVATE DIRECTORY')
+        yield
+    monkeypatch.setattr(service,'chromium_environment',unavailable)
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(service.render_pdf('PRIVATE REPORT','title','period'))
+    assert failure.value.status_code==503
+    assert failure.value.headers['X-Sales-PDF-Error']=='browser_unavailable'
+    assert 'PRIVATE' not in caplog.text and 'PRIVATE' not in failure.value.detail
+
+
+@pytest.mark.skipif(os.environ.get('RUN_PDF_BROWSER_TESTS')!='1',reason='Local Chromium opt-in, no production')
+def test_real_pdf_with_unwritable_parent_home_and_scoped_cleanup(monkeypatch,tmp_path):
+    from pathlib import Path
+    from contextlib import contextmanager
+    for key in ('HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_RUNTIME_DIR','CHROME_CONFIG_HOME'):
+        monkeypatch.setenv(key,'/proc/1/pdf-unwritable-'+key)
+    original=service.chromium_environment
+    paths=[]
+    @contextmanager
+    def observed():
+        with original() as environment:
+            paths.append(Path(environment['HOME']).parent)
+            yield environment
+    monkeypatch.setattr(service,'chromium_environment',observed)
+    pdf=asyncio.run(service.render_pdf('<h1>PDF HOME CHECK</h1><p>123.45</p>','test','test'))
+    file=tmp_path/'home.pdf';file.write_bytes(pdf)
+    text=subprocess.run(['pdftotext',str(file),'-'],capture_output=True,text=True,check=True).stdout
+    assert 'PDF HOME CHECK' in text and '123.45' in text
+    assert paths and all(not path.exists() for path in paths)

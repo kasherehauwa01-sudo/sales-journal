@@ -3,10 +3,13 @@ import asyncio
 import html
 import os
 import re
+import tempfile
+from pathlib import Path
+from contextlib import contextmanager
 from html.parser import HTMLParser
 
 from fastapi import HTTPException
-from app.services.product_analytics_runtime import heavy_operation, ensure_headroom, available_memory
+from app.services.product_analytics_runtime import heavy_operation, ensure_headroom, available_memory, diagnostics
 
 MAX_HTML_BYTES = 32 * 1024 * 1024
 PRINT_CSS = """
@@ -119,39 +122,82 @@ def safe_document(snapshot, image_loader=None):
             + ''.join(parser.output) + '</main></body></html>')
 
 
+@contextmanager
+def chromium_environment():
+    # USER app has no guaranteed writable home. Chromium/Crashpad require one
+    # even with Playwright's separate user-data-dir. Scope all state to this PDF.
+    with tempfile.TemporaryDirectory(prefix='sales-pdf-browser-') as directory:
+        environment = dict(os.environ)
+        for variable, child in (
+            ('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'),
+            ('XDG_CACHE_HOME', 'cache'), ('XDG_RUNTIME_DIR', 'runtime'),
+            ('CHROME_CONFIG_HOME', 'chrome-config'),
+        ):
+            path = Path(directory) / child
+            path.mkdir(mode=0o700)
+            environment[variable] = str(path)
+        yield environment
+
+
+PDF_MIN_AVAILABLE_BYTES = 512 * 1024 * 1024
+PDF_FAILURE_MESSAGES = {
+    'memory_headroom': 'Недостаточно свободной памяти для PDF: требуется не менее 512 МиБ. Повторите позже.',
+    'timeout': 'Сервер не успел сформировать PDF за отведённое время. Повторите позже.',
+    'browser_unavailable': 'Не удалось запустить Chromium для PDF. Требуется проверка backend.',
+    'browser_failed': 'Chromium не смог сформировать PDF. Требуется проверка backend.',
+}
+
+
+def pdf_failure(reason, stage, **metrics):
+    diagnostics('pdf_rejected', pdf_reason=reason, pdf_stage=stage, **metrics)
+    return HTTPException(503, PDF_FAILURE_MESSAGES[reason],
+                         headers={'X-Sales-PDF-Error': reason, 'Retry-After': '10'})
+
+
 async def render_pdf(snapshot, title, period):
     # Lazy import keeps ordinary reports independent of browser startup.
-    from playwright.async_api import async_playwright, Error as BrowserError
+    from playwright.async_api import async_playwright, Error as BrowserError, TimeoutError as BrowserTimeoutError
     async with heavy_operation('report_pdf'):
         ensure_headroom()
         available = available_memory()
-        if available is not None and available < 512 * 1024 * 1024:
-            raise HTTPException(503, 'Недостаточно свободной памяти для PDF. Повторите позже.')
+        if available is not None and available < PDF_MIN_AVAILABLE_BYTES:
+            raise pdf_failure('memory_headroom', 'preflight', available_bytes=available, required_bytes=PDF_MIN_AVAILABLE_BYTES)
         browser = None
+        stage = 'prepare'
         try:
             async with asyncio.timeout(90):
                 from app.services.pdf_images import image_document
                 document = await asyncio.to_thread(image_document, snapshot)
-                async with async_playwright() as playwright:
-                    try:
-                        browser = await playwright.chromium.launch(
-                            executable_path=os.environ.get('REPORT_PDF_CHROMIUM', '/usr/bin/chromium'),
-                            headless=True,
-                            args=['--disable-dev-shm-usage','--disable-gpu','--no-first-run'],
-                        )
-                        context = await browser.new_context(java_script_enabled=False,
-                            service_workers='block', offline=True, viewport={'width':1120,'height':800})
-                        await context.route('**/*', lambda route: route.abort())
-                        page = await context.new_page()
-                        await page.set_content(document, wait_until='load', timeout=15000)
-                        await page.emulate_media(media='print')
-                        heading = html.escape(title + ' · ' + period)
-                        pdf = await page.pdf(format='A4', landscape=True, print_background=True,
-                            prefer_css_page_size=True, display_header_footer=True,
-                            header_template=f'<div style="font-family:Arial;font-size:8px;margin:0 10mm;color:#53627b">{heading}</div>',
-                            footer_template='<div style="font-family:Arial;font-size:8px;width:100%;text-align:center;color:#53627b"><span class="pageNumber"></span> / <span class="totalPages"></span></div>')
-                    finally:
-                        if browser: await browser.close()
-        except (TimeoutError, BrowserError):
-            raise HTTPException(503, 'Не удалось сформировать PDF за отведённое время. Повторите позже.') from None
+                del snapshot
+                stage = 'environment'
+                with chromium_environment() as launch_environment:
+                    async with async_playwright() as playwright:
+                        try:
+                            stage = 'launch'
+                            browser = await playwright.chromium.launch(
+                                executable_path=os.environ.get('REPORT_PDF_CHROMIUM', '/usr/bin/chromium'),
+                                headless=True,
+                                args=['--disable-dev-shm-usage','--disable-gpu','--no-first-run'],
+                                env=launch_environment,
+                            )
+                            stage = 'context'
+                            context = await browser.new_context(java_script_enabled=False,
+                                service_workers='block', offline=True, viewport={'width':1120,'height':800})
+                            await context.route('**/*', lambda route: route.abort())
+                            page = await context.new_page()
+                            stage = 'layout'
+                            await page.set_content(document, wait_until='load', timeout=15000)
+                            del document
+                            await page.emulate_media(media='print')
+                            heading = html.escape(title + ' · ' + period)
+                            stage = 'print'
+                            pdf = await page.pdf(format='A4', landscape=True, print_background=True,
+                                prefer_css_page_size=True, display_header_footer=True,
+                                header_template=f'<div style="font-family:Arial;font-size:8px;margin:0 10mm;color:#53627b">{heading}</div>',
+                                footer_template='<div style="font-family:Arial;font-size:8px;width:100%;text-align:center;color:#53627b"><span class="pageNumber"></span> / <span class="totalPages"></span></div>')
+                        finally:
+                            if browser: await browser.close()
+        except (TimeoutError, BrowserError, OSError) as error:
+            reason = 'timeout' if isinstance(error, (TimeoutError, BrowserTimeoutError)) else ('browser_unavailable' if stage in ('prepare', 'environment', 'launch', 'context') else 'browser_failed')
+            raise pdf_failure(reason, stage) from None
         return pdf
