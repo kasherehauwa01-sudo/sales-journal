@@ -71,7 +71,7 @@ def ensure_headroom():
     available = available_memory()
     if available is not None and available < MIN_AVAILABLE_BYTES:
         diagnostics('rejected', reason='memory_headroom', available_bytes=available)
-        raise _busy()
+        raise _busy('memory_headroom')
 
 
 def diagnostics(stage, **counts):
@@ -84,8 +84,8 @@ def diagnostics(stage, **counts):
     log.info('product_analytics runtime %s', fields, extra=fields)
 
 
-def _busy():
-    return HTTPException(503, 'Товарная аналитика занята. Повторите запрос позже.', headers={'Retry-After': '10'})
+def _busy(reason='busy'):
+    return HTTPException(503, 'Товарная аналитика занята. Повторите запрос позже.', headers={'Retry-After': '10', 'X-Sales-Analytics-Error': reason})
 
 
 @asynccontextmanager
@@ -98,7 +98,7 @@ async def heavy_operation(stage='dataset'):
     state = _states.setdefault(loop, {'lock': asyncio.Lock(), 'waiters': 0, 'active': 0})
     if state['waiters'] >= MAX_WAITERS:
         diagnostics('rejected', reason='queue_full')
-        raise _busy()
+        raise _busy('queue_full')
     state['waiters'] += 1
     started = time.perf_counter()
     acquired = False
@@ -129,12 +129,12 @@ async def heavy_operation(stage='dataset'):
         if token is not None:
             raise  # A loader's own TimeoutError is not an admission timeout.
         diagnostics('rejected', reason='wait_timeout')
-        raise _busy() from None
+        raise _busy('wait_timeout') from None
     except OSError:
         if token is not None:
             raise
         diagnostics('rejected', reason='lock_unavailable')
-        raise _busy() from None
+        raise _busy('lock_unavailable') from None
     finally:
         if token is not None:
             _owner.reset(token)

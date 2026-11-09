@@ -57,3 +57,68 @@ def test_real_chromium_500_rows_and_cyrillic(tmp_path):
     info=subprocess.run(['pdfinfo',str(path)],capture_output=True,text=True,check=True).stdout
     assert 'A4' in info
     assert int(next(line.split(':')[1] for line in info.splitlines() if line.startswith('Pages:')))>1
+
+
+def test_json_body_is_released_before_rendering(monkeypatch):
+    import weakref
+    bodies=[]
+    class Body(bytearray):
+        def __init__(self,*args,**kwargs):
+            super().__init__(*args,**kwargs)
+            bodies.append(weakref.ref(self))
+    monkeypatch.setattr(router,'bytearray',Body,raising=False)
+    async def render(snapshot,title,period):
+        assert bodies and bodies[-1]() is None
+        assert snapshot=='<h1>Полные данные</h1>'
+        return b'%PDF-'+b'x'*200
+    monkeypatch.setattr(router,'render_pdf',render)
+    app=FastAPI();app.include_router(router.router)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+            result=await client.post('/reports/pdf',json={'report':'rfm-analysis','filename':'rfm.pdf','period':'Тест','html':'<h1>Полные данные</h1>'})
+            assert result.status_code==200
+            assert result.headers['content-disposition']=='attachment; filename="rfm.pdf"'
+    asyncio.run(run())
+
+
+def test_pdf_memory_floor_is_kept_and_reports_safe_metrics(monkeypatch,caplog):
+    import logging
+    monkeypatch.setattr(service,'available_memory',lambda:511*1024*1024)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(service.render_pdf('PRIVATE REPORT','title','period'))
+    assert failure.value.status_code==503
+    assert failure.value.headers['X-Sales-PDF-Error']=='memory_headroom'
+    assert '512' in failure.value.detail
+    assert any(getattr(r,'pdf_stage',None)=='preflight' for r in caplog.records)
+    assert 'PRIVATE REPORT' not in caplog.text
+
+
+@pytest.mark.parametrize('kind,expected',[('launch','browser_unavailable'),('timeout','timeout'),('print','browser_failed')])
+def test_pdf_failures_distinguish_browser_and_timeout_without_private_details(monkeypatch,caplog,kind,expected):
+    from contextlib import asynccontextmanager
+    import logging
+    from unittest.mock import Mock
+    from playwright import async_api
+    from app.services import pdf_images
+    monkeypatch.setattr(service,'available_memory',lambda:1024*1024*1024)
+    monkeypatch.setattr(pdf_images,'image_document',lambda _: '<p>Full data</p>')
+    browser=Mock();browser.close=AsyncMock()
+    page=Mock();page.set_content=AsyncMock();page.emulate_media=AsyncMock()
+    page.pdf=AsyncMock(side_effect=async_api.Error('PRIVATE REPORT TOKEN'))
+    context=Mock();context.route=AsyncMock();context.new_page=AsyncMock(return_value=page)
+    browser.new_context=AsyncMock(return_value=context)
+    launcher=AsyncMock(return_value=browser)
+    if kind!='print':launcher.side_effect=TimeoutError('PRIVATE REPORT TOKEN') if kind=='timeout' else async_api.Error('PRIVATE REPORT TOKEN')
+    @asynccontextmanager
+    async def playwright():
+        yield Mock(chromium=Mock(launch=launcher))
+    monkeypatch.setattr(async_api,'async_playwright',playwright)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(service.render_pdf('PRIVATE REPORT TOKEN','title','period'))
+    assert failure.value.status_code==503
+    assert failure.value.headers['X-Sales-PDF-Error']==expected
+    assert 'PRIVATE' not in failure.value.detail and 'PRIVATE' not in caplog.text
+    assert any(getattr(r,'pdf_reason',None)==expected for r in caplog.records)
+    if kind=='print':browser.close.assert_awaited_once()

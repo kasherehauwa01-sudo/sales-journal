@@ -37,14 +37,21 @@ async def export_pdf(request: Request):
         body.extend(chunk)
         if len(body) > MAX_HTML_BYTES:
             raise HTTPException(413, 'Печатная версия слишком велика для доступных ресурсов. PDF не был сокращён.')
+    chunk = None  # release the last receive chunk before parsing/rendering
     try:
         payload = Snapshot.model_validate(json.loads(body))
     except (ValidationError, ValueError, UnicodeDecodeError):
         raise HTTPException(422, 'Некорректные параметры PDF.') from None
     if payload.report not in REPORTS:
         raise HTTPException(422, 'Неизвестный отчёт.')
-    pdf = await render_pdf(payload.html, REPORTS[payload.report], payload.period)
+    filename = payload.filename
+    # Transfer ownership of HTML to the coroutine; do not keep the JSON body
+    # and the Pydantic snapshot alive throughout Chromium rendering.
+    rendering = render_pdf(payload.html, REPORTS[payload.report], payload.period)
+    body.clear()
+    del body, payload
+    pdf = await rendering
     return Response(pdf, media_type='application/pdf', headers={
-        'Content-Disposition':f'attachment; filename="{payload.filename}"',
+        'Content-Disposition':f'attachment; filename="{filename}"',
         'Cache-Control':'no-store, private', 'X-Content-Type-Options':'nosniff',
     })
