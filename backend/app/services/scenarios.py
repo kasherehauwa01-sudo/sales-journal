@@ -24,7 +24,7 @@ def _send(config:SmtpConfig,to:str|list[str],subject:str,body:str,attachment:byt
  try:
   if config.security=="STARTTLS":client.starttls()
   if config.username:client.login(config.username,config.password)
-  client.send_message(message)
+  return client.send_message(message)
  finally:client.quit()
 
 async def send_test(config:SmtpConfig,recipient:str):

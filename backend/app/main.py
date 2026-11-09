@@ -45,3 +45,5 @@ from app.routers.churn_scenario import router as churn_scenario_router
 app.include_router(churn_scenario_router, prefix="/api")
 from app.routers.report_pdf import router as report_pdf_router
 app.include_router(report_pdf_router, prefix="/api")
+from app.routers.import_control import router as import_control_router
+app.include_router(import_control_router,prefix='/api')
