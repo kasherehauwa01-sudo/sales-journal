@@ -72,7 +72,7 @@ JSON всё же содержит конкретное сообщение, ск�
 
 ## Проверки и установка
 
-Frontend146тестов, сборка tsc/Vite. Backend1034passed/113skipped (опциональные
+Frontend146тестов, сборка tsc/Vite. Backend1038passed/113skipped (опциональные
 интеграционные окружения/внешний updater); существующее AnyIO warning.
 Тестируются body ownership,512МиБ отказ, browser launch/print/timeout, отсутствие
 секретов в логах/ошибках, UI stages, ручной повтор без autoretry и прежняя runtime
