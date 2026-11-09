@@ -122,3 +122,64 @@ def test_pdf_failures_distinguish_browser_and_timeout_without_private_details(mo
     assert 'PRIVATE' not in failure.value.detail and 'PRIVATE' not in caplog.text
     assert any(getattr(r,'pdf_reason',None)==expected for r in caplog.records)
     if kind=='print':browser.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize('failure',[False,True])
+def test_browser_environment_is_private_scoped_and_cleaned(monkeypatch,failure):
+    from pathlib import Path
+    import stat
+    variables=('HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_RUNTIME_DIR','CHROME_CONFIG_HOME')
+    for key in variables:monkeypatch.setenv(key,'/proc/1/pdf-unwritable-'+key)
+    before={key:os.environ[key] for key in variables}
+    paths=[]
+    def enter():
+        with service.chromium_environment() as environment:
+            for key in variables:
+                path=Path(environment[key]);paths.append(path)
+                assert path.is_dir() and stat.S_IMODE(path.stat().st_mode)==0o700
+                assert environment[key]!=before[key]
+            assert len({path.parent for path in paths})==1
+            if failure:raise RuntimeError('synthetic cleanup')
+    if failure:
+        with pytest.raises(RuntimeError):enter()
+    else:enter()
+    assert all(not path.exists() for path in paths)
+    assert all(os.environ[key]==before[key] for key in variables)
+
+
+def test_browser_environment_failure_is_controlled_503(monkeypatch,caplog):
+    from contextlib import contextmanager
+    from app.services import pdf_images
+    monkeypatch.setattr(service,'available_memory',lambda:1024*1024*1024)
+    monkeypatch.setattr(pdf_images,'image_document',lambda _: '<p>Full data</p>')
+    @contextmanager
+    def unavailable():
+        raise PermissionError('PRIVATE DIRECTORY')
+        yield
+    monkeypatch.setattr(service,'chromium_environment',unavailable)
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(service.render_pdf('PRIVATE REPORT','title','period'))
+    assert failure.value.status_code==503
+    assert failure.value.headers['X-Sales-PDF-Error']=='browser_unavailable'
+    assert 'PRIVATE' not in caplog.text and 'PRIVATE' not in failure.value.detail
+
+
+@pytest.mark.skipif(os.environ.get('RUN_PDF_BROWSER_TESTS')!='1',reason='Local Chromium opt-in, no production')
+def test_real_pdf_with_unwritable_parent_home_and_scoped_cleanup(monkeypatch,tmp_path):
+    from pathlib import Path
+    from contextlib import contextmanager
+    for key in ('HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_RUNTIME_DIR','CHROME_CONFIG_HOME'):
+        monkeypatch.setenv(key,'/proc/1/pdf-unwritable-'+key)
+    original=service.chromium_environment
+    paths=[]
+    @contextmanager
+    def observed():
+        with original() as environment:
+            paths.append(Path(environment['HOME']).parent)
+            yield environment
+    monkeypatch.setattr(service,'chromium_environment',observed)
+    pdf=asyncio.run(service.render_pdf('<h1>PDF HOME CHECK</h1><p>123.45</p>','test','test'))
+    file=tmp_path/'home.pdf';file.write_bytes(pdf)
+    text=subprocess.run(['pdftotext',str(file),'-'],capture_output=True,text=True,check=True).stdout
+    assert 'PDF HOME CHECK' in text and '123.45' in text
+    assert paths and all(not path.exists() for path in paths)

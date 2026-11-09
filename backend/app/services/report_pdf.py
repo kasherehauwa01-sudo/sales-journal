@@ -3,6 +3,9 @@ import asyncio
 import html
 import os
 import re
+import tempfile
+from pathlib import Path
+from contextlib import contextmanager
 from html.parser import HTMLParser
 
 from fastapi import HTTPException
@@ -119,6 +122,23 @@ def safe_document(snapshot, image_loader=None):
             + ''.join(parser.output) + '</main></body></html>')
 
 
+@contextmanager
+def chromium_environment():
+    # USER app has no guaranteed writable home. Chromium/Crashpad require one
+    # even with Playwright's separate user-data-dir. Scope all state to this PDF.
+    with tempfile.TemporaryDirectory(prefix='sales-pdf-browser-') as directory:
+        environment = dict(os.environ)
+        for variable, child in (
+            ('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'),
+            ('XDG_CACHE_HOME', 'cache'), ('XDG_RUNTIME_DIR', 'runtime'),
+            ('CHROME_CONFIG_HOME', 'chrome-config'),
+        ):
+            path = Path(directory) / child
+            path.mkdir(mode=0o700)
+            environment[variable] = str(path)
+        yield environment
+
+
 PDF_MIN_AVAILABLE_BYTES = 512 * 1024 * 1024
 PDF_FAILURE_MESSAGES = {
     'memory_headroom': 'Недостаточно свободной памяти для PDF: требуется не менее 512 МиБ. Повторите позже.',
@@ -149,32 +169,35 @@ async def render_pdf(snapshot, title, period):
                 from app.services.pdf_images import image_document
                 document = await asyncio.to_thread(image_document, snapshot)
                 del snapshot
-                async with async_playwright() as playwright:
-                    try:
-                        stage = 'launch'
-                        browser = await playwright.chromium.launch(
-                            executable_path=os.environ.get('REPORT_PDF_CHROMIUM', '/usr/bin/chromium'),
-                            headless=True,
-                            args=['--disable-dev-shm-usage','--disable-gpu','--no-first-run'],
-                        )
-                        stage = 'context'
-                        context = await browser.new_context(java_script_enabled=False,
-                            service_workers='block', offline=True, viewport={'width':1120,'height':800})
-                        await context.route('**/*', lambda route: route.abort())
-                        page = await context.new_page()
-                        stage = 'layout'
-                        await page.set_content(document, wait_until='load', timeout=15000)
-                        del document
-                        await page.emulate_media(media='print')
-                        heading = html.escape(title + ' · ' + period)
-                        stage = 'print'
-                        pdf = await page.pdf(format='A4', landscape=True, print_background=True,
-                            prefer_css_page_size=True, display_header_footer=True,
-                            header_template=f'<div style="font-family:Arial;font-size:8px;margin:0 10mm;color:#53627b">{heading}</div>',
-                            footer_template='<div style="font-family:Arial;font-size:8px;width:100%;text-align:center;color:#53627b"><span class="pageNumber"></span> / <span class="totalPages"></span></div>')
-                    finally:
-                        if browser: await browser.close()
-        except (TimeoutError, BrowserError) as error:
-            reason = 'timeout' if isinstance(error, (TimeoutError, BrowserTimeoutError)) else ('browser_unavailable' if stage in ('prepare', 'launch', 'context') else 'browser_failed')
+                stage = 'environment'
+                with chromium_environment() as launch_environment:
+                    async with async_playwright() as playwright:
+                        try:
+                            stage = 'launch'
+                            browser = await playwright.chromium.launch(
+                                executable_path=os.environ.get('REPORT_PDF_CHROMIUM', '/usr/bin/chromium'),
+                                headless=True,
+                                args=['--disable-dev-shm-usage','--disable-gpu','--no-first-run'],
+                                env=launch_environment,
+                            )
+                            stage = 'context'
+                            context = await browser.new_context(java_script_enabled=False,
+                                service_workers='block', offline=True, viewport={'width':1120,'height':800})
+                            await context.route('**/*', lambda route: route.abort())
+                            page = await context.new_page()
+                            stage = 'layout'
+                            await page.set_content(document, wait_until='load', timeout=15000)
+                            del document
+                            await page.emulate_media(media='print')
+                            heading = html.escape(title + ' · ' + period)
+                            stage = 'print'
+                            pdf = await page.pdf(format='A4', landscape=True, print_background=True,
+                                prefer_css_page_size=True, display_header_footer=True,
+                                header_template=f'<div style="font-family:Arial;font-size:8px;margin:0 10mm;color:#53627b">{heading}</div>',
+                                footer_template='<div style="font-family:Arial;font-size:8px;width:100%;text-align:center;color:#53627b"><span class="pageNumber"></span> / <span class="totalPages"></span></div>')
+                        finally:
+                            if browser: await browser.close()
+        except (TimeoutError, BrowserError, OSError) as error:
+            reason = 'timeout' if isinstance(error, (TimeoutError, BrowserTimeoutError)) else ('browser_unavailable' if stage in ('prepare', 'environment', 'launch', 'context') else 'browser_failed')
             raise pdf_failure(reason, stage) from None
         return pdf
