@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 from sqlalchemy import select, text, or_, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import noload
+from app.services.import_deadline import deadline
 from fastapi import HTTPException
 from app.models import ImportBatch
 from app.models.import_control import (
@@ -475,9 +476,15 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
             .limit(20)
         )
     ).all()
-    # Manual confirmation is explicit administrator evidence, not a timer.
-    final = confirmed or bool(
-        cycles and cycles[0].status == "finished" and cycles[0].source_confirmed
+    # Even manual confirmation cannot finalize a day before the approved deadline.
+    final = now() >= deadline(day) and (
+        confirmed
+        or bool(
+            cycles
+            and cycles[0].status == "finished"
+            and cycles[0].source_confirmed
+            and cycles[0].started_at >= deadline(day)
+        )
     )
     states = [(rule, *receipt_state(rule, day, receipts)) for rule in rules]
     completed_sources = {

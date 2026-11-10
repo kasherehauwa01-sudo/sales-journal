@@ -48,9 +48,7 @@ async def _run_autoload_cycle(cycle_id=None,day=None,marker_template=None):
      client=_connect(config)
      try:
       names=client.nlst()
-      marker=marker_template.replace('{date}',day.strftime('%d.%m.%Y')) if marker_template and day else None
-      marker_seen=bool(marker and marker in [Path(str(value).replace('\\','/')).name for value in names])
-      return importable_ftp_files(names),marker_seen
+      return importable_ftp_files(names),False
      finally:
       try:client.quit()
       except Exception:client.close()
@@ -121,7 +119,7 @@ async def _process_file(config:FtpConfig,filename:str,cycle_id=None):
    # очищает частичный файл при ошибке скачивания до создания ImportBatch.
    local.unlink(missing_ok=True);entry.finished_at=datetime.now(timezone.utc);await db.commit()
 
-async def run_autoload():
+async def run_autoload(sales_day=None):
  # Session-level lock prevents cross-process overlapping FTP cycles.
  from app.services.import_control_worker import owned_lock,safe_hook,begin_cycle,finish_cycle
  async with owned_lock(engine,FTP_LOCK) as acquired:
@@ -129,7 +127,12 @@ async def run_autoload():
   async with SessionLocal() as db:
    ftp_config=await db.get(FtpConfig,1)
    if not ftp_config or not ftp_config.enabled:return
-  cycle=await safe_hook(begin_cycle)
+   if sales_day:
+    from app.models.import_control import ImportCycle
+    from app.services.import_deadline import deadline
+    done=await db.scalar(select(ImportCycle.id).where(ImportCycle.sales_date==sales_day,ImportCycle.started_at>=deadline(sales_day),ImportCycle.status.in_(('finished','failed'))).limit(1))
+    if done:return
+  cycle=await safe_hook(begin_cycle,sales_day)
   try:
    await _run_autoload_cycle(*(cycle or (None,None,None)))
   except BaseException:

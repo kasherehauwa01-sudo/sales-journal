@@ -98,12 +98,10 @@ async def settings_put(
 ):
     await lock(db)
     c = await config(db)
-    if data.enabled and (
-        not data.approve or not data.start_date or data.day_offset is None
-    ):
+    if data.enabled and (not data.approve or not data.start_date):
         raise HTTPException(
             422,
-            "Для включения нужны утверждение, дата начала контроля и смещение даты продаж",
+            "Для включения нужны утверждение и дата начала контроля",
         )
     if data.enabled and not await db.scalar(
         select(func.count()).select_from(ImportRule)
@@ -117,27 +115,10 @@ async def settings_put(
         raise HTTPException(
             422, "Дата начала контроля зафиксирована историей; её нельзя переносить"
         )
-    if data.automatic and (
-        not data.enabled
-        or not data.marker_template
-        or "{date}" not in data.marker_template
-    ):
-        raise HTTPException(
-            422, "Автоконтроль требует утверждённого маркера завершения 1С с {date}"
-        )
+    if data.automatic and not data.enabled:
+        raise HTTPException(422, "Сначала включите контроль")
     try:
-        marker = (
-            validate_template(data.marker_template) if data.marker_template else None
-        )
-        if marker and __import__("pathlib").PurePosixPath(marker).suffix.lower() in {
-            ".xls",
-            ".xlsx",
-            ".html",
-            ".htm",
-        }:
-            raise ValueError(
-                "Маркер завершения должен отличаться от импортируемого файла продаж"
-            )
+        marker = None  # Deprecated column retained for schema/API compatibility.
         recipients = (
             "\n".join(parse_recipient_emails(data.recipients))
             if data.recipients.strip()

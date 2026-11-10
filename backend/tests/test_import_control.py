@@ -787,7 +787,7 @@ def test_administrative_api_create_edit_check_close_audit_and_activation(
                 await client.put(
                     prefix + "/settings", json={**config, "automatic": True}
                 )
-            ).status_code == 422
+            ).status_code == 200
             assert (
                 await client.post(
                     prefix + f"/cycles/{DAY}/confirm",
@@ -871,7 +871,7 @@ def test_ftp_cycle_waits_all_files_retries_and_marker_without_new_scheduler(
 
     async def finish(identity, marker, error=None):
         assert events == ["file_started", "file_finished"]
-        assert marker is True
+        assert marker is False
         events.append("cycle_finished")
 
     monkeypatch.setattr(ftp, "_process_file", process)
@@ -1051,7 +1051,7 @@ def test_lost_cycle_owner_is_interrupted_without_synthetic_completion(pg, monkey
         await worker.finish_cycle(identity, False)
         async with pg[2]() as db:
             cycle = await db.get(ImportCycle, identity)
-            assert cycle.status == "finished" and not cycle.source_confirmed
+            assert cycle.status == "finished" and cycle.source_confirmed
 
     asyncio.run(run())
 

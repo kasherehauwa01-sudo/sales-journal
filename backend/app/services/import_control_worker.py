@@ -6,9 +6,10 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, text, update, func, or_
 from sqlalchemy.orm import noload
+from app.services.import_deadline import deadline, cycle_sales_day, due_sales_day
 from app.config import settings
 from app.database import engine, SessionLocal
-from app.models import ImportBatch, SmtpConfig
+from app.models import ImportBatch, SmtpConfig, FtpConfig
 from app.models.import_control import (
     ImportCycle,
     ImportReceipt,
@@ -48,7 +49,7 @@ async def owned_lock(selected_engine, key):
         yield True
 
 
-async def begin_cycle():
+async def begin_cycle(sales_day=None):
     async with SessionLocal() as db:
         c = await config(db)
         # Previous owner cannot still be running: caller holds the FTP session lock.
@@ -61,21 +62,14 @@ async def begin_cycle():
         )
         cycle = ImportCycle(
             id=str(uuid.uuid4()),
-            sales_date=(
-                (
-                    datetime.now(ZoneInfo(settings.autoload_timezone)).date()
-                    - timedelta(days=c.day_offset)
-                )
-                if c.day_offset is not None
-                else None
-            ),
+            sales_date=sales_day or cycle_sales_day(now()),
             status="running",
             source_confirmed=False,
             config_revision=c.revision,
         )
         db.add(cycle)
         await db.commit()
-        return cycle.id, cycle.sales_date, c.marker_template
+        return cycle.id, cycle.sales_date, None
 
 
 async def finish_cycle(identity, marker_seen, error=None):
@@ -86,7 +80,11 @@ async def finish_cycle(identity, marker_seen, error=None):
         cycle.status = "failed" if error else "finished"
         cycle.finished_at = now()
         cycle.error_code = error
-        cycle.source_confirmed = bool(marker_seen and not error)
+        cycle.source_confirmed = bool(
+            not error
+            and cycle.sales_date
+            and cycle.started_at >= deadline(cycle.sales_date)
+        )
         day = cycle.sales_date
         await db.commit()
         c = await config(db)
@@ -241,7 +239,36 @@ async def deliver_one():
             await db.commit()
 
 
+async def check_deadline_cycle():
+    async with SessionLocal() as db:
+        c = await config(db)
+        if not c.enabled or not c.automatic or not c.start_date:
+            return
+        ftp = await db.get(FtpConfig, 1)
+        if not ftp or not ftp.enabled:
+            return
+        day = due_sales_day(now())
+        if day < c.start_date:
+            return
+        done = await db.scalar(
+            select(ImportCycle.id)
+            .where(
+                ImportCycle.sales_date == day,
+                ImportCycle.started_at >= deadline(day),
+                ImportCycle.status.in_(("finished", "failed")),
+            )
+            .limit(1)
+        )
+        if done:
+            return
+    # Normal FTP import, with its existing retry policy and cross-process lock.
+    from app.services.ftp_autoload import run_autoload
+
+    await run_autoload(day)
+
+
 async def maintenance():
+    await check_deadline_cycle()
     async with SessionLocal() as db:
         c = await config(db)
         if not c.enabled or not c.automatic:

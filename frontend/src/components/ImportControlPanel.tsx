@@ -414,8 +414,7 @@ export function ImportControlPanel() {
           )}
           <p className="muted">
             Проверка сравнивает метаданные обработанных файлов. Она не загружает
-            файлы и не запускает импорт. Окончание выгрузки 1С подтверждается
-            маркером или администратором.
+            файлы и не запускает импорт. Файлы ожидаются до 00:20 следующего дня по Москве. Незавершённая обработка не считается пропуском.
           </p>
           <div className="filter-grid">
             <label>
@@ -562,7 +561,7 @@ export function ImportControlPanel() {
         >
           <p>
             Включать только после утверждения справочника и даты начала.
-            Автоконтроль требует реального маркера завершения выгрузки 1С.
+            Выгрузка ожидается в 23:40. Контрольный срок — 00:20 следующего дня по Москве. Маркер не требуется.
           </p>
           <div className="filter-grid">
             <label>
@@ -572,34 +571,6 @@ export function ImportControlPanel() {
                 value={config.start_date || ""}
                 onChange={(e) =>
                   setConfig({ ...config, start_date: e.target.value || null })
-                }
-              />
-            </label>
-            <label>
-              Смещение даты продаж, дней назад
-              <input
-                type="number"
-                min="0"
-                max="7"
-                value={config.day_offset ?? ""}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    day_offset:
-                      e.target.value === "" ? null : Number(e.target.value),
-                  })
-                }
-              />
-            </label>
-            <label>
-              Маркер завершения 1С (с {"{date}"}, ДД.ММ.ГГГГ)
-              <input
-                value={config.marker_template || ""}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    marker_template: e.target.value || null,
-                  })
                 }
               />
             </label>
@@ -636,7 +607,7 @@ export function ImportControlPanel() {
                 checked={approve}
                 onChange={(e) => setApprove(e.target.checked)}
               />
-              Подтверждаю справочник, дату начала и правило завершения
+              Подтверждаю справочник, дату начала и контрольный срок 00:20 МСК
             </label>
           </div>
           <button className="primary" disabled={busy}>
