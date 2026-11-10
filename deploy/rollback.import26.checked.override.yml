@@ -1,0 +1,19 @@
+# Preserve schema26 and import history. Maintenance rollback, not normal service.
+# Append LAST after all original production overrides, in their original order.
+services:
+  backend:
+    image: "${SALES_ROLLBACK_IMAGE:?Pin the reviewed immutable old image ID}"
+    build: !reset null
+    pull_policy: never
+    restart: "no"
+    stop_grace_period: 30s
+    command: ["python", "-B", "/run/sales-rollback/start_backend.py", "--rollback", "--expected-revision", "20261109_26"]
+    environment:
+      ANALYTICS_SIGNALS_ENABLED: "false"
+      ANALYTICS_SIGNALS_MODE: SHADOW
+      ANALYTICS_AUTOMATION_ENABLED: "false"
+    volumes:
+      - type: bind
+        source: "${SALES_ROLLBACK_LAUNCHER:?Absolute reviewed revision26-compatible launcher path}"
+        target: /run/sales-rollback/start_backend.py
+        read_only: true

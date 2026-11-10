@@ -26,7 +26,11 @@ async def _clear_stored_path(import_id:int,path:Path)->None:
 async def _process_import(import_id:int,started:float)->None:
  async with SessionLocal() as db:
   batch=await db.get(ImportBatch,import_id);batch.status="processing";batch.started_at=datetime.now(timezone.utc);batch.log_text=f"[{batch.started_at.isoformat()}] Начата обработка файла {batch.filename}\n";await db.commit()
+  departments=set()
   try:
+   from app.services.import_control_worker import safe_hook,receipt_before
+   await safe_hook(receipt_before,import_id)
+   if batch.file_size==0:raise ValueError("Файл имеет нулевой размер")
    try:
     declared=extract_declared_period(Path(batch.stored_path))
     batch.declared_period_start=declared.start;batch.declared_period_end=declared.end;batch.source_period_method=declared.method
@@ -34,6 +38,9 @@ async def _process_import(import_id:int,started:float)->None:
     batch.source_period_method="METADATA_EXTRACTION_FAILED"
     log.exception("Не удалось извлечь период источника импорта %s",import_id)
    await db.commit()
+   from app.services.import_control_worker import revision_guard
+   guard=await revision_guard(import_id)
+   if guard:raise ValueError(guard)
    sheet,rows=read_sales(Path(batch.stored_path));batch.log_text+=f"Найден лист «{sheet}». Строки обрабатываются последовательно.\n";await db.commit()
    period_start=None;period_end=None
    for number,raw in rows:
@@ -41,6 +48,7 @@ async def _process_import(import_id:int,started:float)->None:
     try:
      if not include_for_filename(batch.filename,raw) or not include_document(raw):batch.skipped_rows+=1;batch.processed_rows+=1;await db.commit();continue
      data=normalize_sale(raw);sale_date=data["sale_date"]
+     if len(departments)<64:departments.add(data["department"])
      period_start=sale_date if period_start is None or sale_date<period_start else period_start
      period_end=sale_date if period_end is None or sale_date>period_end else period_end
      items=data.pop("items");legacy_fingerprint=data.pop("legacy_fingerprint",None)
@@ -61,6 +69,16 @@ async def _process_import(import_id:int,started:float)->None:
   except Exception as exc:
    await db.rollback();batch=await db.get(ImportBatch,import_id);batch.status="failed";batch.error_text=str(exc)[:10000];batch.finished_at=datetime.now(timezone.utc);batch.duration_ms=int((time.monotonic()-started)*1000);batch.log_text=(batch.log_text or "")+f"Критическая ошибка: {batch.error_text}\n";await changed(db);await db.commit();log.exception("Ошибка импорта %s",import_id)
 
+  except BaseException:
+   await db.rollback();batch=await db.get(ImportBatch,import_id)
+   if batch:
+    batch.status='failed';batch.error_text='import_interrupted';batch.finished_at=datetime.now(timezone.utc)
+    await db.commit()
+   raise
+  finally:
+   from app.services.import_control_worker import safe_hook,receipt_after
+   await safe_hook(receipt_after,import_id,departments)
+
 
 async def _process_import_with_source(import_id:int):
  started=time.monotonic()
@@ -68,7 +86,15 @@ async def _process_import_with_source(import_id:int):
   batch=await db.get(ImportBatch,import_id)
   if not batch:return
   path=Path(batch.stored_path)
- async def operation():await _process_import(import_id,started)
+ async def operation():
+  from app.services.import_control_worker import source_owner,safe_hook,receipt_after
+  async with source_owner(import_id) as acquired:
+   if acquired:
+    await _process_import(import_id,started)
+   else:
+    async with SessionLocal() as db:
+     batch=await db.get(ImportBatch,import_id);batch.status='failed';batch.error_text='source_import_in_progress';batch.finished_at=datetime.now(timezone.utc);await db.commit()
+    await safe_hook(receipt_after,import_id,set())
  try:
   await with_temporary_source(path,operation)
  finally:

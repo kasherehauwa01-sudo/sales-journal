@@ -36,15 +36,17 @@ cp .env.example .env
 docker compose up -d db
 docker compose build
 # Только НОВАЯ локальная dev-БД: явное первоначальное создание схемы
-docker compose run --rm --no-deps backend alembic upgrade 20261030_25
+docker compose run --rm --no-deps backend alembic upgrade 20261109_26
 docker compose up -d backend frontend
 docker compose ps
 ```
 
 Frontend: `http://127.0.0.1:8011/vr/sales/`, API: `http://127.0.0.1:8010/api/docs`. Порты слушают только loopback.
-Backend больше **не применяет миграции при старте**: `start_backend.py` проверяет схему в read-only транзакции и запускает uvicorn через exec. Текущая ожидаемая ревизия — `20261030_25`. Для существующих схем23 →24 и24 →25 предусмотрены отдельные явные migration-jobs с блокировкой. На несовпадении схемы обычный старт останавливается, не исправляя БД.
+Backend больше **не применяет миграции при старте**: `start_backend.py` проверяет схему в read-only транзакции и запускает uvicorn через exec. Текущая ожидаемая ревизия — `20261109_26`. Для существующих схем23 →24,24 →25 и25 →26 предусмотрены отдельные явные migration-jobs с блокировкой. На несовпадении схемы обычный старт останавливается, не исправляя БД.
 
-Для production24 →25 и отката старого образа без удаления таблиц: [инструкция установки ревизии25](docs/churn_schema25_deployment.md). Существующий updater не получает права автоматически мигрировать БД. Реальный updater512 и полный исправленный внешний файл: [аудит, установка и recovery](docs/update_sales_schema25_updater.md).
+Контроль полноты импорта: [архитектура и API](docs/import_completeness.md), [согласованная установка25→26, настройка и откат](docs/import_completeness_deployment.md). Проверки и email по умолчанию выключены; справочник утверждается администратором; файлы ожидаются до00:20 МСК следующего дня, marker не нужен. Старый launcher25 нельзя возвращать на схему26 без проверенного bridge.
+
+Историческая инструкция для production24 →25 и отката старого образа без удаления таблиц: [инструкция установки ревизии25](docs/churn_schema25_deployment.md). Существующий updater не получает права автоматически мигрировать БД. Реальный updater512 и полный исправленный внешний файл: [аудит, установка и recovery](docs/update_sales_schema25_updater.md).
 
 См. [ROLLBACK_COMPATIBILITY_REPORT.md](docs/ROLLBACK_COMPATIBILITY_REPORT.md): явная миграция, rollback старого образа, ограничения и разрешения. Локальный bootstrap выше не является production-инструкцией.
 

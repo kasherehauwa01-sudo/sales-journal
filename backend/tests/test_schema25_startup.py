@@ -21,16 +21,25 @@ from app.config import settings
 from app.models import Base
 
 BACKEND = Path(__file__).parents[1]
+CONTROL_TABLES=set(launcher.IMPORT_CONTROL_CONTRACT)
 NEW_TABLES = set(launcher.CHURN_COLUMNS)
+
+def metadata25():
+    metadata=sa.MetaData()
+    for table in Base.metadata.sorted_tables:
+        if table.name not in CONTROL_TABLES:table.to_metadata(metadata)
+    return metadata
+
+LEGACY_METADATA=metadata25()
 
 
 def test_revision_graph_has_one_reviewed_successor():
     config = Config()  # keep Alembic from reconfiguring pytest/global logging
     config.set_main_option('script_location', str(BACKEND/'alembic'))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ['20261030_25']
+    assert scripts.get_heads() == ['20261109_26']
     assert scripts.get_revision('20261030_25').down_revision == '20261022_24'
-    assert launcher.DEFAULT_REVISION == '20261030_25'
+    assert launcher.DEFAULT_REVISION == '20261109_26'
     assert launcher.MIGRATION_SOURCES['20261030_25'] == {'20261022_24', '20261030_25'}
     assert '20261030_25' not in launcher.MIGRATION_SOURCES['20261022_24']
 
@@ -52,7 +61,7 @@ def test_frozen_contract_covers_every_new_model_column_and_key():
 
 
 @pytest.mark.parametrize('args,exec_expected', [([], True), (['--check-only'], False), (['--rollback'], True)])
-def test_default_launch_checks25_then_execs_without_migration(monkeypatch, args, exec_expected):
+def test_default_launch_checks26_then_execs_without_migration(monkeypatch, args, exec_expected):
     events = []
     engine = SimpleNamespace(dispose=lambda: events.append('dispose'))
     monkeypatch.setattr(launcher, 'sync_engine', lambda config: engine)
@@ -63,7 +72,7 @@ def test_default_launch_checks25_then_execs_without_migration(monkeypatch, args,
     monkeypatch.setattr(settings, 'analytics_signals_enabled', False)
     monkeypatch.setattr(settings, 'analytics_automation_enabled', False)
     launcher.main(args)
-    assert events[:2] == [('check', '20261030_25'), 'dispose']
+    assert events[:2] == [('check', '20261109_26'), 'dispose']
     assert (len(events) == 3) == exec_expected
     if exec_expected:
         assert events[-1][1] == 'uvicorn'
@@ -97,7 +106,7 @@ def test_migrate_mode_explicitly_checks_disabled_flags_and_never_execs(monkeypat
     assert calls == []
     monkeypatch.setattr(settings, 'analytics_automation_enabled', False)
     launcher.main(['--migrate'])
-    assert calls == [('20261030_25', Base.metadata), 'dispose']
+    assert calls == [('20261109_26', Base.metadata), 'dispose']
     with pytest.raises(launcher.StartupBlocked): launcher.main(['--migrate', '--rollback'])
 
 
@@ -136,7 +145,7 @@ def pg24(monkeypatch):
 def old_metadata():
     metadata = sa.MetaData()
     for table in Base.metadata.sorted_tables:
-        if table.name not in NEW_TABLES: table.to_metadata(metadata)
+        if table.name not in NEW_TABLES | CONTROL_TABLES: table.to_metadata(metadata)
     return metadata
 
 
@@ -158,22 +167,22 @@ def test_pg_real24_to25_noop_readonly_start_and_old_models(pg24, monkeypatch):
     before = snapshot(engine)
     # Current runtime refuses24 before starting; no implicit schema change.
     with pytest.raises(launcher.StartupBlocked, match='revision differs'):
-        launcher.check_schema(engine, Base.metadata, '20261030_25')
+        launcher.check_schema(engine, LEGACY_METADATA, '20261030_25')
     launcher.check_schema(engine, old_metadata(), '20261022_24')
-    launcher.migrate(engine, '20261030_25', Base.metadata)
+    launcher.migrate(engine, '20261030_25', LEGACY_METADATA)
     assert snapshot(engine) == before
     with engine.connect() as conn:
         assert launcher.revision(conn) == '20261030_25'
         assert all(conn.scalar(sa.text('SELECT count(*) FROM '+name)) == 0 for name in NEW_TABLES)
     statements = []
     sa.event.listen(engine, 'before_cursor_execute', lambda c,cur,sql,p,ctx,m: statements.append(sql))
-    launcher.check_schema(engine, Base.metadata, '20261030_25')
+    launcher.check_schema(engine, LEGACY_METADATA, '20261030_25')
     # Even an old image lacking all new models must validate the physical25 extension.
     launcher.check_schema(engine, old_metadata(), '20261030_25')
     assert not any(sql.lstrip().upper().startswith(('INSERT','UPDATE','DELETE','CREATE','ALTER','DROP','TRUNCATE'))
                    for sql in statements)
     monkeypatch.setattr(launcher.subprocess, 'run', lambda *a,**k: pytest.fail('25→25 must not invoke Alembic'))
-    launcher.migrate(engine, '20261030_25', Base.metadata)
+    launcher.migrate(engine, '20261030_25', LEGACY_METADATA)
     assert snapshot(engine) == before
     with pytest.raises(launcher.StartupBlocked, match='Unreviewed migration transition'):
         launcher.migrate(engine, '20261022_24')
@@ -237,6 +246,7 @@ def test_pg_foreign_key_other_schema_and_competing_migration(pg24, monkeypatch):
 def test_pg_cli_start_and_rollback_leave_schema_and_data_unchanged(pg24, tmp_path):
     engine, schema = pg24
     launcher.migrate(engine, '20261030_25')
+    launcher.migrate(engine, '20261109_26', Base.metadata)
     before = snapshot(engine)
     env = dict(os.environ)
     env['PATH'] = str(Path(sys.executable).parent)+os.pathsep+env.get('PATH', '')
@@ -244,14 +254,14 @@ def test_pg_cli_start_and_rollback_leave_schema_and_data_unchanged(pg24, tmp_pat
         return subprocess.run([sys.executable, '-B', str(BACKEND/'start_backend.py'), *args], cwd=BACKEND,
             env=env, capture_output=True, text=True, timeout=30)
     result = cli('--check-only')
-    assert result.returncode == 0 and 'SCHEMA_PREFLIGHT_OK expected=20261030_25' in result.stdout
+    assert result.returncode == 0 and 'SCHEMA_PREFLIGHT_OK expected=20261109_26' in result.stdout
     # Exercise actual exec handoff without importing/running business schedulers.
     executable = tmp_path/'uvicorn'
     executable.write_text('#!'+sys.executable+'\nimport json,sys\nprint("FIXTURE_EXEC "+json.dumps(sys.argv[1:]))\n')
     executable.chmod(0o755)
     env['PATH'] = str(tmp_path)+os.pathsep+env['PATH']
     assert 'FIXTURE_EXEC' in cli().stdout
-    result = cli('--rollback', '--expected-revision', '20261030_25')
+    result = cli('--rollback', '--expected-revision', '20261109_26')
     assert result.returncode == 0 and '"--lifespan", "off"' in result.stdout
     assert snapshot(engine) == before
     with engine.begin() as conn: conn.execute(sa.text('ALTER TABLE churn_receipts DROP CONSTRAINT uq_churn_receipt_event'))
@@ -269,7 +279,7 @@ def test_pg_23_requires_separate_reviewed24_step(pg24):
     with engine.connect() as conn: assert launcher.revision(conn) == '20261020_23'
     launcher.migrate(engine, '20261022_24')
     launcher.check_schema(engine, old_metadata(), '20261022_24')
-    launcher.migrate(engine, '20261030_25', Base.metadata)
+    launcher.migrate(engine, '20261030_25', LEGACY_METADATA)
 
 
 @pytest.mark.parametrize('child_succeeds_without_migrating', [False, True])
@@ -289,7 +299,7 @@ def test_pg_failed_or_ineffective_alembic_never_reports_success_and_releases_loc
 
 
 @pytest.mark.skipif(os.environ.get('SCHEMA25_COMPOSE_TESTS') != '1', reason='Explicit local Compose client test opt-in')
-@pytest.mark.parametrize('file', ['migrate.churn25.explicit.override.yml', 'rollback.churn25.checked.override.yml'])
+@pytest.mark.parametrize('file', ['migrate.churn25.explicit.override.yml', 'rollback.churn25.checked.override.yml', 'migrate.import26.explicit.override.yml', 'rollback.import26.checked.override.yml'])
 def test_compose_templates_preserve_db_frontend_volumes_and_disable_automation(file, tmp_path):
     import json
     env = dict(os.environ)
@@ -314,7 +324,7 @@ def test_compose_templates_preserve_db_frontend_volumes_and_disable_automation(f
     assert updated['volumes'] == initial['volumes']
     assert updated['networks'] == initial['networks']
     service = updated['services']['schema-migrate' if file.startswith('migrate') else 'backend']
-    assert service['command'][-1] == '20261030_25'
+    assert service['command'][-1] == ('20261109_26' if 'import26' in file else '20261030_25')
     assert service['environment']['ANALYTICS_AUTOMATION_ENABLED'] == 'false'
     assert service['environment']['ANALYTICS_SIGNALS_ENABLED'] == 'false'
     assert service['pull_policy'] == 'never'

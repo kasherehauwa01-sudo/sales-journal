@@ -31,6 +31,13 @@ async def upload(background:BackgroundTasks,files:list[UploadFile]=File(...),db:
    safe=re.sub(r"[^\w. -]","_",Path(f.filename or "sales").name);path=temp_dir/f"{uuid.uuid4().hex}_{safe}"
    file_size=await _save_upload(f,path);saved_paths.append(path)
    batch=ImportBatch(filename=safe,stored_path=str(path),file_size=file_size,status="queued");db.add(batch);await db.flush();await db.refresh(batch);result.append(batch);background.add_task(process_import,batch.id)
+  # Keep the original basename as evidence; on-disk paths remain sanitized.
+  from app.services.import_control import record_receipt,canonical_filename
+  for source_file,batch in zip(files,result):
+   original=Path((source_file.filename or batch.filename).replace("\\","/")).name
+   try:original=canonical_filename(original)
+   except ValueError:original=batch.filename
+   await record_receipt(db,batch,filename=original)
   await db.commit();return result
  except Exception:
   await db.rollback()

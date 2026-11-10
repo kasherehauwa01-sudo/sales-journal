@@ -1,0 +1,13 @@
+# Append LAST after every existing production override; explicit maintenance only.
+services:
+  schema-migrate:
+    profiles: ["schema-maintenance"]
+    image: "${SALES_CANDIDATE_IMAGE:?Pin the reviewed revision26 candidate image}"
+    pull_policy: never
+    restart: "no"
+    command: ["python", "-B", "start_backend.py", "--migrate", "--expected-revision", "20261109_26"]
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sales}:${POSTGRES_PASSWORD:?Required}@db:5432/${POSTGRES_DB:-sales}"
+      ANALYTICS_SIGNALS_ENABLED: "false"
+      ANALYTICS_SIGNALS_MODE: SHADOW
+      ANALYTICS_AUTOMATION_ENABLED: "false"

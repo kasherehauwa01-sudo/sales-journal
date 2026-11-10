@@ -13,11 +13,12 @@ sys.path.insert(0, str(app_root))
 
 import sqlalchemy as sa
 
-SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25'}
-DEFAULT_REVISION = '20261030_25'
+SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26'}
+DEFAULT_REVISION = '20261109_26'
 MIGRATION_SOURCES = {
     '20261022_24': {'20261020_23', '20261022_24'},
     '20261030_25': {'20261022_24', '20261030_25'},
+    '20261109_26': {'20261030_25', '20261109_26'},
 }
 SCHEMA_LOCK = 734190249
 
@@ -125,6 +126,242 @@ def check_churn_schema(conn, schema, inspector):
         raise StartupBlocked('Revision25 constraint is unvalidated or deferrable')
 
 
+IMPORT_CONTROL_CONTRACT = {
+    "import_control_audit": {
+        "columns": {
+            "id": ("BIGINT", False),
+            "entity": ("VARCHAR(32)", False),
+            "entity_id": ("VARCHAR(64)", False),
+            "actor": ("VARCHAR(255)", False),
+            "effective_date": ("DATE", True),
+            "changes": ("JSON", False),
+            "created_at": ("TIMESTAMPWITHTIMEZONE", False),
+        },
+        "pk": ["id"],
+        "unique": [],
+        "fk": [],
+    },
+    "import_control_config": {
+        "columns": {
+            "id": ("INTEGER", False),
+            "enabled": ("BOOLEAN", False),
+            "automatic": ("BOOLEAN", False),
+            "email_enabled": ("BOOLEAN", False),
+            "start_date": ("DATE", True),
+            "day_offset": ("INTEGER", True),
+            "marker_template": ("VARCHAR(512)", True),
+            "recipients": ("TEXT", False),
+            "revision": ("INTEGER", False),
+            "created_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "updated_at": ("TIMESTAMPWITHTIMEZONE", False),
+        },
+        "pk": ["id"],
+        "unique": [],
+        "fk": [],
+    },
+    "import_control_cycles": {
+        "columns": {
+            "id": ("VARCHAR(36)", False),
+            "sales_date": ("DATE", True),
+            "status": ("VARCHAR(24)", False),
+            "source_confirmed": ("BOOLEAN", False),
+            "config_revision": ("INTEGER", True),
+            "started_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "finished_at": ("TIMESTAMPWITHTIMEZONE", True),
+            "error_code": ("VARCHAR(64)", True),
+        },
+        "pk": ["id"],
+        "unique": [],
+        "fk": [],
+    },
+    "import_control_notices": {
+        "columns": {
+            "id": ("BIGINT", False),
+            "sales_date": ("DATE", False),
+            "dedupe_key": ("VARCHAR(64)", False),
+            "status": ("VARCHAR(24)", False),
+            "attempts": ("INTEGER", False),
+            "recipients": ("TEXT", False),
+            "subject": ("VARCHAR(255)", False),
+            "body": ("TEXT", False),
+            "error_code": ("VARCHAR(64)", True),
+            "next_attempt": ("TIMESTAMPWITHTIMEZONE", False),
+            "created_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "sent_at": ("TIMESTAMPWITHTIMEZONE", True),
+        },
+        "pk": ["id"],
+        "unique": [["dedupe_key"]],
+        "fk": [],
+    },
+    "import_day_checks": {
+        "columns": {
+            "sales_date": ("DATE", False),
+            "status": ("VARCHAR(32)", False),
+            "expected": ("INTEGER", False),
+            "successful": ("INTEGER", False),
+            "missing": ("INTEGER", False),
+            "errors": ("INTEGER", False),
+            "checked_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "config_revision": ("INTEGER", False),
+            "error_code": ("VARCHAR(64)", True),
+        },
+        "pk": ["sales_date"],
+        "unique": [],
+        "fk": [],
+    },
+    "import_departments": {
+        "columns": {
+            "id": ("BIGINT", False),
+            "code": ("VARCHAR(128)", False),
+            "name": ("VARCHAR(255)", False),
+            "created_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "updated_at": ("TIMESTAMPWITHTIMEZONE", False),
+        },
+        "pk": ["id"],
+        "unique": [["code"]],
+        "fk": [],
+    },
+    "import_control_receipts": {
+        "columns": {
+            "id": ("BIGINT", False),
+            "import_id": ("BIGINT", False),
+            "cycle_id": ("VARCHAR(36)", True),
+            "filename": ("VARCHAR(512)", False),
+            "sha256": ("VARCHAR(64)", True),
+            "status": ("VARCHAR(32)", False),
+            "period_start": ("DATE", True),
+            "period_end": ("DATE", True),
+            "period_method": ("VARCHAR(64)", True),
+            "departments": ("JSON", False),
+            "error_code": ("VARCHAR(64)", True),
+            "duplicate_of": ("BIGINT", True),
+            "created_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "finished_at": ("TIMESTAMPWITHTIMEZONE", True),
+        },
+        "pk": ["id"],
+        "unique": [["import_id"]],
+        "fk": [
+            ["import_id", "import_batches", "id"],
+            ["cycle_id", "import_control_cycles", "id"],
+            ["duplicate_of", "import_control_receipts", "id"],
+        ],
+    },
+    "import_expectation_rules": {
+        "columns": {
+            "id": ("BIGINT", False),
+            "department_id": ("BIGINT", False),
+            "start_date": ("DATE", False),
+            "end_date": ("DATE", True),
+            "filename_template": ("VARCHAR(512)", False),
+            "date_format": ("VARCHAR(8)", False),
+            "display_name": ("VARCHAR(255)", False),
+            "active": ("BOOLEAN", False),
+            "controlled": ("BOOLEAN", False),
+            "created_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "updated_at": ("TIMESTAMPWITHTIMEZONE", False),
+        },
+        "pk": ["id"],
+        "unique": [],
+        "fk": [["department_id", "import_departments", "id"]],
+    },
+    "import_control_issues": {
+        "columns": {
+            "id": ("BIGINT", False),
+            "sales_date": ("DATE", False),
+            "department_id": ("BIGINT", False),
+            "rule_id": ("BIGINT", False),
+            "expected_filename": ("VARCHAR(512)", False),
+            "department_name": ("VARCHAR(255)", False),
+            "status": ("VARCHAR(24)", False),
+            "error_code": ("VARCHAR(64)", True),
+            "import_id": ("BIGINT", True),
+            "detected_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "checked_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "resolved_at": ("TIMESTAMPWITHTIMEZONE", True),
+            "closure_reason": ("TEXT", True),
+            "closure_method": ("VARCHAR(32)", True),
+        },
+        "pk": ["id"],
+        "unique": [["sales_date", "department_id"]],
+        "fk": [
+            ["rule_id", "import_expectation_rules", "id"],
+            ["import_id", "import_batches", "id"],
+            ["department_id", "import_departments", "id"],
+        ],
+    },
+}
+
+
+def check_import_control_schema(conn, schema, inspector):
+    for name, contract in IMPORT_CONTROL_CONTRACT.items():
+        columns = {c["name"]: c for c in inspector.get_columns(name, schema=schema)}
+        for key, (typ, nullable) in contract["columns"].items():
+            if (
+                key not in columns
+                or type_name(columns[key]["type"], conn.dialect) != typ
+                or columns[key]["nullable"] != nullable
+            ):
+                raise StartupBlocked("Revision26 column mismatch: " + name + "." + key)
+        if (
+            inspector.get_pk_constraint(name, schema=schema)["constrained_columns"]
+            != contract["pk"]
+        ):
+            raise StartupBlocked("Revision26 primary key mismatch: " + name)
+        unique = [
+            c["column_names"]
+            for c in inspector.get_unique_constraints(name, schema=schema)
+        ]
+        if any(keys not in unique for keys in contract["unique"]):
+            raise StartupBlocked("Revision26 unique mismatch: " + name)
+        fks = inspector.get_foreign_keys(name, schema=schema)
+        for field, target, key in contract["fk"]:
+            if not any(
+                f["constrained_columns"] == [field]
+                and f["referred_table"] == target
+                and f["referred_columns"] == [key]
+                and f.get("referred_schema") in (None, schema)
+                and f.get("options", {}).get("ondelete") == "RESTRICT"
+                for f in fks
+            ):
+                raise StartupBlocked("Revision26 foreign key mismatch: " + name)
+    required_checks = {
+        'import_control_config': {
+            'day_offset IS NULL OR day_offset >= 0 AND day_offset <= 7', 'id = 1'},
+        'import_expectation_rules': {
+            'end_date IS NULL OR end_date >= start_date',
+            "date_format::text = ANY (ARRAY['dmy'::character varying, 'iso'::character varying]::text[])"},
+    }
+    for name, checks in required_checks.items():
+        actual = {''.join(c['sqltext'].split()) for c in inspector.get_check_constraints(name, schema=schema)}
+        if not {''.join(c.split()) for c in checks}.issubset(actual):
+            raise StartupBlocked('Revision26 check constraint mismatch: '+name)
+    invalid = conn.scalar(sa.text("""SELECT count(*) FROM pg_constraint c
+        JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+        WHERE n.nspname=:schema AND t.relname=ANY(:tables)
+        AND (NOT c.convalidated OR c.condeferrable OR c.condeferred)"""),
+        {'schema':schema,'tables':list(IMPORT_CONTROL_CONTRACT)})
+    if invalid:
+        raise StartupBlocked('Revision26 constraint is unvalidated or deferrable')
+    flags = {
+        c["name"]: str(c.get("default", ""))
+        .strip("()")
+        .replace("'", "")
+        .replace("::boolean", "")
+        for c in inspector.get_columns("import_control_config", schema=schema)
+    }
+    if any(flags[key] != "false" for key in ("enabled", "automatic", "email_enabled")):
+        raise StartupBlocked("Revision26 control must default OFF")
+    triggers = conn.scalar(
+        sa.text(
+            "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=:schema AND c.relname='import_expectation_rules' AND t.tgname='import_rule_guard' AND t.tgenabled='O'"
+        ),
+        {"schema": schema},
+    )
+    if triggers != 1:
+        raise StartupBlocked("Revision26 rule guard is missing")
+
+
+
 def check_schema(engine, metadata, expected):
     if expected not in SUPPORTED_REVISIONS:
         raise StartupBlocked('Unreviewed expected revision')
@@ -179,13 +416,15 @@ def _check_schema(conn, metadata, expected):
                 if not any(x['constrained_columns'] == names and x['referred_table'] == target
                            and x['referred_columns'] == columns for x in actual_fks):
                     raise StartupBlocked('Foreign key mismatch: '+table.name)
-        if expected == DEFAULT_REVISION:
+        if expected in ('20261030_25', '20261109_26'):
             check_churn_schema(conn, schema, inspector)
+        if expected == '20261109_26':
+            check_import_control_schema(conn, schema, inspector)
 
 
 def migrate(engine, target, metadata=None):
     if target not in MIGRATION_SOURCES:
-        raise StartupBlocked('Only reviewed migration targets 20261022_24 and 20261030_25 are supported')
+        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 and 20261109_26 are supported')
     with engine.connect() as conn:
         acquired = conn.scalar(sa.text('SELECT pg_try_advisory_lock(:key)'), {'key': SCHEMA_LOCK})
         conn.commit()
