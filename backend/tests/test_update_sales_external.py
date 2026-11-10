@@ -16,7 +16,7 @@ SCRIPT = os.environ.get('SALES_UPDATE_TEST_SCRIPT')
 pytestmark = pytest.mark.skipif(not SCRIPT, reason='External production updater is intentionally not stored in Git')
 
 FAKE = r'''#!/usr/bin/env python3
-import copy,json,os,re,signal,subprocess,sys
+import base64,copy,json,os,re,signal,subprocess,sys
 from pathlib import Path
 import yaml
 root=Path(os.environ['FAKE_ROOT']);path=root/'state.json'
@@ -41,6 +41,7 @@ def config():
  result={}
  for file in files:merge(result,yaml.safe_load(Path(file).read_text()) or {})
  if failure=='command-alembic':result['services']['backend']['command']=['sh','-c','alembic upgrade head']
+ if failure=='command-schema25':result['services']['backend']['command']=['python','-B','start_backend.py','--expected-revision','20261030_25']
  if failure=='recovery-settings-drift' and files[-1].endswith('docker-compose.schema25-recovery.override.yml'):
   result['services']['backend']['environment']['CHURN']='unexpected'
  result['name']='fixture'
@@ -61,7 +62,7 @@ if kind=='curl':
  state=read();service='backend' if '8010' in args[-1] else 'frontend';image=state['containers'][service]
  bad=(service=='backend' and image=='new-backend' and failure in ('backend-health','rollback-health','rollback-up-before','rollback-wrong-runtime','recovery-settings-drift','pg-lost','pg-rollback-busy')) or (service=='frontend' and image=='new-frontend' and failure=='frontend-health')
  if service=='backend' and image=='old-backend' and state.get('old_recreated'):
-  bad=bad or failure=='rollback-health' or (failure!='rollback-wrong-runtime' and state['revision']=='20261030_25' and not state['runtime']['backend'].get('entrypoint'))
+  bad=bad or failure=='rollback-health' or (failure!='rollback-wrong-runtime' and state['revision']==state.get('target','20261030_25') and not state['runtime']['backend'].get('entrypoint'))
  print('503' if bad else '200',end='');sys.exit(0)
 if kind=='mv':
  result=subprocess.run(['/usr/bin/mv',*args]);sys.exit(result.returncode)
@@ -77,16 +78,18 @@ if args[0]=='exec':
    if 'GUARD_OK' in line:
     state=read()
     if failure in ('pg-lost','pg-rollback-busy') and state.get('containers',{}).get('backend')=='new-backend' and session==1:sys.exit(2)
-    assert '734190117' in line and '=3' in line
-    print('GUARD_OK' if len(held)==3 else 'LOST',flush=True)
+    assert '734190117' in line and '=5' in line
+    print('GUARD_OK' if len(held)==5 else 'LOST',flush=True)
    else:
     key=int(re.search(r'pg_try_advisory_lock\((\d+)\)',line).group(1))
-    assert key==[734190221,734190220,734190117][len(held)]
+    assert key==[734190221,734190220,734190117,734190271,734190272][len(held)]
     if (failure=='lock-busy' and key==734190117) or (failure=='pg-rollback-busy' and session>1 and key==734190117):print('BUSY',flush=True);continue
     held.append(key);state=read();state['held']=held;save(state)
-    print({734190221:'WORKER_OK',734190220:'SOURCE_OK',734190117:'CATALOG_OK'}[key],flush=True)
+    print({734190221:'WORKER_OK',734190220:'SOURCE_OK',734190117:'CATALOG_OK',734190271:'FTP_OK',734190272:'MAIL_OK'}[key],flush=True)
  finally:
-  state=read();state['held']=[];save(state);event('guard-stop',session=session)
+  state=read();state['held']=[]
+  if state.get('stop_pending'):state['stopped']=True
+  save(state);event('guard-stop',session=session)
  sys.exit(0)
 state=read()
 if args[0]=='ps':
@@ -97,14 +100,16 @@ if args[0]=='stop':
  state['job']=None;save(state);event('migration-stop');sys.exit(0)
 if args[0]=='inspect':
  name=args[-1]
- if name.startswith('sales-schema25-migrate-'):
+ if name.startswith(('sales-schema25-migrate-','sales-schema26-migrate-')):
   job=state.get('job')
   if not job or job['name']!=name:sys.exit(1)
   print(job['label'] if 'Labels' in args[2] else 'true');sys.exit(0)
  service=name.removeprefix('sales-journal-')
  if service not in state['containers']:sys.exit(1)
  if '-f' in args:
-  print('true' if 'Running' in args[args.index('-f')+1] else state['containers'][service]);sys.exit(0)
+  if args[args.index('-f')+1]=='{{.Id}}' and failure=='rollback-empty-id' and state.get('old_recreated'):print('');sys.exit(0)
+  if args[args.index('-f')+1]=='{{.Id}}':print(state.get('runtime_ids',{}).get(service,service+'-initial'));sys.exit(0)
+  print(('false' if state.get('stopped') and service=='backend' else 'true') if 'Running' in args[args.index('-f')+1] else state['containers'][service]);sys.exit(0)
  runtime=state['runtime'][service]
  print(json.dumps([{'Config':{'Entrypoint':runtime.get('entrypoint'),'Cmd':runtime.get('command'),
   'Env':[k+'='+str(v) for k,v in runtime.get('environment',{}).items()]},
@@ -122,13 +127,27 @@ if args[:2]==['image','inspect']:
  sys.exit(1)
 if args[:2]==['image','tag']:
  ref,tag=args[2:];state['images'][tag]=state['images'].get(ref,ref);save(state);event('tag');sys.exit(0)
+if args[0]=='run':
+ event('launcher-extract')
+ if failure=='launcher-extract':fail()
+ data=(root/'project/backend/start_backend.py').read_text().replace("DEFAULT_REVISION = '20261109_26'", "DEFAULT_REVISION = '"+state.get('target','20261030_25')+"'")
+ if failure=='unknown-launcher':data="DEFAULT_REVISION = 'unreviewed'\n"
+ print(base64.b64encode(data.encode()).decode());sys.exit(0)
 if args[0]!='compose':raise AssertionError(args)
-merged,files=config();verb=next(x for x in args if x in ('config','build','run','up'))
+merged,files=config();verb=next(x for x in args if x in ('config','build','run','up','stop'))
 if verb=='config':
  if failure=='applied-config' and files[-1]==str(root/'project/docker-compose.report-fix.override.yml') and 'release-' in merged['services']['backend']['image']:fail()
+ if failure=='frontend-image-drift' and files[-1]==str(root/'project/docker-compose.report-fix.override.yml') and 'release-' in merged['services']['backend']['image']:merged['services']['frontend']['image']='unexpected-front'
  if '--format' in args:print(json.dumps(merged))
  sys.exit(0)
-assert state['held']==[734190221,734190220,734190117],(verb,state)
+assert state['held']==[734190221,734190220,734190117,734190271,734190272],(verb,state)
+if verb=='stop':
+ if failure in ('backend-stop-delayed','rollback-identity','rollback-empty-id'):state['stop_pending']=True;save(state);event('backend-stop-attempt');fail()
+ if failure=='backend-stop-before':event('backend-stop-attempt');fail()
+ if failure=='backend-stop-lying':event('backend-stop-attempt');sys.exit(0)
+ assert args[-1]=='backend';state['stopped']=True;save(state);event('backend-stop')
+ if failure=='backend-stop':fail()
+ sys.exit(0)
 if verb=='build':
  service=args[-1];event('build',service=service)
  if failure=='build':fail()
@@ -136,7 +155,10 @@ if verb=='build':
  state['images'][merged['services'][service]['image']]='new-'+service;save(state);sys.exit(0)
 if verb=='run':
  code=args[args.index('-c')+1]
- if code.startswith('import app.main;'):event('imports');sys.exit(0)
+ if code.startswith('import app.main;'):
+  event('imports')
+  if failure=='image-new-locks':fail()
+  sys.exit(0)
  action=args[args.index('-c')+2];expected=args[args.index('-c')+3]
  launcher=args[args.index('-c')+5];image=state['images'][merged['services']['backend']['image']]
  assert 'pg_stat_activity' in code and '734190117' in code
@@ -144,25 +166,28 @@ if verb=='run':
  event('schema-job',action=action,image=image,expected=expected)
  if action=='status':print(state['revision']);sys.exit(0)
  if action=='check':
-  if (failure=='old-preflight' and image=='old-backend') or (failure=='candidate-check' and image=='new-backend' and state['revision']=='20261030_25'):fail()
+  if (failure=='old-preflight' and image=='old-backend') or (failure=='candidate-check' and image=='new-backend' and state['revision']==state.get('target','20261030_25')):fail()
   assert expected==state['revision']
   sys.exit(0)
  if action=='migrate':
-  assert state['revision']=='20261022_24'
+  assert expected==state.get('target','20261030_25')
+  assert state['revision']==('20261022_24' if expected=='20261030_25' else '20261030_25')
   if failure=='migration-24':fail()
   if failure in ('migration-running','migration-running-25'):
    state['job']={'name':args[args.index('--name')+1],'label':args[args.index('--label')+1].split('=',1)[1]}
-   if failure=='migration-running-25':state['revision']='20261030_25'
+   if failure=='migration-running-25':state['revision']=state.get('target','20261030_25')
    save(state);fail()
-  state['revision']='20261030_25';save(state)
+  state['revision']=state.get('target','20261030_25');save(state)
   if failure=='migration-25':fail()
   if failure in ('migration-term','migration-int','migration-kill'):os.kill(os.getppid(),{'migration-term':signal.SIGTERM,'migration-int':signal.SIGINT,'migration-kill':signal.SIGKILL}[failure])
   sys.exit(0)
  raise AssertionError(action)
 if verb=='up':
  service=args[-1];image=state['images'][merged['services'][service]['image']];event('up',service=service,image=image)
- if failure=='rollback-up-before' and image=='old-backend':fail()
+ if failure in ('rollback-up-before','rollback-identity') and image=='old-backend':fail()
  state['containers'][service]=image;state['runtime'][service]=copy.deepcopy(merged['services'][service])
+ state['runtime_counter']=state.get('runtime_counter',0)+1;state.setdefault('runtime_ids',{})[service]=service+'-'+str(state['runtime_counter'])
+ if service=='backend':state['stopped']=False;state['stop_pending']=False
  if failure=='rollback-wrong-runtime' and image=='old-backend':state['runtime'][service].pop('entrypoint',None)
  if service=='backend' and image=='old-backend':state['old_recreated']=True
  save(state)
@@ -192,7 +217,7 @@ def updater(tmp_path):
     original=active.read_bytes()
     (root/'meminfo').write_text('MemAvailable: 999999 kB\n')
     (root/'working-update_sales.sh').write_text('DO NOT MODIFY\n')
-    state={'revision':'20261022_24','images':{'old-backend':'old-backend','old-frontend':'old-frontend','prepared':'new-backend'},
+    state={'revision':'20261022_24','images':{'old-backend':'old-backend','old-frontend':'old-frontend','prepared':'new-backend','prepared-frontend':'new-frontend'},
         'containers':{'backend':'old-backend','frontend':'old-frontend'},'runtime':runtime,'held':[]}
     (root/'state.json').write_text(json.dumps(state))
     binpath=root/'bin';binpath.mkdir()
@@ -204,7 +229,9 @@ def updater(tmp_path):
         SALES_UPDATE_MEMINFO_FILE=str(root/'meminfo'),SALES_UPDATE_HEALTH_ATTEMPTS='2',SALES_UPDATE_HEALTH_DELAY='0',SALES_UPDATE_GUARD_TIMEOUT='2')
     def run(failure='',args=('--backend-only','--migrate-24-to-25'),revision='20261022_24',prepared=False):
         current=json.loads((root/'state.json').read_text());current['revision']=revision;(root/'state.json').write_text(json.dumps(current))
-        if prepared:env['SALES_UPDATE_BACKEND_IMAGE']='prepared'
+        if prepared:
+            env['SALES_UPDATE_BACKEND_IMAGE']='prepared';env['SALES_UPDATE_FRONTEND_IMAGE']='prepared-frontend'
+        else:args=(*args,'--allow-build')
         result=subprocess.run(['bash',str(SCRIPT),*args],env=dict(env,FAILURE=failure),capture_output=True,text=True,timeout=25)
         assert 'SECRET_SENTINEL' not in result.stdout+result.stderr
         assert (root/'working-update_sales.sh').read_text()=='DO NOT MODIFY\n'
@@ -230,7 +257,7 @@ def test_failure_after_schema_commit_restores_old_image_with_compatible_runtime(
     root,project,active,original,run=updater
     result,state,events=run(failure)
     assert result.returncode!=0
-    assert state['revision']=='20261030_25'
+    assert state['revision']==state.get('target','20261030_25')
     assert state['containers']['backend']=='old-backend', result.stdout+result.stderr
     assert state['runtime']['backend']['entrypoint']==['python','-B','/run/sales-schema25-recovery/start_backend.py'], result.stdout+result.stderr
     assert (project/'docker-compose.schema25-recovery.override.yml').is_file()
@@ -250,7 +277,7 @@ def test_success_and_idempotent_schema25_do_not_enable_automation_or_activate_re
     root,project,active,original,run=updater
     result,state,events=run(revision=revision,args=args)
     assert result.returncode==0,result.stdout+result.stderr
-    assert state['revision']=='20261030_25' and state['containers']['backend']=='new-backend'
+    assert state['revision']==state.get('target','20261030_25') and state['containers']['backend']=='new-backend'
     assert not (project/'docker-compose.schema25-recovery.override.yml').exists()
     assert sum(e.get('action')=='migrate' for e in events)==int(revision=='20261022_24')
     assert state['runtime']['backend']['environment']['CHURN']=='SHADOW'
@@ -268,7 +295,7 @@ def test_frontend_failure_keeps_committed_backend_and_schema(updater):
     root,project,active,original,run=updater
     result,state,events=run('frontend-health',args=('--migrate-24-to-25',))
     assert result.returncode!=0
-    assert state['revision']=='20261030_25' and state['containers']['backend']=='new-backend'
+    assert state['revision']==state.get('target','20261030_25') and state['containers']['backend']=='new-backend'
     assert state['containers']['frontend']=='old-frontend'
     assert not any(e['event']=='up' and e.get('image')=='old-backend' for e in events)
     assert not (project/'docker-compose.schema25-recovery.override.yml').exists()
@@ -299,7 +326,7 @@ def test_recovery_file_blocks_repeat_update_without_deleting_it(updater):
 def test_sigkill_after_schema_commit_leaves_durable_marker_and_blocks_retry(updater):
     root,project,active,original,run=updater
     result,state,events=run('migration-kill')
-    assert result.returncode!=0 and state['revision']=='20261030_25'
+    assert result.returncode!=0 and state['revision']==state.get('target','20261030_25')
     marker=project/'.sales-update-recovery-required'
     assert marker.is_file() and marker.read_text().startswith('run_id=')
     result,state,again=run(revision='20261030_25')
@@ -368,6 +395,8 @@ docker() {
     *pg_try_advisory_lock\(734190221\)*) response=WORKER_OK ;;
     *pg_try_advisory_lock\(734190220\)*) response=SOURCE_OK ;;
     *pg_try_advisory_lock\(734190117\)*) response=CATALOG_OK ;;
+    *pg_try_advisory_lock\(734190271\)*) response=FTP_OK ;;
+    *pg_try_advisory_lock\(734190272\)*) response=MAIL_OK ;;
     *count\(DISTINCT\ objid\)*) response=GUARD_OK ;;
     "\q") printf "quit\n" >> "$1"; exit 0 ;;
     *) exit 42 ;;
@@ -408,7 +437,7 @@ trap - EXIT
         capture_output=True,text=True,timeout=12)
     assert result.returncode==0,result.stdout+result.stderr
     events=(tmp_path/'child-events').read_text().splitlines()
-    assert events.count('answered')==16
+    assert events.count('answered')==18
     assert events[-1]==('eof' if eof else 'quit')
 
 
