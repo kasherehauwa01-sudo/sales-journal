@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     JSON,
     String,
     Text,
@@ -187,3 +188,48 @@ class ImportNotice(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ImportHistoryJob(Base):
+    """One explicitly requested, bounded, resumable reconciliation."""
+
+    __tablename__ = "import_history_job"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), server_default="paused")
+    plan: Mapped[list] = mapped_column(JSON)
+    rules_hash: Mapped[str] = mapped_column(String(64))
+    position: Mapped[int] = mapped_column(Integer, server_default="0")
+    next_date: Mapped[date | None] = mapped_column(Date)
+    checked: Mapped[int] = mapped_column(Integer, server_default="0")
+    total: Mapped[int] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("id=1"),
+        CheckConstraint("status IN ('running','paused','completed','error')"),
+        CheckConstraint("position>=0 AND checked>=0 AND total>=checked"),
+    )
+
+
+class ImportHistoryResult(Base):
+    __tablename__ = "import_history_results"
+    sales_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("import_departments.id", ondelete="RESTRICT"), primary_key=True
+    )
+    rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_expectation_rules.id", ondelete="RESTRICT")
+    )
+    expected_filename: Mapped[str | None] = mapped_column(String(512), index=True)
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('success','missing','error','unavailable','waiting','not_expected')"
+        ),
+        Index(
+            "ix_import_history_results_department_date", "department_id", "sales_date"
+        ),
+    )

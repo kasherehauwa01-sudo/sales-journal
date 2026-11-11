@@ -1,3 +1,4 @@
+import { ImportHistoryPanel } from "./ImportHistoryPanel";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client";
 import { date, datetime } from "../utils/format";
@@ -348,6 +349,7 @@ export function ImportControlPanel() {
           ["control", "Контроль"],
           ["departments", "Подразделения"],
           ["history", "История пропусков"],
+          ["reconciliation", "Историческая сверка"],
           ["notices", "Уведомления"],
           ["settings", "Настройки контроля"],
         ].map(([key, label]) => (
@@ -380,6 +382,9 @@ export function ImportControlPanel() {
             {errors > 0 ? ` · Ошибок: ${errors}` : ""}
           </button>
         </div>
+      )}
+      {tab === "reconciliation" && (
+        <ImportHistoryPanel departments={departments} />
       )}
       {tab === "control" && (
         <>
@@ -414,7 +419,8 @@ export function ImportControlPanel() {
           )}
           <p className="muted">
             Проверка сравнивает метаданные обработанных файлов. Она не загружает
-            файлы и не запускает импорт. Файлы ожидаются до 00:20 следующего дня по Москве. Незавершённая обработка не считается пропуском.
+            файлы и не запускает импорт. Файлы ожидаются до 00:20 следующего дня
+            по Москве. Незавершённая обработка не считается пропуском.
           </p>
           <div className="filter-grid">
             <label>
@@ -561,11 +567,12 @@ export function ImportControlPanel() {
         >
           <p>
             Включать только после утверждения справочника и даты начала.
-            Выгрузка ожидается в 23:40. Контрольный срок — 00:20 следующего дня по Москве. Маркер не требуется.
+            Выгрузка ожидается в 23:40. Контрольный срок — 00:20 следующего дня
+            по Москве. Маркер не требуется.
           </p>
           <div className="filter-grid">
             <label>
-              Начало контроля
+              Дата включения ежедневного контроля
               <input
                 type="date"
                 value={config.start_date || ""}
