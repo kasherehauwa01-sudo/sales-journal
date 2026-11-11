@@ -221,3 +221,22 @@ it("rechecks unresolved history without a date filter instead of launching an im
   await waitFor(() => expect(posts()).toHaveLength(1));
   expect(String(posts()[0][0])).toContain("/import-control/check-open");
 });
+
+it("keeps a useful history view after closing its registry dialog", async () => {
+  render(<ImportControlPanel />);
+  await screen.findByText("Контроль отключён");
+  fireEvent.click(
+    screen.getByRole("button", { name: "История пропусков", exact: true }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Закрыть окно" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    screen.getByRole("heading", { name: "История пропусков" }),
+  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Открыть реестр пропусков" }),
+  );
+  await screen.findByRole("dialog");
+  expect(posts()).toHaveLength(0);
+});

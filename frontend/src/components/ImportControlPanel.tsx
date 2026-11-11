@@ -1,3 +1,13 @@
+import {
+  AlertTriangle,
+  Building2,
+  CalendarClock,
+  ClipboardCheck,
+  History,
+  Mail,
+  RefreshCw,
+  Settings2,
+} from "lucide-react";
 import { ImportHistoryPanel } from "./ImportHistoryPanel";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client";
@@ -338,21 +348,27 @@ export function ImportControlPanel() {
       className="panel import-control-panel"
       aria-label="Контроль полноты импорта"
     >
-      <div className="section-title">
-        <h2>Контроль импорта</h2>
+      <div className="section-title import-control-heading">
+        <div>
+          <h2>Контроль импорта</h2>
+          <p>Полнота файлов по подразделениям и датам продаж</p>
+        </div>
         <button disabled={busy} onClick={() => void action(load)}>
+          <RefreshCw size={16} aria-hidden="true" />
           Обновить статус
         </button>
       </div>
-      <div className="tabs" aria-label="Разделы контроля">
-        {[
-          ["control", "Контроль"],
-          ["departments", "Подразделения"],
-          ["history", "История пропусков"],
-          ["reconciliation", "Историческая сверка"],
-          ["notices", "Уведомления"],
-          ["settings", "Настройки контроля"],
-        ].map(([key, label]) => (
+      <div className="tabs import-control-tabs" aria-label="Разделы контроля">
+        {(
+          [
+            ["control", "Контроль", ClipboardCheck],
+            ["departments", "Подразделения", Building2],
+            ["history", "История пропусков", History],
+            ["reconciliation", "Историческая сверка", CalendarClock],
+            ["notices", "Уведомления", Mail],
+            ["settings", "Настройки контроля", Settings2],
+          ] as const
+        ).map(([key, label, Icon]) => (
           <button
             key={key}
             aria-pressed={tab === key}
@@ -362,352 +378,418 @@ export function ImportControlPanel() {
               if (key === "notices") void action(() => loadNotices());
             }}
           >
+            <Icon size={16} aria-hidden="true" />
             {label}
           </button>
         ))}
       </div>
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-      {busy && <p role="status">Выполняется…</p>}
-      {!config && !error && <p>Загрузка контроля…</p>}
-      {(missing > 0 || errors > 0) && (
-        <div className="report-warning">
-          <button disabled={busy} onClick={() => void action(openIssues)}>
-            {missing > 0
-              ? missingFileLabel(missing)
-              : "Файлы получены, но не импортированы"}
-            {errors > 0 ? ` · Ошибок: ${errors}` : ""}
-          </button>
-        </div>
-      )}
-      {tab === "reconciliation" && (
-        <ImportHistoryPanel departments={departments} />
-      )}
-      {tab === "control" && (
-        <>
-          <p>
-            <b>
-              {error
-                ? "Проверка недоступна"
-                : !state?.enabled
-                  ? "Контроль отключён"
-                  : labels[latest?.status] || "Проверка ещё не выполнена"}
-            </b>
-            {latest && ` · Дата продаж: ${date(latest.sales_date)}`}
+      <div className="import-control-body">
+        {error && (
+          <p role="alert" className="error">
+            {error}
           </p>
-          <div className="field-grid">
-            {[
-              ["Ожидается", latest?.expected],
-              ["Успешно импортировано", latest?.successful],
-              ["Отсутствуют", latest?.missing],
-              ["С ошибками", latest?.errors],
-            ].map(([label, value]) => (
-              <div className="field" key={String(label)}>
-                <span>{label}</span>
-                <b>{value ?? "—"}</b>
-              </div>
-            ))}
-          </div>
-          {latest?.error_code && (
-            <p>
-              Причина недоступности:{" "}
-              {reasons[latest.error_code] || latest.error_code}
-            </p>
-          )}
-          <p className="muted">
-            Проверка сравнивает метаданные обработанных файлов. Она не загружает
-            файлы и не запускает импорт. Файлы ожидаются до 00:20 следующего дня
-            по Москве. Незавершённая обработка не считается пропуском.
-          </p>
-          <div className="filter-grid">
-            <label>
-              Дата продаж с
-              <input
-                type="date"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-              />
-            </label>
-            <label>
-              По
-              <input
-                type="date"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </label>
-            <button disabled={busy} onClick={() => void action(refresh)}>
-              Обновить проверку
+        )}
+        {busy && <p role="status">Выполняется…</p>}
+        {!config && !error && <p>Загрузка контроля…</p>}
+        {(missing > 0 || errors > 0) && (
+          <div className="report-warning import-missing-banner">
+            <AlertTriangle size={22} aria-hidden="true" />
+            <button disabled={busy} onClick={() => void action(openIssues)}>
+              {missing > 0
+                ? missingFileLabel(missing)
+                : "Файлы получены, но не импортированы"}
+              {errors > 0 ? ` · Ошибок: ${errors}` : ""}
             </button>
           </div>
-          <label>
-            Причина ручного подтверждения окончания цикла
-            <input value={reason} onChange={(e) => setReason(e.target.value)} />
-          </label>
-          <button
-            disabled={busy || !from || from !== to || reason.trim().length < 5}
-            onClick={() =>
+        )}
+        {tab === "reconciliation" && (
+          <ImportHistoryPanel departments={departments} />
+        )}
+        {tab === "control" && (
+          <>
+            <p
+              className="import-control-status"
+              data-state={
+                error
+                  ? "unavailable"
+                  : !state?.enabled
+                    ? "disabled"
+                    : latest?.status || "unknown"
+              }
+            >
+              <b>
+                {error
+                  ? "Проверка недоступна"
+                  : !state?.enabled
+                    ? "Контроль отключён"
+                    : labels[latest?.status] || "Проверка ещё не выполнена"}
+              </b>
+              {latest && ` · Дата продаж: ${date(latest.sales_date)}`}
+            </p>
+            <div className="field-grid import-control-kpis">
+              {[
+                ["Ожидается", latest?.expected],
+                ["Успешно импортировано", latest?.successful],
+                ["Отсутствуют", latest?.missing],
+                ["С ошибками", latest?.errors],
+              ].map(([label, value]) => (
+                <div
+                  className={`field ${label === "Отсутствуют" && Number(value) > 0 ? "has-missing" : label === "С ошибками" && Number(value) > 0 ? "has-errors" : ""}`}
+                  key={String(label)}
+                >
+                  <span>{label}</span>
+                  <b>{value ?? "—"}</b>
+                </div>
+              ))}
+            </div>
+            {latest?.error_code && (
+              <p>
+                Причина недоступности:{" "}
+                {reasons[latest.error_code] || latest.error_code}
+              </p>
+            )}
+            <p className="muted">
+              Проверка сравнивает метаданные обработанных файлов. Она не
+              загружает файлы и не запускает импорт. Файлы ожидаются до 00:20
+              следующего дня по Москве. Незавершённая обработка не считается
+              пропуском.
+            </p>
+            <div className="import-check-card">
+              <h3>Проверить период</h3>
+              <p className="hint">
+                До 31 дня за запрос. Для всей истории используйте «Историческую
+                сверку».
+              </p>
+              <div className="filter-grid import-check-filters">
+                <label>
+                  Дата продаж с
+                  <input
+                    type="date"
+                    value={from}
+                    onChange={(e) => setFrom(e.target.value)}
+                  />
+                </label>
+                <label>
+                  По
+                  <input
+                    type="date"
+                    value={to}
+                    onChange={(e) => setTo(e.target.value)}
+                  />
+                </label>
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void action(refresh)}
+                >
+                  Обновить проверку
+                </button>
+              </div>
+            </div>
+            <details className="import-advanced">
+              <summary>Ручное подтверждение дня</summary>
+              <div>
+                <p className="hint">
+                  Административное действие для выбранной даты. Оно не запускает
+                  повторный импорт и требует обоснования.
+                </p>
+                <label>
+                  Причина ручного подтверждения окончания цикла
+                  <input
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                  />
+                </label>
+                <button
+                  disabled={
+                    busy || !from || from !== to || reason.trim().length < 5
+                  }
+                  onClick={() =>
+                    void action(async () => {
+                      await api(`/import-control/cycles/${from}/confirm`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ reason }),
+                      });
+                      await load();
+                    })
+                  }
+                >
+                  Подтвердить окончание выбранного дня
+                </button>
+              </div>
+            </details>
+          </>
+        )}
+        {tab === "history" && (
+          <section className="import-check-card">
+            <h3>История пропусков</h3>
+            <p className="hint">
+              Реестр сохраняет отсутствующие файлы, ошибки обработки и уже
+              устранённые проблемы. В нём можно выбрать период, подразделение и
+              статус, посмотреть детали или закрыть пропуск с обоснованием.
+            </p>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => void action(openIssues)}
+            >
+              Открыть реестр пропусков
+            </button>
+          </section>
+        )}
+        {tab === "departments" && (
+          <>
+            <div className="section-title">
+              <p>
+                Правила меняются с указанной даты; исторические интервалы
+                сохраняются.
+              </p>
+              <button disabled={busy} onClick={() => edit()}>
+                Добавить подразделение
+              </button>
+            </div>
+            <button
+              onClick={() =>
+                void action(async () =>
+                  setCandidates(
+                    (await api<any>("/import-control/candidates")).items,
+                  ),
+                )
+              }
+            >
+              Предварительный список из журнала
+            </button>
+            {candidates && (
+              <details open className="import-candidates">
+                <summary>Неподтверждённые файлы (до 200 импортов)</summary>
+                <p>
+                  Названия подразделений и даты работы нужно утвердить вручную.
+                </p>
+                {candidates.map((r: any) => (
+                  <p key={r.import_id}>
+                    {r.filename} · {r.period_start || "Период неизвестен"} ·{" "}
+                    {r.status}
+                  </p>
+                ))}
+              </details>
+            )}
+            {!departments.length ? (
+              <p>
+                Подразделения не настроены. Строгий контроль включать нельзя.
+              </p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Код</th>
+                      <th>Название</th>
+                      <th>Ожидаемый файл</th>
+                      <th>Интервал</th>
+                      <th>Контроль</th>
+                      <th>Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {departments.map((row) => {
+                      const r = row.rules[row.rules.length - 1];
+                      return (
+                        <tr key={row.id}>
+                          <td>{row.code}</td>
+                          <td>{row.name}</td>
+                          <td>{r?.filename_template}</td>
+                          <td>
+                            {r?.start_date} — {r?.end_date || "без окончания"}
+                          </td>
+                          <td>
+                            {r?.active && r?.controlled
+                              ? "Включён"
+                              : "Отключён"}
+                          </td>
+                          <td>
+                            <button onClick={() => edit(row)}>Изменить</button>
+                            <button
+                              onClick={() =>
+                                void action(async () => {
+                                  await loadAudit(row.id);
+                                })
+                              }
+                            >
+                              История
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+        {tab === "settings" && config && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
               void action(async () => {
-                await api(`/import-control/cycles/${from}/confirm`, {
-                  method: "POST",
+                const { revision, ...payload } = config;
+                await api("/import-control/settings", {
+                  method: "PUT",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ reason }),
+                  body: JSON.stringify({ ...payload, approve }),
                 });
                 await load();
-              })
-            }
-          >
-            Подтвердить окончание выбранного дня
-          </button>
-        </>
-      )}
-      {tab === "departments" && (
-        <>
-          <div className="section-title">
-            <p>
-              Правила меняются с указанной даты; исторические интервалы
-              сохраняются.
-            </p>
-            <button disabled={busy} onClick={() => edit()}>
-              Добавить подразделение
-            </button>
-          </div>
-          <button
-            onClick={() =>
-              void action(async () =>
-                setCandidates(
-                  (await api<any>("/import-control/candidates")).items,
-                ),
-              )
-            }
-          >
-            Предварительный список из журнала
-          </button>
-          {candidates && (
-            <details open>
-              <summary>Неподтверждённые файлы (до 200 импортов)</summary>
-              <p>
-                Названия подразделений и даты работы нужно утвердить вручную.
-              </p>
-              {candidates.map((r: any) => (
-                <p key={r.import_id}>
-                  {r.filename} · {r.period_start || "Период неизвестен"} ·{" "}
-                  {r.status}
-                </p>
-              ))}
-            </details>
-          )}
-          {!departments.length ? (
-            <p>Подразделения не настроены. Строгий контроль включать нельзя.</p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Код</th>
-                    <th>Название</th>
-                    <th>Ожидаемый файл</th>
-                    <th>Интервал</th>
-                    <th>Контроль</th>
-                    <th>Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {departments.map((row) => {
-                    const r = row.rules[row.rules.length - 1];
-                    return (
-                      <tr key={row.id}>
-                        <td>{row.code}</td>
-                        <td>{row.name}</td>
-                        <td>{r?.filename_template}</td>
-                        <td>
-                          {r?.start_date} — {r?.end_date || "без окончания"}
-                        </td>
-                        <td>
-                          {r?.active && r?.controlled ? "Включён" : "Отключён"}
-                        </td>
-                        <td>
-                          <button onClick={() => edit(row)}>Изменить</button>
-                          <button
-                            onClick={() =>
-                              void action(async () => {
-                                await loadAudit(row.id);
-                              })
-                            }
-                          >
-                            История
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-      {tab === "settings" && config && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void action(async () => {
-              const { revision, ...payload } = config;
-              await api("/import-control/settings", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ...payload, approve }),
               });
-              await load();
-            });
-          }}
-        >
-          <p>
-            Включать только после утверждения справочника и даты начала.
-            Выгрузка ожидается в 23:40. Контрольный срок — 00:20 следующего дня
-            по Москве. Маркер не требуется.
-          </p>
-          <div className="filter-grid">
+            }}
+          >
+            <p>
+              Включать только после утверждения справочника и даты начала.
+              Выгрузка ожидается в 23:40. Контрольный срок — 00:20 следующего
+              дня по Москве. Маркер не требуется.
+            </p>
+            <div className="filter-grid">
+              <label>
+                Дата включения ежедневного контроля
+                <input
+                  type="date"
+                  value={config.start_date || ""}
+                  onChange={(e) =>
+                    setConfig({ ...config, start_date: e.target.value || null })
+                  }
+                />
+              </label>
+            </div>
             <label>
-              Дата включения ежедневного контроля
-              <input
-                type="date"
-                value={config.start_date || ""}
+              Получатели email (по одному адресу в строке)
+              <textarea
+                value={config.recipients}
                 onChange={(e) =>
-                  setConfig({ ...config, start_date: e.target.value || null })
+                  setConfig({ ...config, recipients: e.target.value })
                 }
               />
             </label>
-          </div>
-          <label>
-            Получатели email (по одному адресу в строке)
-            <textarea
-              value={config.recipients}
-              onChange={(e) =>
-                setConfig({ ...config, recipients: e.target.value })
-              }
-            />
-          </label>
-          <div className="import-control-options">
-            {[
-              ["enabled", "Контроль включён"],
-              ["automatic", "Автоматические проверки"],
-              ["email_enabled", "Email-уведомления"],
-            ].map(([key, label]) => (
-              <label key={key}>
+            <div className="import-control-options">
+              {[
+                ["enabled", "Контроль включён"],
+                ["automatic", "Автоматические проверки"],
+                ["email_enabled", "Email-уведомления"],
+              ].map(([key, label]) => (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(config[key as keyof Config])}
+                    onChange={(e) =>
+                      setConfig({ ...config, [key]: e.target.checked })
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+              <label>
                 <input
                   type="checkbox"
-                  checked={Boolean(config[key as keyof Config])}
-                  onChange={(e) =>
-                    setConfig({ ...config, [key]: e.target.checked })
-                  }
+                  checked={approve}
+                  onChange={(e) => setApprove(e.target.checked)}
                 />
-                {label}
+                Подтверждаю справочник, дату начала и контрольный срок 00:20 МСК
               </label>
-            ))}
-            <label>
-              <input
-                type="checkbox"
-                checked={approve}
-                onChange={(e) => setApprove(e.target.checked)}
-              />
-              Подтверждаю справочник, дату начала и контрольный срок 00:20 МСК
-            </label>
-          </div>
-          <button className="primary" disabled={busy}>
-            Сохранить настройки контроля
-          </button>
-          <p className="muted">
-            SMTP используется из существующих настроек. Пароли здесь не
-            отображаются.
-          </p>
-        </form>
-      )}
-      {tab === "notices" && (
-        <>
-          <p>
-            Неопределённая доставка не повторяется автоматически: сначала
-            проверьте SMTP-журнал.
-          </p>
-          {!notices.length ? (
-            <p>Уведомлений пока нет</p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Дата продаж</th>
-                    <th>Получатели</th>
-                    <th>Статус</th>
-                    <th>Попытки</th>
-                    <th>Причина</th>
-                    <th>Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {notices.map((r: any) => (
-                    <tr key={r.id}>
-                      <td>{date(r.sales_date)}</td>
-                      <td>{r.recipients}</td>
-                      <td>{labels[r.status] || r.status}</td>
-                      <td>{r.attempts}</td>
-                      <td>{r.error_code}</td>
-                      <td>
-                        {["failed", "uncertain"].includes(r.status) && (
-                          <button
-                            disabled={busy || reason.trim().length < 5}
-                            onClick={() =>
-                              void action(async () => {
-                                await api(
-                                  `/import-control/notices/${r.id}/retry`,
-                                  {
-                                    method: "POST",
-                                    headers: {
-                                      "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({ reason }),
-                                  },
-                                );
-                                await loadNotices(noticePage);
-                              })
-                            }
-                          >
-                            Повторить вручную
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
-          )}
-          <label>
-            Обоснование повтора (при неопределённой доставке возможен дубль)
-            <input value={reason} onChange={(e) => setReason(e.target.value)} />
-          </label>
-          <div className="section-title">
-            <button
-              disabled={busy || noticePage <= 1}
-              onClick={() => void action(() => loadNotices(noticePage - 1))}
-            >
-              Предыдущие уведомления
+            <button className="primary" disabled={busy}>
+              Сохранить настройки контроля
             </button>
-            <span>
-              Страница {noticePage} · Всего {noticeTotal}
-            </span>
-            <button
-              disabled={busy || noticePage * 50 >= noticeTotal}
-              onClick={() => void action(() => loadNotices(noticePage + 1))}
-            >
-              Следующие уведомления
-            </button>
-          </div>
-        </>
-      )}
+            <p className="muted">
+              SMTP используется из существующих настроек. Пароли здесь не
+              отображаются.
+            </p>
+          </form>
+        )}
+        {tab === "notices" && (
+          <>
+            <p>
+              Неопределённая доставка не повторяется автоматически: сначала
+              проверьте SMTP-журнал.
+            </p>
+            {!notices.length ? (
+              <p>Уведомлений пока нет</p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Дата продаж</th>
+                      <th>Получатели</th>
+                      <th>Статус</th>
+                      <th>Попытки</th>
+                      <th>Причина</th>
+                      <th>Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notices.map((r: any) => (
+                      <tr key={r.id}>
+                        <td>{date(r.sales_date)}</td>
+                        <td>{r.recipients}</td>
+                        <td>{labels[r.status] || r.status}</td>
+                        <td>{r.attempts}</td>
+                        <td>{r.error_code}</td>
+                        <td>
+                          {["failed", "uncertain"].includes(r.status) && (
+                            <button
+                              disabled={busy || reason.trim().length < 5}
+                              onClick={() =>
+                                void action(async () => {
+                                  await api(
+                                    `/import-control/notices/${r.id}/retry`,
+                                    {
+                                      method: "POST",
+                                      headers: {
+                                        "Content-Type": "application/json",
+                                      },
+                                      body: JSON.stringify({ reason }),
+                                    },
+                                  );
+                                  await loadNotices(noticePage);
+                                })
+                              }
+                            >
+                              Повторить вручную
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <label>
+              Обоснование повтора (при неопределённой доставке возможен дубль)
+              <input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </label>
+            <div className="section-title">
+              <button
+                disabled={busy || noticePage <= 1}
+                onClick={() => void action(() => loadNotices(noticePage - 1))}
+              >
+                Предыдущие уведомления
+              </button>
+              <span>
+                Страница {noticePage} · Всего {noticeTotal}
+              </span>
+              <button
+                disabled={busy || noticePage * 50 >= noticeTotal}
+                onClick={() => void action(() => loadNotices(noticePage + 1))}
+              >
+                Следующие уведомления
+              </button>
+            </div>
+          </>
+        )}
+      </div>
       {modal === "department" && (
         <Modal
           focusTarget={focusReturn.current}

@@ -131,8 +131,10 @@ with sync_playwright() as p:
     section.get_by_role("button", name="Продолжить сверку").click()
     section.get_by_role("button", name="Показать результаты сверки").click()
     section.get_by_text("fixture_09.11.2026.html", exact=True).wait_for()
+    page.evaluate("window.scrollTo(0,0)")
     page.screenshot(path=str(artifacts / "desktop.png"), full_page=True)
     page.set_viewport_size({"width": 390, "height": 844})
+    section.get_by_text("Исправление исторических шаблонов", exact=True).click()
     section.get_by_role("button", name="Подготовить отчёт исправления шаблонов").click()
     section.get_by_text("fixture_{date}.html", exact=True).wait_for()
     assert section.get_by_role(
@@ -141,6 +143,7 @@ with sync_playwright() as p:
     assert page.evaluate(
         "document.documentElement.scrollWidth<=window.innerWidth"
     ), "Body overflow on mobile"
+    page.evaluate("window.scrollTo(0,0)")
     page.screenshot(path=str(artifacts / "mobile.png"), full_page=True)
     assert mutations == [
         "import-control/historical/start",

@@ -151,6 +151,7 @@ it("filters paginated metadata without triggering import", async () => {
 it("repair needs preview, selected rules, reason and approval", async () => {
   render(<ImportHistoryPanel departments={departments} />);
   await screen.findByText("21.09.2019");
+  fireEvent.click(screen.getByText("Исправление исторических шаблонов"));
   fireEvent.click(screen.getByText("Подготовить отчёт исправления шаблонов"));
   await screen.findByText("fixture_{date}.html");
   expect(writes()).toHaveLength(0);

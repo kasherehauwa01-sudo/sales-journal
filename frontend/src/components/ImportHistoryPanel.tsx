@@ -157,12 +157,18 @@ export function ImportHistoryPanel({
           {error}
         </p>
       )}
-      <p role="status">
+      <p role="status" className="history-status">
         Состояние: {statusLabels[job?.status || "not_started"] || job?.status}.
         Проверено дней подразделений: {job?.checked || 0} из {job?.total || 0}
         {job?.next_date ? `; следующая дата: ${date(job.next_date)}` : ""}.{" "}
         {job?.updated_at && `Проверено: ${datetime(job.updated_at)}`}
       </p>
+      <progress
+        className="history-progress"
+        aria-label="Прогресс исторической сверки"
+        max={Math.max(job?.total || 0, 1)}
+        value={Math.min(Math.max(job?.checked || 0, 0), job?.total || 0)}
+      />
       {job?.error_code && (
         <p role="alert">
           {reasonLabels[job.error_code] ||
@@ -200,6 +206,109 @@ export function ImportHistoryPanel({
             onChange={(e) => setTo(e.target.value)}
           />
         </label>
+      </div>
+      <div className="history-action-card">
+        <label>
+          <input
+            type="checkbox"
+            checked={approve}
+            onChange={(e) => setApprove(e.target.checked)}
+          />
+          Подтверждаю запуск или новый пересчёт выбранной истории
+        </label>
+        <div className="actions">
+          <button
+            className="primary"
+            disabled={busy || !approve || job?.status === "running"}
+            onClick={() =>
+              void action(async () => {
+                setJob(
+                  (await post("historical/start", {
+                    department_id: department ? Number(department) : null,
+                    date_from: from || null,
+                    date_to: to || null,
+                    approve: true,
+                  })) as Job,
+                );
+                setApprove(false);
+              })
+            }
+          >
+            Начать сверку с правил
+          </button>
+          {job?.status === "running" && (
+            <button
+              disabled={busy || job?.status !== "running"}
+              onClick={() =>
+                void action(async () =>
+                  setJob((await post("historical/pause")) as Job),
+                )
+              }
+            >
+              Приостановить сверку
+            </button>
+          )}
+          {job && ["paused", "error"].includes(job.status) && (
+            <button
+              disabled={
+                busy || !job || !["paused", "error"].includes(job.status)
+              }
+              onClick={() =>
+                void action(async () =>
+                  setJob((await post("historical/resume")) as Job),
+                )
+              }
+            >
+              Продолжить сверку
+            </button>
+          )}
+          <button disabled={busy} onClick={() => void action(loadStatus)}>
+            Обновить прогресс
+          </button>
+        </div>
+      </div>
+      <details open className="history-plan">
+        <summary>План по подразделениям</summary>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Подразделение</th>
+                <th>Код</th>
+                <th>Первое правило</th>
+                <th>Проверяемый период</th>
+              </tr>
+            </thead>
+            <tbody>
+              {departments
+                .filter((d) => !department || d.id === Number(department))
+                .map((d) => {
+                  const p = job?.plan?.find((p) => p.department_id === d.id);
+                  const first = d.rules.map((r) => r.start_date).sort()[0];
+                  return (
+                    <tr key={d.id}>
+                      <td>{d.name}</td>
+                      <td>{d.code}</td>
+                      <td>{first ? date(first) : "Нет правил"}</td>
+                      <td>
+                        {p
+                          ? `${date(p.date_from)} — ${date(p.date_to)}`
+                          : "Не запускалась"}
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      <h3>Результаты сверки</h3>
+      <p className="hint">
+        Выберите статус и запросите сохранённые результаты. Просмотр не
+        запускает новую сверку.
+      </p>
+      <div className="history-result-tools">
+        {" "}
         <label>
           Статус файла
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -221,93 +330,10 @@ export function ImportHistoryPanel({
               </option>
             ))}
           </select>
-        </label>
-      </div>
-      <label>
-        <input
-          type="checkbox"
-          checked={approve}
-          onChange={(e) => setApprove(e.target.checked)}
-        />
-        Подтверждаю запуск или новый пересчёт выбранной истории
-      </label>
-      <div className="actions">
-        <button
-          disabled={busy || !approve || job?.status === "running"}
-          onClick={() =>
-            void action(async () => {
-              setJob(
-                (await post("historical/start", {
-                  department_id: department ? Number(department) : null,
-                  date_from: from || null,
-                  date_to: to || null,
-                  approve: true,
-                })) as Job,
-              );
-              setApprove(false);
-            })
-          }
-        >
-          Начать сверку с правил
-        </button>
-        <button
-          disabled={busy || job?.status !== "running"}
-          onClick={() =>
-            void action(async () =>
-              setJob((await post("historical/pause")) as Job),
-            )
-          }
-        >
-          Приостановить сверку
-        </button>
-        <button
-          disabled={busy || !job || !["paused", "error"].includes(job.status)}
-          onClick={() =>
-            void action(async () =>
-              setJob((await post("historical/resume")) as Job),
-            )
-          }
-        >
-          Продолжить сверку
-        </button>
-        <button disabled={busy} onClick={() => void action(loadStatus)}>
-          Обновить прогресс
-        </button>
+        </label>{" "}
         <button disabled={busy} onClick={() => void action(() => results())}>
           Показать результаты сверки
         </button>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Подразделение</th>
-              <th>Код</th>
-              <th>Первое правило</th>
-              <th>Проверяемый период</th>
-            </tr>
-          </thead>
-          <tbody>
-            {departments
-              .filter((d) => !department || d.id === Number(department))
-              .map((d) => {
-                const p = job?.plan?.find((p) => p.department_id === d.id);
-                const first = d.rules.map((r) => r.start_date).sort()[0];
-                return (
-                  <tr key={d.id}>
-                    <td>{d.name}</td>
-                    <td>{d.code}</td>
-                    <td>{first ? date(first) : "Нет правил"}</td>
-                    <td>
-                      {p
-                        ? `${date(p.date_from)} — ${date(p.date_to)}`
-                        : "Не запускалась"}
-                    </td>
-                  </tr>
-                );
-              })}
-          </tbody>
-        </table>
       </div>
       {rows && (
         <>
@@ -354,125 +380,136 @@ export function ImportHistoryPanel({
           {!rows.items.length && (
             <p>Проверенных файлов по выбранным условиям нет</p>
           )}
-          <button
-            disabled={busy || rows.page <= 1}
-            onClick={() => void action(() => results(rows.page - 1))}
-          >
-            Предыдущая страница сверки
-          </button>
-          <button
-            disabled={busy || rows.page * 50 >= rows.total}
-            onClick={() => void action(() => results(rows.page + 1))}
-          >
-            Следующая страница сверки
-          </button>
+          <div className="history-pagination">
+            <button
+              disabled={busy || rows.page <= 1}
+              onClick={() => void action(() => results(rows.page - 1))}
+            >
+              Предыдущая страница сверки
+            </button>
+            <button
+              disabled={busy || rows.page * 50 >= rows.total}
+              onClick={() => void action(() => results(rows.page + 1))}
+            >
+              Следующая страница сверки
+            </button>
+          </div>
         </>
       )}
-      <h3>Исправление исторических шаблонов</h3>
-      <p className="hint">
-        Сначала просмотрите предложения. Применение сохраняет даты правил,
-        проверяет конфликты и записывает аудит. Продажи и реестр импортов не
-        меняются.
-      </p>
-      <button
-        disabled={busy}
-        onClick={() =>
-          void action(async () => {
-            setProposal(
-              await api<Proposal>("/import-control/template-repair/preview"),
-            );
-            setChosen([]);
-            setRepairApprove(false);
-          })
-        }
-      >
-        Подготовить отчёт исправления шаблонов
-      </button>
-      {proposal && (
-        <>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Выбрать</th>
-                  <th>Код / правило</th>
-                  <th>Действует</th>
-                  <th>Старый шаблон</th>
-                  <th>Предложение</th>
-                </tr>
-              </thead>
-              <tbody>
-                {proposal.items.map((r) => (
-                  <tr key={r.rule_id}>
-                    <td>
-                      <input
-                        aria-label={`Исправить правило ${r.rule_id}`}
-                        type="checkbox"
-                        checked={chosen.includes(r.rule_id)}
-                        onChange={(e) =>
-                          setChosen(
-                            e.target.checked
-                              ? [...chosen, r.rule_id]
-                              : chosen.filter((id) => id !== r.rule_id),
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      {r.department_code} / {r.rule_id}
-                    </td>
-                    <td>
-                      {date(r.start_date)} —{" "}
-                      {r.end_date ? date(r.end_date) : "действует"}
-                    </td>
-                    <td>{r.before}</td>
-                    <td>{r.after}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {!proposal.items.length && (
-            <p>Подходящих исторических шаблонов нет</p>
-          )}
-          <label>
-            Причина исправления
-            <input value={reason} onChange={(e) => setReason(e.target.value)} />
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={repairApprove}
-              onChange={(e) => setRepairApprove(e.target.checked)}
-            />
-            Подтверждаю выбранные исправления исторических шаблонов
-          </label>
+      <details className="import-advanced">
+        <summary>Исправление исторических шаблонов</summary>
+        <div>
+          <p className="hint">
+            Сначала просмотрите предложения. Применение сохраняет даты правил,
+            проверяет конфликты и записывает аудит. Продажи и реестр импортов не
+            меняются.
+          </p>
           <button
-            disabled={
-              busy ||
-              !repairApprove ||
-              !chosen.length ||
-              reason.trim().length < 5 ||
-              job?.status === "running"
-            }
+            disabled={busy}
             onClick={() =>
               void action(async () => {
-                await post("template-repair/apply", {
-                  token: proposal.token,
-                  rule_ids: chosen,
-                  reason,
-                  approve: true,
-                });
-                setProposal(undefined);
+                setProposal(
+                  await api<Proposal>(
+                    "/import-control/template-repair/preview",
+                  ),
+                );
+                setChosen([]);
                 setRepairApprove(false);
-                await loadStatus();
               })
             }
           >
-            Применить выбранные исправления
+            Подготовить отчёт исправления шаблонов
           </button>
-        </>
-      )}
+          {proposal && (
+            <>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Выбрать</th>
+                      <th>Код / правило</th>
+                      <th>Действует</th>
+                      <th>Старый шаблон</th>
+                      <th>Предложение</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proposal.items.map((r) => (
+                      <tr key={r.rule_id}>
+                        <td>
+                          <input
+                            aria-label={`Исправить правило ${r.rule_id}`}
+                            type="checkbox"
+                            checked={chosen.includes(r.rule_id)}
+                            onChange={(e) =>
+                              setChosen(
+                                e.target.checked
+                                  ? [...chosen, r.rule_id]
+                                  : chosen.filter((id) => id !== r.rule_id),
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          {r.department_code} / {r.rule_id}
+                        </td>
+                        <td>
+                          {date(r.start_date)} —{" "}
+                          {r.end_date ? date(r.end_date) : "действует"}
+                        </td>
+                        <td>{r.before}</td>
+                        <td>{r.after}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {!proposal.items.length && (
+                <p>Подходящих исторических шаблонов нет</p>
+              )}
+              <label>
+                Причина исправления
+                <input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={repairApprove}
+                  onChange={(e) => setRepairApprove(e.target.checked)}
+                />
+                Подтверждаю выбранные исправления исторических шаблонов
+              </label>
+              <button
+                disabled={
+                  busy ||
+                  !repairApprove ||
+                  !chosen.length ||
+                  reason.trim().length < 5 ||
+                  job?.status === "running"
+                }
+                onClick={() =>
+                  void action(async () => {
+                    await post("template-repair/apply", {
+                      token: proposal.token,
+                      rule_ids: chosen,
+                      reason,
+                      approve: true,
+                    });
+                    setProposal(undefined);
+                    setRepairApprove(false);
+                    await loadStatus();
+                  })
+                }
+              >
+                Применить выбранные исправления
+              </button>
+            </>
+          )}
+        </div>
+      </details>
     </section>
   );
 }
