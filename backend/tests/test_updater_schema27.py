@@ -86,7 +86,15 @@ def fake27():
         """ if action=='status':print(state['revision']);sys.exit(0)
  if action in ('safety','initial-safety'):
   if failure=='history-running' or (action=='initial-safety' and failure=='history-created'):fail()
-  print('a'*64 if not (failure=='settings-drift' and action=='initial-safety') else 'b'*64);sys.exit(0)""",
+  digest='a'*64 if not (failure=='settings-drift' and action=='initial-safety') else 'b'*64
+  print('Compose warning '+action,file=sys.stderr)
+  record=dict(protocol=1,guard=args[args.index('-c')+4],action=action,revision=state['revision'],sha256=digest)
+  if failure=='activated-drift' and state['containers']['backend']=='new-backend':record['sha256']='c'*64
+  if failure=='protected-empty':sys.exit(0)
+  print('SALES_PROTECTED_V1 '+json.dumps(record))
+  if failure=='protected-failed':sys.exit(7)
+  if failure=='protected-duplicate':print('SALES_PROTECTED_V1 '+json.dumps(record))
+  sys.exit(0)""",
     )
     s = s.replace(
         "assert state['revision']==('20261022_24' if expected=='20261030_25' else '20261030_25')",
@@ -191,6 +199,9 @@ def test_generator_deterministic_no_overwrite_and_26_unchanged(tmp_path):
         "git-release",
         "history-running",
         "guard-before-ddl",
+        "protected-failed",
+        "protected-empty",
+        "protected-duplicate",
     ],
 )
 def test_preflight_refusal_never_stops_backend_or_changes_yaml(updater27, failure):
@@ -249,6 +260,15 @@ def test_success_quiesces_before_ddl_and_preserves_chain_and_configuration(updat
     assert state["runtime"]["backend"]["volumes"][0]["target"] == "/run/mtls"
     assert not (project / ".sales-update-recovery-required").exists()
     assert list((root / "backup").glob("update.*/original.yml"))
+    backup = next((root / "backup").glob("update.*"))
+    assert (backup / "protected-before.log").read_bytes() != (
+        backup / "protected-after.log"
+    ).read_bytes()
+    assert (
+        (backup / "protected-before.digest").read_bytes()
+        == (backup / "protected-after.digest").read_bytes()
+        == (backup / "protected-activated.digest").read_bytes()
+    )
 
 
 @pytest.mark.parametrize(
@@ -266,6 +286,7 @@ def test_success_quiesces_before_ddl_and_preserves_chain_and_configuration(updat
         "pg-lost",
         "frontend-image-drift",
         "settings-drift",
+        "activated-drift",
         "history-created",
     ],
 )
@@ -485,7 +506,11 @@ def test_native26_to27_guard_settings_idle_history_and_old_models_bridge(
             migration = job("migrate", gen.TARGET)
             assert migration.returncode == 0, migration.stderr
             after = job("initial-safety")
-            assert after.returncode == 0 and after.stdout == before.stdout
+            assert after.returncode == 0
+            assert (
+                json.loads(after.stdout.split(" ", 1)[1])["sha256"]
+                == json.loads(before.stdout.split(" ", 1)[1])["sha256"]
+            )
             assert (
                 "SECRET_SENTINEL"
                 not in before.stdout + before.stderr + after.stdout + after.stderr
@@ -519,6 +544,32 @@ def test_native26_to27_guard_settings_idle_history_and_old_models_bridge(
             with pg[0].begin() as db:
                 db.execute(sa.text("UPDATE import_history_job SET status='running'"))
             assert job("safety").returncode != 0
+            with pg[0].begin() as db:
+                db.execute(sa.text("UPDATE import_history_job SET status='paused'"))
+                db.execute(sa.text("UPDATE ftp_config SET password='CHANGED_SENTINEL'"))
+            changed = job("safety")
+            assert changed.returncode == 0
+            assert (
+                json.loads(changed.stdout.split(" ", 1)[1])["sha256"]
+                != json.loads(after.stdout.split(" ", 1)[1])["sha256"]
+            )
+            assert "CHANGED_SENTINEL" not in changed.stdout + changed.stderr
+            # A version label alone must never bypass frozen FK validation.
+            with pg[0].begin() as db:
+                fk = db.scalar(
+                    sa.text(
+                        "SELECT conname FROM pg_constraint WHERE conrelid='import_history_results'::regclass AND contype='f' LIMIT 1"
+                    )
+                )
+                assert fk
+                db.execute(
+                    sa.text(
+                        'ALTER TABLE import_history_results DROP CONSTRAINT "'
+                        + fk
+                        + '"'
+                    )
+                )
+            assert job("check", gen.TARGET).returncode != 0
         finally:
             for key in reversed(keys):
                 guard.execute(sa.text("SELECT pg_advisory_unlock(:k)"), {"k": key})
