@@ -21,7 +21,7 @@ from app.config import settings
 from app.models import Base
 
 BACKEND = Path(__file__).parents[1]
-CONTROL_TABLES=set(launcher.IMPORT_CONTROL_CONTRACT)
+CONTROL_TABLES=set(launcher.IMPORT_CONTROL_CONTRACT) | set(launcher.IMPORT_HISTORY_CONTRACT)
 NEW_TABLES = set(launcher.CHURN_COLUMNS)
 
 def metadata25():
@@ -37,9 +37,9 @@ def test_revision_graph_has_one_reviewed_successor():
     config = Config()  # keep Alembic from reconfiguring pytest/global logging
     config.set_main_option('script_location', str(BACKEND/'alembic'))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ['20261109_26']
+    assert scripts.get_heads() == ['20261111_27']
     assert scripts.get_revision('20261030_25').down_revision == '20261022_24'
-    assert launcher.DEFAULT_REVISION == '20261109_26'
+    assert launcher.DEFAULT_REVISION == '20261111_27'
     assert launcher.MIGRATION_SOURCES['20261030_25'] == {'20261022_24', '20261030_25'}
     assert '20261030_25' not in launcher.MIGRATION_SOURCES['20261022_24']
 
@@ -72,7 +72,7 @@ def test_default_launch_checks26_then_execs_without_migration(monkeypatch, args,
     monkeypatch.setattr(settings, 'analytics_signals_enabled', False)
     monkeypatch.setattr(settings, 'analytics_automation_enabled', False)
     launcher.main(args)
-    assert events[:2] == [('check', '20261109_26'), 'dispose']
+    assert events[:2] == [('check', '20261111_27'), 'dispose']
     assert (len(events) == 3) == exec_expected
     if exec_expected:
         assert events[-1][1] == 'uvicorn'
@@ -106,7 +106,7 @@ def test_migrate_mode_explicitly_checks_disabled_flags_and_never_execs(monkeypat
     assert calls == []
     monkeypatch.setattr(settings, 'analytics_automation_enabled', False)
     launcher.main(['--migrate'])
-    assert calls == [('20261109_26', Base.metadata), 'dispose']
+    assert calls == [('20261111_27', Base.metadata), 'dispose']
     with pytest.raises(launcher.StartupBlocked): launcher.main(['--migrate', '--rollback'])
 
 

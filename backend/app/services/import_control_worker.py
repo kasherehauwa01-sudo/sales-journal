@@ -128,6 +128,9 @@ async def receipt_after(batch_id, departments):
         if batch:
             await record_receipt(db, batch, departments=departments)
             await db.commit()
+    from app.services.import_history import recheck_receipt
+
+    await recheck_receipt(SessionLocal, batch_id)
 
 
 async def safe_hook(function, *args):
@@ -268,6 +271,11 @@ async def check_deadline_cycle():
 
 
 async def maintenance():
+    # No job is created here: only a previously approved historical request advances.
+    from app.services.import_history import safe_tick, recheck_waiting
+
+    await safe_tick(SessionLocal)
+    await recheck_waiting(SessionLocal)
     await check_deadline_cycle()
     async with SessionLocal() as db:
         c = await config(db)
@@ -308,7 +316,7 @@ async def maintenance():
             else []
         )
         for day in dict.fromkeys([day for day, _ in dates] + pending_days):
-            await check_date(db, day)
+            await check_date(db, day, historical=day not in pending_days)
             await db.commit()
     await deliver_one()
 

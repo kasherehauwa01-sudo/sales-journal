@@ -13,12 +13,13 @@ sys.path.insert(0, str(app_root))
 
 import sqlalchemy as sa
 
-SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26'}
-DEFAULT_REVISION = '20261109_26'
+SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26', '20261111_27'}
+DEFAULT_REVISION = '20261111_27'
 MIGRATION_SOURCES = {
     '20261022_24': {'20261020_23', '20261022_24'},
     '20261030_25': {'20261022_24', '20261030_25'},
     '20261109_26': {'20261030_25', '20261109_26'},
+    '20261111_27': {'20261109_26', '20261111_27'},
 }
 SCHEMA_LOCK = 734190249
 
@@ -292,8 +293,51 @@ IMPORT_CONTROL_CONTRACT = {
 }
 
 
-def check_import_control_schema(conn, schema, inspector):
-    for name, contract in IMPORT_CONTROL_CONTRACT.items():
+IMPORT_HISTORY_CONTRACT = {
+    "import_history_job": {
+        "columns": {
+            "id": ("INTEGER", False),
+            "status": ("VARCHAR(24)", False),
+            "plan": ("JSON", False),
+            "rules_hash": ("VARCHAR(64)", False),
+            "position": ("INTEGER", False),
+            "next_date": ("DATE", True),
+            "checked": ("INTEGER", False),
+            "total": ("INTEGER", False),
+            "error_code": ("VARCHAR(64)", True),
+            "started_at": ("TIMESTAMPWITHTIMEZONE", False),
+            "updated_at": ("TIMESTAMPWITHTIMEZONE", False),
+        },
+        "pk": ["id"],
+        "unique": [],
+        "fk": [],
+    },
+    "import_history_results": {
+        "columns": {
+            "sales_date": ("DATE", False),
+            "department_id": ("BIGINT", False),
+            "rule_id": ("BIGINT", True),
+            "expected_filename": ("VARCHAR(512)", True),
+            "status": ("VARCHAR(24)", False),
+            "error_code": ("VARCHAR(64)", True),
+            "checked_at": ("TIMESTAMPWITHTIMEZONE", False),
+        },
+        "pk": ["sales_date", "department_id"],
+        "unique": [],
+        "fk": [
+            ("department_id", "import_departments", "id"),
+            ("rule_id", "import_expectation_rules", "id"),
+        ],
+    },
+}
+
+
+def check_import_control_schema(conn, schema, inspector, historical=False):
+    contracts = {
+        **IMPORT_CONTROL_CONTRACT,
+        **(IMPORT_HISTORY_CONTRACT if historical else {}),
+    }
+    for name, contract in contracts.items():
         columns = {c["name"]: c for c in inspector.get_columns(name, schema=schema)}
         for key, (typ, nullable) in contract["columns"].items():
             if (
@@ -339,9 +383,24 @@ def check_import_control_schema(conn, schema, inspector):
         JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
         WHERE n.nspname=:schema AND t.relname=ANY(:tables)
         AND (NOT c.convalidated OR c.condeferrable OR c.condeferred)"""),
-        {'schema':schema,'tables':list(IMPORT_CONTROL_CONTRACT)})
+        {'schema':schema,'tables':list(contracts)})
     if invalid:
         raise StartupBlocked('Revision26 constraint is unvalidated or deferrable')
+    if historical:
+        required_history_checks = {
+            'import_history_job': ["id=1", "position>=0 AND checked>=0 AND total>=checked",
+                "status::text = ANY (ARRAY['running'::character varying, 'paused'::character varying, 'completed'::character varying, 'error'::character varying]::text[])"],
+            'import_history_results': ["status::text = ANY (ARRAY['success'::character varying, 'missing'::character varying, 'error'::character varying, 'unavailable'::character varying, 'waiting'::character varying, 'not_expected'::character varying]::text[])"]}
+        for table, checks in required_history_checks.items():
+            actual = {''.join(c['sqltext'].split()).replace('(', '').replace(')', '').replace(chr(34), '') for c in inspector.get_check_constraints(table, schema=schema)}
+            if not {''.join(c.split()).replace('(', '').replace(')', '') for c in checks}.issubset(actual):
+                raise StartupBlocked('Revision27 check constraint mismatch: '+table)
+        paused_default = next(c['default'] for c in inspector.get_columns('import_history_job', schema=schema) if c['name']=='status')
+        if str(paused_default) != "'paused'::character varying":
+            raise StartupBlocked('Revision27 job must default paused')
+        indexes = {tuple(i['column_names']) for i in inspector.get_indexes('import_history_results', schema=schema)}
+        if not {('status',), ('expected_filename',), ('department_id', 'sales_date')}.issubset(indexes):
+            raise StartupBlocked('Revision27 result indexes missing')
     flags = {
         c["name"]: str(c.get("default", ""))
         .strip("()")
@@ -359,7 +418,6 @@ def check_import_control_schema(conn, schema, inspector):
     )
     if triggers != 1:
         raise StartupBlocked("Revision26 rule guard is missing")
-
 
 
 def check_schema(engine, metadata, expected):
@@ -385,6 +443,8 @@ def _check_schema(conn, metadata, expected):
         inspector = sa.inspect(conn)
         tables = set(inspector.get_table_names(schema=schema))
         for table in metadata.sorted_tables:
+            if expected != '20261111_27' and table.name in IMPORT_HISTORY_CONTRACT:
+                continue
             if table.name not in tables:
                 raise StartupBlocked('Missing required table: '+table.name)
             actual = {c['name']: c for c in inspector.get_columns(table.name, schema=schema)}
@@ -416,15 +476,15 @@ def _check_schema(conn, metadata, expected):
                 if not any(x['constrained_columns'] == names and x['referred_table'] == target
                            and x['referred_columns'] == columns for x in actual_fks):
                     raise StartupBlocked('Foreign key mismatch: '+table.name)
-        if expected in ('20261030_25', '20261109_26'):
+        if expected in ('20261030_25', '20261109_26', '20261111_27'):
             check_churn_schema(conn, schema, inspector)
-        if expected == '20261109_26':
-            check_import_control_schema(conn, schema, inspector)
+        if expected in ('20261109_26', '20261111_27'):
+            check_import_control_schema(conn, schema, inspector, historical=expected == '20261111_27')
 
 
 def migrate(engine, target, metadata=None):
     if target not in MIGRATION_SOURCES:
-        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 and 20261109_26 are supported')
+        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 20261109_26 and 20261111_27 are supported')
     with engine.connect() as conn:
         acquired = conn.scalar(sa.text('SELECT pg_try_advisory_lock(:key)'), {'key': SCHEMA_LOCK})
         conn.commit()

@@ -145,7 +145,7 @@ def pg(monkeypatch, request):
     config.set_main_option(
         "script_location", str(Path(__file__).parents[1] / "alembic")
     )
-    command.upgrade(config, getattr(request, "param", "20261109_26"))
+    command.upgrade(config, getattr(request, "param", "20261111_27"))
     async_engine = create_async_engine(
         parsed.set(drivername="postgresql+asyncpg"),
         poolclass=sa.pool.NullPool,
@@ -330,6 +330,7 @@ def test_database_trigger_rejects_conflicting_rules(pg):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("pg", ["20261109_26"], indirect=True)
 def test_revision26_readonly_start_and_defaults(pg):
     launcher.check_schema(pg[0], Base.metadata, "20261109_26")
     with pg[0].begin() as conn:
@@ -525,6 +526,7 @@ def test_checked_rule_cannot_be_overwritten_or_history_disabled(pg):
         "ALTER TABLE import_control_issues DROP CONSTRAINT uq_import_issue_day_department",
     ],
 )
+@pytest.mark.parametrize("pg", ["20261109_26"], indirect=True)
 def test_revision26_blocks_incompatible_schema_with_old_models(pg, alter):
     with pg[0].begin() as conn:
         conn.execute(sa.text(alter))
@@ -532,6 +534,7 @@ def test_revision26_blocks_incompatible_schema_with_old_models(pg, alter):
         launcher.check_schema(pg[0], sa.MetaData(), "20261109_26")
 
 
+@pytest.mark.parametrize("pg", ["20261109_26"], indirect=True)
 def test_revision26_checks_all_models_and_noop_rollback_contract(pg):
     from sqlalchemy.dialects.postgresql import dialect
 
@@ -715,6 +718,13 @@ def api_app(pg):
     [
         ("GET", "/settings", None),
         ("GET", "/departments", None),
+        ("GET", "/historical/status", None),
+        ("GET", "/historical/results", None),
+        ("POST", "/historical/start", {"approve": True}),
+        ("POST", "/historical/pause", None),
+        ("POST", "/historical/resume", None),
+        ("GET", "/template-repair/preview", None),
+        ("POST", "/template-repair/apply", {}),
         ("POST", "/check", {"date_from": str(DAY), "date_to": str(DAY)}),
         ("PUT", "/settings", {}),
         ("POST", "/departments", {}),
@@ -1022,7 +1032,7 @@ def test_explicit25_to26_preserves_existing_metadata_and_old_image_contract(
     launcher.migrate(pg[0], "20261109_26", Base.metadata)
     old = sa.MetaData()
     for table in Base.metadata.sorted_tables:
-        if table.name not in launcher.IMPORT_CONTROL_CONTRACT:
+        if table.name not in {**launcher.IMPORT_CONTROL_CONTRACT, **launcher.IMPORT_HISTORY_CONTRACT}:
             table.to_metadata(old)
     launcher.check_schema(pg[0], old, "20261109_26")
 

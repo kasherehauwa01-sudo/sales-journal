@@ -3,6 +3,7 @@
 import hashlib, json, re, unicodedata, uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 from sqlalchemy import select, text, or_, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import noload
@@ -19,6 +20,7 @@ from app.models.import_control import (
     ImportIssue,
     ImportControlAudit,
     ImportNotice,
+    ImportHistoryResult,
 )
 
 CONTROL_LOCK = 734190270
@@ -355,10 +357,12 @@ def receipt_state(rule, day, receipts):
     return "missing", None, None
 
 
-async def check_date(db, day, *, confirmed=False, actor="system"):
+async def check_date(
+    db, day, *, confirmed=False, actor="system", historical=False, department_id=None
+):
     await lock(db)
     c = await config(db)
-    if not c.enabled or not c.start_date or day < c.start_date:
+    if not historical and (not c.enabled or not c.start_date or day < c.start_date):
         return {
             "sales_date": day,
             "status": "unavailable",
@@ -376,6 +380,11 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
                 or_(ImportRule.end_date.is_(None), ImportRule.end_date >= day),
                 ImportRule.active.is_(True),
                 ImportRule.controlled.is_(True),
+                *(
+                    [ImportRule.department_id == department_id]
+                    if department_id is not None
+                    else []
+                ),
             )
             .limit(1001)
         )
@@ -478,7 +487,8 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
     ).all()
     # Even manual confirmation cannot finalize a day before the approved deadline.
     final = now() >= deadline(day) and (
-        confirmed
+        historical
+        or confirmed
         or bool(
             cycles
             and cycles[0].status == "finished"
@@ -487,6 +497,17 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
         )
     )
     states = [(rule, *receipt_state(rule, day, receipts)) for rule in rules]
+    if historical:
+        from app.services.import_history import proposed_template
+
+        states = [
+            (
+                (r, "unavailable", "historical_template_requires_review", None)
+                if proposed_template(r)
+                else (r, state, error, identity)
+            )
+            for r, state, error, identity in states
+        ]
     completed_sources = {
         expected_filename(r, day): max(
             (
@@ -513,7 +534,7 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
         "unavailable"
         if not rules
         or counts["unavailable"]
-        or (cycles and cycles[0].status in ("failed", "interrupted"))
+        or (not historical and cycles and cycles[0].status in ("failed", "interrupted"))
         else (
             "waiting"
             if not final or counts["waiting"]
@@ -578,13 +599,36 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
                 issue.error_code = error
                 issue.import_id = import_id
         if issue:
+            issue.rule_id = rule.id
+            issue.department_name = rule.display_name
+            issue.expected_filename = expected_filename(rule, day)
             issue.checked_at = at
             if issue.status == "closed":
                 closed.add(rule.department_id)
-    check = await db.get(ImportDayCheck, day)
-    if not check:
-        check = ImportDayCheck(sales_date=day)
-        db.add(check)
+        # Store successes too, but a daily check only updates already audited rows.
+        result = await db.get(ImportHistoryResult, (day, rule.department_id))
+        if historical or result:
+            if not result:
+                result = ImportHistoryResult(
+                    sales_date=day, department_id=rule.department_id
+                )
+                db.add(result)
+            result.rule_id = rule.id
+            result.expected_filename = expected_filename(rule, day)
+            result.status = state if state != "missing" or final else "waiting"
+            result.error_code = error
+            result.checked_at = at
+    if historical:
+        # A per-store result must never overwrite the summary of all stores.
+        # Full rechecks refresh an existing daily card, without creating old cards.
+        check = await db.get(ImportDayCheck, day) if department_id is None else None
+        if check is None:
+            check = SimpleNamespace(sales_date=day)
+    else:
+        check = await db.get(ImportDayCheck, day)
+        if check is None:
+            check = ImportDayCheck(sales_date=day)
+            db.add(check)
     for key, value in {
         "status": status,
         "expected": len(rules),
@@ -601,7 +645,7 @@ async def check_date(db, day, *, confirmed=False, actor="system"):
     }.items():
         setattr(check, key, value)
     fingerprint = None
-    if final and status in ("incomplete", "error"):
+    if not historical and final and status in ("incomplete", "error"):
         problems = [
             {
                 "department": r.display_name,

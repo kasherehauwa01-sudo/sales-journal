@@ -354,7 +354,7 @@ async def check_open(request: Request, db: AsyncSession = Depends(get_db)):
     ).all()
     results = []
     for day in dates:
-        results.append(await check_date(db, day, actor=actor(request)))
+        results.append(await check_date(db, day, actor=actor(request), historical=True))
         await db.commit()
     return {"checked_dates": len(results), "items": results}
 
@@ -631,3 +631,140 @@ async def retry(
     )
     await db.commit()
     return {"queued": True}
+
+
+class HistoryStartIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    department_id: int | None = Field(None, gt=0)
+    date_from: date | None = None
+    date_to: date | None = None
+    approve: bool = False
+
+
+@router.get("/historical/status")
+async def historical_status(db: AsyncSession = Depends(get_db)):
+    from app.models.import_control import ImportHistoryJob
+
+    row = await db.get(ImportHistoryJob, 1)
+    return (
+        output(row)
+        if row
+        else {"status": "not_started", "plan": [], "checked": 0, "total": 0}
+    )
+
+
+@router.post("/historical/start")
+async def historical_start(
+    data: HistoryStartIn, request: Request, db: AsyncSession = Depends(get_db)
+):
+    from app.services.import_history import start
+
+    if not data.approve:
+        raise HTTPException(422, "Подтвердите историческую сверку")
+    row = await start(db, actor=actor(request), **data.model_dump(exclude={"approve"}))
+    await db.commit()
+    return output(row)
+
+
+@router.post("/historical/{action}")
+async def historical_command(
+    action: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    from app.services.import_history import command
+
+    if action not in ("pause", "resume"):
+        raise HTTPException(404, "Неизвестная команда")
+    row = await command(db, action, actor(request))
+    await db.commit()
+    return output(row)
+
+
+@router.get("/historical/results")
+async def historical_results(
+    department_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    status: str = "all",
+    page: int = Query(1, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.import_control import ImportHistoryResult as Result
+
+    conditions = []
+    if department_id:
+        conditions.append(Result.department_id == department_id)
+    if date_from:
+        conditions.append(Result.sales_date >= date_from)
+    if date_to:
+        conditions.append(Result.sales_date <= date_to)
+    if status != "all":
+        if status not in (
+            "success",
+            "missing",
+            "error",
+            "unavailable",
+            "waiting",
+            "not_expected",
+        ):
+            raise HTTPException(422, "Неизвестный статус")
+        conditions.append(Result.status == status)
+    rows = (
+        await db.execute(
+            select(Result, ImportDepartment.name, ImportDepartment.code)
+            .join(ImportDepartment, Result.department_id == ImportDepartment.id)
+            .where(*conditions)
+            .order_by(Result.sales_date.desc(), Result.department_id)
+            .offset((page - 1) * 50)
+            .limit(50)
+        )
+    ).all()
+    total = await db.scalar(select(func.count()).select_from(Result).where(*conditions))
+    return {
+        "items": [
+            {**output(row), "department_name": name, "department_code": code}
+            for row, name, code in rows
+        ],
+        "page": page,
+        "total": total,
+    }
+
+
+@router.get("/template-repair/preview")
+async def template_preview(db: AsyncSession = Depends(get_db)):
+    from app.services.import_history import repair_preview
+
+    return await repair_preview(db)
+
+
+class TemplateRepairIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=64, max_length=64)
+    rule_ids: list[int] = Field(min_length=1, max_length=1000)
+    reason: str = Field(min_length=5, max_length=1000)
+    approve: bool = False
+
+
+@router.post("/template-repair/apply")
+async def template_apply(
+    data: TemplateRepairIn, request: Request, db: AsyncSession = Depends(get_db)
+):
+    from app.services.import_history import repair_apply
+    from sqlalchemy.exc import IntegrityError
+
+    if not data.approve:
+        raise HTTPException(422, "Нужно подтверждение исправления шаблонов")
+    try:
+        result = await repair_apply(
+            db,
+            token=data.token,
+            ids=data.rule_ids,
+            actor=actor(request),
+            reason=data.reason,
+        )
+        await db.commit()
+        return result
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            409, "Шаблоны конфликтуют с действующими правилами. Изменения отменены"
+        ) from None
