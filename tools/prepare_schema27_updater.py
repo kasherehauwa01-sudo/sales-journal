@@ -62,7 +62,9 @@ try:
     try:
         current=context()
         if action=='status':print(current)
-        elif action in ('safety','initial-safety'):print(context(True,action=='initial-safety'))
+        elif action in ('safety','initial-safety'):
+            digest=context(True,action=='initial-safety')
+            print('SALES_PROTECTED_V1 '+json.dumps({'protocol':1,'guard':guard,'action':action,'revision':current,'sha256':digest},sort_keys=True,separators=(',',':')))
         elif action=='check':
             if expected not in ('20261109_26','20261111_27'):raise RuntimeError('invalid check target')
             module['main'](['--rollback','--check-only','--expected-revision',expected]);context()
@@ -105,6 +107,41 @@ if graph.get_heads()!=['20261111_27'] or graph.get_revision('20261111_27').down_
 """.replace(
     "__MIGRATION_SHA__", MIGRATION_SHA256
 )
+
+
+PROTECTED_SHELL = r"""
+protected_snapshot() {
+    local stage=$1 file=$2 action=$3 revision=$4
+    # Exit status is checked BEFORE parsing. stdout/stderr remain private.
+    logged "$stage" schema_job "$file" "$action" '' /app/start_backend.py "$ROLLBACK_LAUNCHER_SHA" || return 1
+    protected_result "$BACKUP_DIR/$stage.log" "$action" "$revision" >"$BACKUP_DIR/$stage.digest" 2>"$BACKUP_DIR/$stage.validation.log"
+}
+protected_result() {
+    python3 - "$1" "$GUARD_APPNAME" "$2" "$3" <<'PY_PROTECTED'
+import json,re,sys
+from pathlib import Path
+path,guard,action,revision=sys.argv[1:]
+with Path(path).open('rb') as stream:data=stream.read(2097153)
+if not 0<len(data)<=2097152:raise SystemExit(1)
+lines=data.decode('utf-8',errors='strict').splitlines()
+records=[line for line in lines if 'SALES_PROTECTED_' in line]
+if len(records)!=1 or not records[0].startswith('SALES_PROTECTED_V1 '):raise SystemExit(1)
+def unique(pairs):
+    result={}
+    for k,v in pairs:
+        if k in result:raise ValueError('duplicate field')
+        result[k]=v
+    return result
+record=json.loads(records[0][len('SALES_PROTECTED_V1 '):],object_pairs_hook=unique)
+if set(record)!={'protocol','guard','action','revision','sha256'}:raise SystemExit(1)
+if type(record['protocol']) is not int or record['protocol']!=1:raise SystemExit(1)
+if record['guard']!=guard or record['action']!=action or record['revision']!=revision:raise SystemExit(1)
+if action not in ('safety','initial-safety') or revision not in ('20261109_26','20261111_27'):raise SystemExit(1)
+if not isinstance(record['sha256'],str) or not re.fullmatch('[0-9a-f]{64}',record['sha256']):raise SystemExit(1)
+print(record['sha256'])
+PY_PROTECTED
+}
+"""
 
 
 def adapt(source):
@@ -298,6 +335,28 @@ def adapt(source):
             || fail 'Параметры изменились при переключении; требуется ручная проверка.'
     fi
     # This tiny critical section is the commit boundary.""",
+    )
+    # Compare the validated result, never Docker/Compose diagnostic chatter.
+    replace("schema_job() {", PROTECTED_SHELL + "\nschema_job() {")
+    replace(
+        'logged protected-before schema_job "$BACKUP_DIR/backend.candidate.yml" safety \'\' /app/start_backend.py "$ROLLBACK_LAUNCHER_SHA"',
+        'protected_snapshot protected-before "$BACKUP_DIR/backend.candidate.yml" safety "$SCHEMA_BEFORE"',
+    )
+    replace(
+        'logged protected-after schema_job "$candidate" "$safety_action" \'\' /app/start_backend.py "$ROLLBACK_LAUNCHER_SHA"',
+        'protected_snapshot protected-after "$candidate" "$safety_action" "$TARGET_REVISION"',
+    )
+    replace(
+        'cmp -s "$BACKUP_DIR/protected-before.log" "$BACKUP_DIR/protected-after.log"',
+        'cmp -s "$BACKUP_DIR/protected-before.digest" "$BACKUP_DIR/protected-after.digest"',
+    )
+    replace(
+        'logged protected-activated schema_job "$candidate" "$safety_action" \'\' /app/start_backend.py "$ROLLBACK_LAUNCHER_SHA"',
+        'protected_snapshot protected-activated "$candidate" "$safety_action" "$TARGET_REVISION"',
+    )
+    replace(
+        'cmp -s "$BACKUP_DIR/protected-before.log" "$BACKUP_DIR/protected-activated.log"',
+        'cmp -s "$BACKUP_DIR/protected-before.digest" "$BACKUP_DIR/protected-activated.digest"',
     )
     if (
         "__LAUNCHER_SHA__" in script
