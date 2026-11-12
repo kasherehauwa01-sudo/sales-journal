@@ -18,8 +18,12 @@ class Settings(BaseSettings):
     analytics_signals_enabled: bool = False
     analytics_signals_mode: Literal["SHADOW"] = "SHADOW"
     analytics_signals_freshness_hours: int = Field(36, ge=1, le=168)
+    import_history_poll_seconds: float = Field(5, ge=1, le=60)
     import_history_batch_size: int = Field(25, ge=1, le=100)
     import_history_batch_seconds: float = Field(3, ge=0.1, le=10)
+    rfm_refresh_min_seconds: int = Field(300, ge=60, le=900)
+    rfm_refresh_poll_seconds: int = Field(60, ge=1, le=300)
+    rfm_refresh_timeout_seconds: int = Field(900, ge=60, le=3600)
     autoload_timezone: str = "Europe/Moscow"
     clients_vr_api_url: str = "https://kvasmix.ru/vr/clients/api"
     clients_vr_api_token: str = ""

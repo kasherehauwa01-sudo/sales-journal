@@ -110,7 +110,9 @@ def test_persistent_population_products_and_restart(monkeypatch):
                 assert alpha["frequency"]==2 and alpha["monetary"]==300.03
                 assert alpha["unique_products"]==2  # existing per-sale sum semantics
                 assert alpha["units"]==.375
-                assert (await snapshots.active_snapshot(db)).boundaries==bounds
+                stored=(await snapshots.active_snapshot(db)).boundaries
+                assert {k:stored[k] for k in bounds}==bounds
+                assert stored["_refresh_source"]==await snapshots.source_signature(db)
             # New pool models a fresh worker. Forbid any population computation.
             await engine.dispose()
             async def forbidden(*a,**kw): raise AssertionError("HTTP attempted rebuild")
@@ -242,10 +244,12 @@ def test_refresh_failure_is_logged_and_preserves_previous(monkeypatch,caplog):
             first=await snapshots.rebuild_snapshot(engine,as_of=END)
             async def fail(*a,**kw): raise RuntimeError("synthetic refresh failure")
             monkeypatch.setattr(snapshots,"rfm_rows",fail)
-            assert await snapshots.rebuild_after_sales_update(engine) is None
+            with pytest.raises(RuntimeError):
+                await snapshots.rebuild_snapshot(engine,as_of=END)
             async with sessions() as db:
                 assert (await snapshots.active_snapshot(db)).id==first["id"]
-            assert "synthetic refresh failure" in caplog.text
+            assert "reason=RuntimeError" in caplog.text
+            assert "synthetic refresh failure" not in caplog.text
     asyncio.run(scenario())
 
 

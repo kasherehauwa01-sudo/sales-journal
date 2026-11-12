@@ -29,6 +29,7 @@ from app.services.import_control import (
     OPEN_STATES,
 )
 from app.services.scenarios import _send
+from app.services.async_resources import run_blocking
 from app.services.email_recipients import parse_recipient_emails
 
 log = logging.getLogger(__name__)
@@ -108,14 +109,22 @@ async def receipt_before(batch_id, filename=None, cycle_id=None):
         if existing and existing.sha256:
             return
 
-        def digest():
-            result = hashlib.sha256()
-            with Path(batch.stored_path).open("rb") as source:
-                for chunk in iter(lambda: source.read(65536), b""):
-                    result.update(chunk)
-            return result.hexdigest()
+        source_path = batch.stored_path
 
-        checksum = await asyncio.to_thread(digest)
+    def digest():
+        result = hashlib.sha256()
+        with Path(source_path).open("rb") as source:
+            for chunk in iter(lambda: source.read(65536), b""):
+                result.update(chunk)
+        return result.hexdigest()
+
+    checksum = await asyncio.to_thread(digest)
+    async with SessionLocal() as db:
+        batch = await db.get(
+            ImportBatch, batch_id, options=[noload(ImportBatch.errors)]
+        )
+        if not batch:
+            return
         await record_receipt(db, batch, cycle_id, filename, checksum)
         await db.commit()
 
@@ -222,7 +231,7 @@ async def deliver_one():
             item.attempts += 1
             await db.commit()
             try:
-                rejected = await asyncio.to_thread(
+                rejected = await run_blocking(
                     _send, smtp, recipients, item.subject, item.body
                 )
                 if rejected:
@@ -270,13 +279,7 @@ async def check_deadline_cycle():
     await run_autoload(day)
 
 
-async def maintenance():
-    # No job is created here: only a previously approved historical request advances.
-    from app.services.import_history import safe_tick, recheck_waiting
-
-    await safe_tick(SessionLocal)
-    await recheck_waiting(SessionLocal)
-    await check_deadline_cycle()
+async def recheck_open():
     async with SessionLocal() as db:
         c = await config(db)
         if not c.enabled or not c.automatic:
@@ -318,7 +321,20 @@ async def maintenance():
         for day in dict.fromkeys([day for day, _ in dates] + pending_days):
             await check_date(db, day, historical=day not in pending_days)
             await db.commit()
-    await deliver_one()
+
+
+async def maintenance():
+    # Compatibility for explicit one-shot maintenance. Lifespan runs independent
+    # lanes; none of them awaits the whole maintenance bundle anymore.
+    from app.services.import_history import safe_tick, recheck_waiting
+
+    await asyncio.gather(
+        safe_hook(safe_tick, SessionLocal),
+        safe_hook(recheck_waiting, SessionLocal),
+        safe_hook(check_deadline_cycle),
+        safe_hook(recheck_open),
+        safe_hook(deliver_one),
+    )
 
 
 async def revision_guard(batch_id):

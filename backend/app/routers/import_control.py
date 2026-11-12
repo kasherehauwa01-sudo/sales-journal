@@ -768,3 +768,14 @@ async def template_apply(
         raise HTTPException(
             409, "Шаблоны конфликтуют с действующими правилами. Изменения отменены"
         ) from None
+
+
+@router.get("/workers")
+async def worker_status(db: AsyncSession = Depends(get_db)):
+    from app.services.background_workers import observations
+    from app.services.rfm_snapshot import refresh_status
+    rfm=await refresh_status(db)
+    lane=observations.get("rfm",{})
+    rfm["error_code"]=lane.get("error_code") if lane.get("state")=="error" else None
+    if rfm["state"]!="rebuilding" and rfm["error_code"]:rfm["state"]="error"
+    return {"workers":{k:dict(v) for k,v in observations.items()},"rfm":rfm}
