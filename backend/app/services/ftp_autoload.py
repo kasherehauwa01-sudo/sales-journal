@@ -112,7 +112,7 @@ async def _run_autoload_cycle(cycle_id=None, day=None, marker_template=None):
                 )
                 await db.commit()
             if cycle_id:
-                from app.services.import_control_worker import safe_hook, finish_cycle
+                from app.services.import_integrity import safe_hook, finish_cycle
 
                 await safe_hook(finish_cycle, cycle_id, False, "ftp_listing_failed")
             return
@@ -129,7 +129,7 @@ async def _run_autoload_cycle(cycle_id=None, day=None, marker_template=None):
         for filename in filenames:
             await _process_file(config, filename, cycle_id)
         if cycle_id:
-            from app.services.import_control_worker import safe_hook, finish_cycle
+            from app.services.import_integrity import safe_hook, finish_cycle
 
             await safe_hook(finish_cycle, cycle_id, marker_seen)
 
@@ -172,7 +172,7 @@ async def _process_file(config: FtpSettings, filename: str, cycle_id=None):
             entry.import_id = batch_id
             entry.status = "processing"
             await db.commit()
-        from app.services.import_control_worker import safe_hook, receipt_before
+        from app.services.import_integrity import safe_hook, receipt_before
 
         await safe_hook(receipt_before, batch_id, filename, cycle_id)
         await process_import(batch_id)
@@ -230,7 +230,7 @@ async def _process_file(config: FtpSettings, filename: str, cycle_id=None):
                 entry = await db.get(AutoImportLog, entry_id)
                 entry.import_id = batch_id
                 await db.commit()
-            from app.services.import_control_worker import (
+            from app.services.import_integrity import (
                 record_download_error,
                 safe_hook,
             )
@@ -264,7 +264,7 @@ async def _process_file(config: FtpSettings, filename: str, cycle_id=None):
 
 async def run_autoload(sales_day=None):
     # Session-level lock prevents cross-process overlapping FTP cycles.
-    from app.services.import_control_worker import (
+    from app.services.import_integrity import (
         owned_lock,
         safe_hook,
         begin_cycle,

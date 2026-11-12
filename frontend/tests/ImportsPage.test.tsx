@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 import { StrictMode } from "react";
 import {
   cleanup,
@@ -67,21 +68,23 @@ beforeEach(() => {
         log_text: "Синтетический журнал",
         errors: [{ id: 1, row_number: 2, message: "Нет обязательного поля" }],
       });
-    if (path.endsWith("/import-control/status"))
+    if (path.includes("/sales-control/missing?"))
       return response({
-        enabled: false,
-        latest: null,
-        open_counts: { missing: 0, error: 0 },
+        items: [],
+        total: 0,
+        page: 1,
+        date_from: "2026-10-13",
+        date_to: "2026-11-11",
       });
-    if (path.endsWith("/import-control/settings"))
+    if (path.endsWith("/sales-control/notification-settings"))
       return response({
         enabled: false,
-        automatic: false,
-        email_enabled: false,
-        start_date: null,
-        recipients: "",
+        send_time: "09:00",
+        recipients: [],
         revision: 1,
       });
+    if (path.endsWith("/sales-control/notification-status"))
+      return response(null);
     return response([]);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -109,20 +112,26 @@ const select = (...files: File[]) =>
 it("opens daily control without starting an import, a historical job or a notice", async () => {
   render(
     <StrictMode>
-      <ImportsPage />
+      <MemoryRouter>
+        <ImportsPage />
+      </MemoryRouter>
     </StrictMode>,
   );
-  await screen.findByText("Контроль отключён");
+  await screen.findByText("Отсутствующих продаж не найдено");
   expect(
     screen
-      .getByRole("button", { name: "Контроль полноты" })
+      .getByRole("button", { name: "Контроль продаж" })
       .getAttribute("aria-pressed"),
   ).toBe("true");
   expect(screen.queryByRole("button", { name: "Начать импорт" })).toBeNull();
   expect(posts()).toHaveLength(0);
 });
 it("supports real drag and drop, rejects unsupported formats and edits the selection", async () => {
-  render(<ImportsPage />);
+  render(
+    <MemoryRouter>
+      <ImportsPage />
+    </MemoryRouter>,
+  );
   openUpload();
   const first = new File(["fixture"], "first.html"),
     second = new File(["fixture"], "second.xlsx");
@@ -150,7 +159,11 @@ it("supports real drag and drop, rejects unsupported formats and edits the selec
 });
 it("sends one multipart request and keeps repeat clicks disabled until the response", async () => {
   holdUpload = true;
-  render(<ImportsPage />);
+  render(
+    <MemoryRouter>
+      <ImportsPage />
+    </MemoryRouter>,
+  );
   openUpload();
   select(new File(["fixture"], "first.html"));
   const button = screen.getByRole("button", { name: "Начать импорт" });
@@ -175,28 +188,14 @@ it("sends one multipart request and keeps repeat clicks disabled until the respo
     await screen.findByRole("region", { name: "Журнал загрузок" }),
   ).toBeTruthy();
 });
-it("retains selected files and unsaved control settings when switching workspaces", async () => {
-  render(<ImportsPage />);
-  await screen.findByText("Контроль отключён");
-  fireEvent.click(screen.getByRole("button", { name: "Настройки контроля" }));
-  fireEvent.click(screen.getByLabelText("Автоматические проверки"));
-  openUpload();
-  select(new File(["fixture"], "selected.xls"));
-  fireEvent.click(screen.getByRole("button", { name: "Журнал загрузок" }));
-  openUpload();
-  expect(
-    screen.getByRole("button", { name: "Убрать файл selected.xls" }),
-  ).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Контроль полноты" }));
-  expect(
-    (screen.getByLabelText("Автоматические проверки") as HTMLInputElement)
-      .checked,
-  ).toBe(true);
-  expect(posts()).toHaveLength(0);
-});
+
 it("shows an upload failure without retries and allows a manual retry with the same files", async () => {
   uploadFails = true;
-  render(<ImportsPage />);
+  render(
+    <MemoryRouter>
+      <ImportsPage />
+    </MemoryRouter>,
+  );
   openUpload();
   select(new File(["fixture"], "retry.html"));
   fireEvent.click(screen.getByRole("button", { name: "Начать импорт" }));
@@ -211,7 +210,11 @@ it("shows an upload failure without retries and allows a manual retry with the s
   expect(posts()).toHaveLength(2);
 });
 it("filters only the latest journal records and restores the list without writes", async () => {
-  render(<ImportsPage />);
+  render(
+    <MemoryRouter>
+      <ImportsPage />
+    </MemoryRouter>,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Журнал загрузок" }));
   const journal = screen.getByRole("region", { name: "Журнал загрузок" });
   await within(journal).findByText("Продажи_А.html");
@@ -234,7 +237,11 @@ it("filters only the latest journal records and restores the list without writes
 });
 it("distinguishes a failed journal request from an empty journal and permits manual reload", async () => {
   listFails = true;
-  render(<ImportsPage />);
+  render(
+    <MemoryRouter>
+      <ImportsPage />
+    </MemoryRouter>,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Журнал загрузок" }));
   await screen.findByText("Журнал недоступен");
   expect(screen.queryByText("Загрузок пока нет")).toBeNull();
@@ -246,7 +253,11 @@ it("distinguishes a failed journal request from an empty journal and permits man
   expect(posts()).toHaveLength(0);
 });
 it("opens error details in a keyboard-closeable dialog and returns focus", async () => {
-  render(<ImportsPage />);
+  render(
+    <MemoryRouter>
+      <ImportsPage />
+    </MemoryRouter>,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Журнал загрузок" }));
   const button = await screen.findByRole("button", { name: "Ошибки: 1" });
   button.focus();

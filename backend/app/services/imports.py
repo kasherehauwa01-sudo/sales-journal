@@ -28,7 +28,7 @@ async def _process_import(import_id:int,started:float)->None:
   batch=await db.get(ImportBatch,import_id);batch.status="processing";batch.started_at=datetime.now(timezone.utc);batch.log_text=f"[{batch.started_at.isoformat()}] Начата обработка файла {batch.filename}\n";await db.commit()
   departments=set()
   try:
-   from app.services.import_control_worker import safe_hook,receipt_before
+   from app.services.import_integrity import safe_hook,receipt_before
    await safe_hook(receipt_before,import_id)
    if batch.file_size==0:raise ValueError("Файл имеет нулевой размер")
    try:
@@ -38,7 +38,7 @@ async def _process_import(import_id:int,started:float)->None:
     batch.source_period_method="METADATA_EXTRACTION_FAILED"
     log.exception("Не удалось извлечь период источника импорта %s",import_id)
    await db.commit()
-   from app.services.import_control_worker import revision_guard
+   from app.services.import_integrity import revision_guard
    guard=await revision_guard(import_id)
    if guard:raise ValueError(guard)
    sheet,rows=read_sales(Path(batch.stored_path));batch.log_text+=f"Найден лист «{sheet}». Строки обрабатываются последовательно.\n";await db.commit()
@@ -76,7 +76,7 @@ async def _process_import(import_id:int,started:float)->None:
     await db.commit()
    raise
   finally:
-   from app.services.import_control_worker import safe_hook,receipt_after
+   from app.services.import_integrity import safe_hook,receipt_after
    await safe_hook(receipt_after,import_id,departments)
 
 
@@ -87,7 +87,7 @@ async def _process_import_with_source(import_id:int):
   if not batch:return
   path=Path(batch.stored_path)
  async def operation():
-  from app.services.import_control_worker import source_owner,safe_hook,receipt_after
+  from app.services.import_integrity import source_owner,safe_hook,receipt_after
   async with source_owner(import_id) as acquired:
    if acquired:
     await _process_import(import_id,started)

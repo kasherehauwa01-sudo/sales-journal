@@ -73,19 +73,8 @@ async def periodic(name, operation, *, interval=60, timeout=None, wake=None):
 
 async def run():
     from app.database import SessionLocal, engine
-    from app.services import (
-        ftp_autoload,
-        import_control_worker as control,
-        import_history,
-        rfm_snapshot,
-    )
+    from app.services import ftp_autoload, import_integrity, rfm_snapshot, sales_control
     from app.services.scenarios import scheduler as scenarios
-
-    async def history():
-        return await import_history.safe_tick(SessionLocal)
-
-    async def waiting():
-        return await import_history.recheck_waiting(SessionLocal)
 
     async def rfm():
         return await rfm_snapshot.refresh_tick(engine)
@@ -97,17 +86,11 @@ async def run():
         group.create_task(periodic("ftp_daily", ftp_autoload.scheduler, interval=60))
         group.create_task(periodic("scenarios", scenarios, interval=60))
         group.create_task(
-            periodic(
-                "history",
-                history,
-                interval=settings.import_history_poll_seconds,
-                timeout=15,
-            )
+            periodic("ftp_deadline", import_integrity.check_deadline_cycle)
         )
-        group.create_task(periodic("history_waiting", waiting, timeout=15))
-        group.create_task(periodic("ftp_deadline", control.check_deadline_cycle))
-        group.create_task(periodic("import_recheck", control.recheck_open, timeout=30))
-        group.create_task(periodic("import_mail", control.deliver_one))
+        group.create_task(
+            periodic("sales_notifications", sales_control.notification_tick)
+        )
         group.create_task(
             periodic(
                 "rfm",

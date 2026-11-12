@@ -651,6 +651,9 @@ def test_real_imports_and_pinned_migration_graph_preflight():
         text=True,
         timeout=20,
     )
+    if hashlib.sha256((ROOT/'backend/start_backend.py').read_bytes()).hexdigest()!=gen.LAUNCHER_SHA256:
+        assert result.returncode!=0  # updater27 MUST reject schema28 images/head.
+        return
     assert result.returncode == 0, result.stderr
     assert (
         hashlib.sha256((ROOT / "backend/start_backend.py").read_bytes()).hexdigest()

@@ -10,12 +10,13 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import { ImportControlPanel } from "../components/ImportControlPanel";
+import { SalesControlPanel } from "../components/SalesControlPanel";
+import { SalesNotificationSettings } from "../components/SalesNotificationSettings";
 import { ImportErrorModal } from "../components/ImportErrorModal";
 import type { ImportBatch } from "../types";
 import { date, datetime, number } from "../utils/format";
 
-type View = "control" | "upload" | "journal";
+type View = "control" | "upload" | "journal" | "notifications";
 const states: Record<string, string> = {
   queued: "В очереди",
   processing: "Обработка",
@@ -24,7 +25,12 @@ const states: Record<string, string> = {
 };
 
 export function ImportsPage() {
-  const [view, setView] = useState<View>("control");
+  const [view, setView] = useState<View>(() =>
+    new URLSearchParams(window.location.search).get("view") === "notifications"
+      ? "notifications"
+      : "control",
+  );
+  const [notificationDirty, setNotificationDirty] = useState(false);
   const [items, setItems] = useState<ImportBatch[]>([]),
     [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false),
@@ -70,6 +76,12 @@ export function ImportsPage() {
     return () => clearInterval(timer);
   }, [view, pending, load]);
   function changeView(next: View) {
+    if (
+      view === "notifications" &&
+      notificationDirty &&
+      !window.confirm("Есть несохранённые настройки. Перейти в другой раздел?")
+    )
+      return;
     setView(next);
     if (next === "journal") void load();
   }
@@ -125,9 +137,7 @@ export function ImportsPage() {
         <div>
           <span className="imports-eyebrow">УПРАВЛЕНИЕ ДАННЫМИ</span>
           <h1>Импорт данных</h1>
-          <p>
-            Контроль поступления файлов 1С, ручная загрузка и журнал обработки.
-          </p>
+          <p>Контроль продаж, ручная загрузка файлов и журнал обработки.</p>
         </div>
         <span className="imports-format-tag">
           <FileSpreadsheet size={16} aria-hidden="true" />
@@ -140,9 +150,14 @@ export function ImportsPage() {
       >
         {(
           [
-            { key: "control", label: "Контроль полноты", Icon: ClipboardCheck },
+            { key: "control", label: "Контроль продаж", Icon: ClipboardCheck },
             { key: "upload", label: "Загрузка файлов", Icon: UploadCloud },
             { key: "journal", label: "Журнал загрузок", Icon: History },
+            {
+              key: "notifications",
+              label: "Настройки уведомлений",
+              Icon: CheckCircle2,
+            },
           ] as const
         ).map(({ key, label, Icon }) => (
           <button
@@ -178,7 +193,14 @@ export function ImportsPage() {
         id="imports-view-control"
         aria-labelledby="imports-tab-control"
       >
-        <ImportControlPanel />
+        <SalesControlPanel />
+      </section>
+      <section
+        hidden={view !== "notifications"}
+        id="imports-view-notifications"
+        aria-labelledby="imports-tab-notifications"
+      >
+        <SalesNotificationSettings onDirty={setNotificationDirty} />
       </section>
       <section
         hidden={view !== "upload"}
