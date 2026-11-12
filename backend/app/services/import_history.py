@@ -229,11 +229,12 @@ async def tick(factory, *, batch_size=BATCH_SIZE, seconds=BATCH_SECONDS, stop=No
             break
         done += 1
         await asyncio.sleep(0)  # cancellation between committed days is safe
-    log.info(
-        "import_history batch checked=%d elapsed_ms=%.3f",
-        done,
-        (time.perf_counter() - started) * 1000,
-    )
+    if done:
+        log.info(
+            "import_history batch checked=%d elapsed_ms=%.3f",
+            done,
+            (time.perf_counter() - started) * 1000,
+        )
     return done
 
 

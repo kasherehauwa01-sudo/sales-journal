@@ -1,6 +1,7 @@
 """Детерминированные правила RFM, не зависящие от конкретной БД."""
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 
@@ -21,7 +22,7 @@ def tied_quintiles(values: list[float], *, high_is_good: bool = True) -> tuple[l
     if not values:
         return [], []
     ordered = sorted(set(values))
-    counts = {value: values.count(value) for value in ordered}
+    counts = Counter(values)
     scores: dict[float, int] = {}
     passed = 0
     for value in ordered:

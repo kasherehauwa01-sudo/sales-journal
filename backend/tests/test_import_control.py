@@ -719,6 +719,7 @@ def api_app(pg):
         ("GET", "/settings", None),
         ("GET", "/departments", None),
         ("GET", "/historical/status", None),
+        ("GET", "/workers", None),
         ("GET", "/historical/results", None),
         ("POST", "/historical/start", {"approve": True}),
         ("POST", "/historical/pause", None),
