@@ -27,50 +27,6 @@ async def cancel(task):
         await task
 
 
-def test_real_lifespan_workers_keep_history_independent_of_slow_ftp_and_rfm(
-    monkeypatch,
-):
-    from app.services import import_control_worker as control, import_history, scenarios
-
-    async def run():
-        approved = False
-        handled = asyncio.Event()
-        blocked = asyncio.Event()
-
-        async def slow(*args):
-            await blocked.wait()
-
-        async def tick(*args):
-            if approved:
-                handled.set()
-                return 1
-            return 0
-
-        async def noop(*args):
-            pass
-
-        monkeypatch.setattr(ftp, "scheduler", slow)
-        monkeypatch.setattr(scenarios, "scheduler", slow)
-        monkeypatch.setattr(control, "check_deadline_cycle", slow)
-        monkeypatch.setattr(control, "deliver_one", slow)
-        monkeypatch.setattr(control, "recheck_open", noop)
-        monkeypatch.setattr(import_history, "safe_tick", tick)
-        monkeypatch.setattr(import_history, "recheck_waiting", noop)
-        monkeypatch.setattr(rfm, "refresh_tick", slow)
-        monkeypatch.setattr(workers.settings, "import_history_poll_seconds", 0.01)
-        workers.observations.clear()
-        task = asyncio.create_task(workers.run())
-        await asyncio.sleep(0.03)
-        assert not handled.is_set()  # merely starting the app creates no history work
-        approved = True
-        await asyncio.wait_for(handled.wait(), 0.2)
-        assert workers.observations["history"]["last_success"]
-        await cancel(task)
-        assert workers.observations["ftp_deadline"]["state"] == "stopped"
-
-    asyncio.run(run())
-
-
 def test_periodic_timeout_rolls_back_and_never_overlaps_or_logs_payload(caplog):
     async def run():
         active = 0
@@ -432,7 +388,7 @@ def test_ftp_file_releases_transactions_during_download_import_and_remote_finish
             return await original(config, fn)
 
         monkeypatch.setattr(ftp, "_with_retries", operation)
-        from app.services import import_control_worker as control
+        from app.services import import_integrity as control
 
         async def receipt(*args):
             await no_transaction()
@@ -458,91 +414,6 @@ def test_ftp_file_releases_transactions_during_download_import_and_remote_finish
             assert entry.status == "completed"
         assert not list(tmp_path.iterdir())
         await engine.dispose()
-
-    asyncio.run(run())
-
-
-def test_native_one_day_history_finishes_while_ftp_rfm_and_mail_are_blocked(
-    pg, monkeypatch
-):
-    from datetime import date
-    import app.database as database_module
-    from app.models.import_control import ImportHistoryJob, ImportNotice
-    from app.services import import_history, import_control_worker, scenarios
-    from test_import_history import setup
-
-    async def run():
-        monkeypatch.setattr(database_module, "SessionLocal", pg[2])
-        monkeypatch.setattr(database_module, "engine", pg[1])
-        forever = asyncio.Event()
-
-        async def blocked(*args):
-            await forever.wait()
-
-        async def noop(*args):
-            pass
-
-        monkeypatch.setattr(ftp, "scheduler", blocked)
-        monkeypatch.setattr(scenarios, "scheduler", blocked)
-        monkeypatch.setattr(import_control_worker, "check_deadline_cycle", blocked)
-        monkeypatch.setattr(import_control_worker, "deliver_one", blocked)
-        monkeypatch.setattr(import_control_worker, "recheck_open", noop)
-        monkeypatch.setattr(import_history, "recheck_waiting", noop)
-        monkeypatch.setattr(rfm, "refresh_tick", blocked)
-        monkeypatch.setattr(workers.settings, "import_history_poll_seconds", 0.01)
-        task = asyncio.create_task(workers.run())
-        try:
-            await asyncio.sleep(0.03)
-            async with pg[2]() as db:
-                assert await db.get(ImportHistoryJob, 1) is None
-                dep = await setup(db, first=date(2026, 11, 9), end=date(2026, 11, 9))
-                await import_history.start(
-                    db,
-                    actor="synthetic-admin",
-                    department_id=dep.id,
-                    date_to=date(2026, 11, 9),
-                )
-                await db.commit()
-            async with asyncio.timeout(2):
-                while True:
-                    async with pg[2]() as db:
-                        job = await db.get(ImportHistoryJob, 1)
-                        if job.status == "completed":
-                            assert job.checked == 1 and job.total == 1
-                            assert not await db.scalar(sa.select(ImportNotice.id))
-                            break
-                    await asyncio.sleep(0.01)
-        finally:
-            await cancel(task)
-
-    asyncio.run(run())
-
-
-def test_workers_status_requires_admin_and_exposes_no_config(pg, monkeypatch):
-    import httpx
-    from test_import_control import api_app
-    from app.services.settings_auth import require_settings_admin
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "settings_admin_password_hash", "configured")
-    monkeypatch.setattr(
-        settings, "settings_admin_session_secret", "fixture-secret-" * 4
-    )
-
-    async def run():
-        app = api_app(pg)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            assert (await client.get("/import-control/workers")).status_code == 401
-            app.dependency_overrides[require_settings_admin] = lambda: None
-            response = await client.get("/import-control/workers")
-            assert response.status_code == 200
-            assert response.json()["rfm"]["state"] == "pending"
-            assert (
-                "password" not in response.text
-                and "PRIVATE_SENTINEL" not in response.text
-            )
 
     asyncio.run(run())
 

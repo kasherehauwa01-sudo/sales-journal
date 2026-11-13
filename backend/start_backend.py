@@ -13,13 +13,14 @@ sys.path.insert(0, str(app_root))
 
 import sqlalchemy as sa
 
-SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26', '20261111_27'}
-DEFAULT_REVISION = '20261111_27'
+SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26', '20261111_27', '20261112_28'}
+DEFAULT_REVISION = '20261112_28'
 MIGRATION_SOURCES = {
     '20261022_24': {'20261020_23', '20261022_24'},
     '20261030_25': {'20261022_24', '20261030_25'},
     '20261109_26': {'20261030_25', '20261109_26'},
     '20261111_27': {'20261109_26', '20261111_27'},
+    '20261112_28': {'20261111_27', '20261112_28'},
 }
 SCHEMA_LOCK = 734190249
 
@@ -420,6 +421,33 @@ def check_import_control_schema(conn, schema, inspector, historical=False):
         raise StartupBlocked("Revision26 rule guard is missing")
 
 
+
+SALES_CONTROL_CONTRACT = {'sales_control_settings': {'columns': {'id': ('INTEGER', False), 'enabled': ('BOOLEAN', False), 'send_time': ('VARCHAR(5)', False), 'recipients': ('JSON', False), 'not_before': ('TIMESTAMPWITHTIMEZONE', True), 'revision': ('INTEGER', False)}, 'pk': ['id'], 'unique': [], 'fks': [], 'indexes': []}, 'sales_control_exclusions': {'columns': {'department': ('VARCHAR(512)', False), 'sales_date': ('DATE', False), 'hidden_at': ('TIMESTAMPWITHTIMEZONE', False), 'actor': ('VARCHAR(255)', False)}, 'pk': ['department', 'sales_date'], 'unique': [], 'fks': [], 'indexes': [['sales_date']]}, 'sales_control_audit': {'columns': {'id': ('INTEGER', False), 'created_at': ('TIMESTAMPWITHTIMEZONE', False), 'actor': ('VARCHAR(255)', False), 'action': ('VARCHAR(32)', False), 'details': ('JSON', False)}, 'pk': ['id'], 'unique': [], 'fks': [], 'indexes': []}, 'sales_control_deliveries': {'columns': {'id': ('INTEGER', False), 'settings_id': ('INTEGER', False), 'sales_date': ('DATE', False), 'recipients_hash': ('VARCHAR(64)', False), 'checked_at': ('TIMESTAMPWITHTIMEZONE', False), 'missing_count': ('INTEGER', False), 'status': ('VARCHAR(20)', False), 'attempted_at': ('TIMESTAMPWITHTIMEZONE', True), 'sent_at': ('TIMESTAMPWITHTIMEZONE', True), 'next_attempt': ('TIMESTAMPWITHTIMEZONE', True), 'attempts': ('INTEGER', False), 'error_code': ('VARCHAR(48)', True), 'manual_retry': ('BOOLEAN', False)}, 'pk': ['id'], 'unique': [['sales_date', 'recipients_hash']], 'fks': [(['settings_id'], 'sales_control_settings', ['id'], 'RESTRICT')], 'indexes': [['checked_at']]}}
+# Catalog-rendered expressions pinned after local PostgreSQL16 migration tests.
+SALES_CONTROL_CHECKS = {'sales_control_settings': {'ck_sales_control_singleton': 'id=1', 'ck_sales_control_time': "send_time::text~'^([01][0-9]|2[0-3]):[0-5][0-9]$'::text"}, 'sales_control_exclusions': {}, 'sales_control_audit': {}, 'sales_control_deliveries': {'ck_sales_control_counts': 'attempts>=0ANDmissing_count>=0', 'ck_sales_control_delivery_status': "status::text=ANY(ARRAY['sending'::charactervarying,'sent'::charactervarying,'failed'::charactervarying,'uncertain'::charactervarying,'not_required'::charactervarying]::text[])"}}
+
+def check_sales_control_schema(conn,schema,inspector):
+    for name,contract in SALES_CONTROL_CONTRACT.items():
+        columns={c['name']:c for c in inspector.get_columns(name,schema=schema)}
+        for col,(typ,nullable) in contract['columns'].items():
+            if col not in columns or type_name(columns[col]['type'],conn.dialect)!=typ or columns[col]['nullable']!=nullable:raise StartupBlocked('Revision28 column mismatch: '+name+'.'+col)
+        if inspector.get_pk_constraint(name,schema=schema)['constrained_columns']!=contract['pk']:raise StartupBlocked('Revision28 PK mismatch')
+        unique={tuple(x['column_names']) for x in inspector.get_unique_constraints(name,schema=schema)}
+        if any(tuple(x) not in unique for x in contract['unique']):raise StartupBlocked('Revision28 UNIQUE mismatch')
+        for names,target,cols,ondelete in contract['fks']:
+            if not any(f['constrained_columns']==names and f['referred_table']==target and f['referred_columns']==cols and f.get('options',{}).get('ondelete')==ondelete for f in inspector.get_foreign_keys(name,schema=schema)):raise StartupBlocked('Revision28 FK mismatch')
+        indexes={tuple(x['column_names']) for x in inspector.get_indexes(name,schema=schema)}
+        if any(tuple(x) not in indexes for x in contract['indexes']):raise StartupBlocked('Revision28 index mismatch')
+        checks={x['name']:''.join(x['sqltext'].split()) for x in inspector.get_check_constraints(name,schema=schema)}
+        if checks!=SALES_CONTROL_CHECKS.get(name,{}):raise StartupBlocked('Revision28 CHECK mismatch')
+    invalid=conn.scalar(sa.text("SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE connamespace=(SELECT oid FROM pg_namespace WHERE nspname=:schema) AND conrelid::regclass::text=ANY(:names) AND (NOT convalidated OR condeferrable OR condeferred))"),{'schema':schema,'names':list(SALES_CONTROL_CONTRACT)})
+    if invalid:raise StartupBlocked('Revision28 invalid constraints')
+    defaults={c['name']:str(c.get('default','')) for c in inspector.get_columns('sales_control_settings',schema=schema)}
+    if defaults['enabled'] not in ('false','false::boolean'):raise StartupBlocked('Revision28 must default disabled')
+    valid=conn.scalar(sa.text("SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='ix_sales_department_date_control' AND i.indrelid='sales'::regclass AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL AND i.indnkeyatts=2 AND pg_get_indexdef(i.indexrelid,1,true)='department' AND pg_get_indexdef(i.indexrelid,2,true)='sale_date')"))
+    if not valid:raise StartupBlocked('Revision28 sales index invalid/missing')
+
+
 def check_schema(engine, metadata, expected):
     if expected not in SUPPORTED_REVISIONS:
         raise StartupBlocked('Unreviewed expected revision')
@@ -443,8 +471,9 @@ def _check_schema(conn, metadata, expected):
         inspector = sa.inspect(conn)
         tables = set(inspector.get_table_names(schema=schema))
         for table in metadata.sorted_tables:
-            if expected != '20261111_27' and table.name in IMPORT_HISTORY_CONTRACT:
+            if expected not in ('20261111_27','20261112_28') and table.name in IMPORT_HISTORY_CONTRACT:
                 continue
+            if expected!='20261112_28' and table.name in SALES_CONTROL_CONTRACT:continue
             if table.name not in tables:
                 raise StartupBlocked('Missing required table: '+table.name)
             actual = {c['name']: c for c in inspector.get_columns(table.name, schema=schema)}
@@ -476,15 +505,16 @@ def _check_schema(conn, metadata, expected):
                 if not any(x['constrained_columns'] == names and x['referred_table'] == target
                            and x['referred_columns'] == columns for x in actual_fks):
                     raise StartupBlocked('Foreign key mismatch: '+table.name)
-        if expected in ('20261030_25', '20261109_26', '20261111_27'):
+        if expected in ('20261030_25', '20261109_26', '20261111_27','20261112_28'):
             check_churn_schema(conn, schema, inspector)
-        if expected in ('20261109_26', '20261111_27'):
-            check_import_control_schema(conn, schema, inspector, historical=expected == '20261111_27')
+        if expected in ('20261109_26', '20261111_27','20261112_28'):
+            check_import_control_schema(conn, schema, inspector, historical=expected in ('20261111_27','20261112_28'))
+        if expected=='20261112_28':check_sales_control_schema(conn,schema,inspector)
 
 
 def migrate(engine, target, metadata=None):
     if target not in MIGRATION_SOURCES:
-        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 20261109_26 and 20261111_27 are supported')
+        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 20261109_26 20261111_27 and 20261112_28 are supported')
     with engine.connect() as conn:
         acquired = conn.scalar(sa.text('SELECT pg_try_advisory_lock(:key)'), {'key': SCHEMA_LOCK})
         conn.commit()
@@ -522,6 +552,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     from app.config import settings
     from app.models import Base
+    if args.expected_revision!=DEFAULT_REVISION and not (args.rollback or args.check_only or args.migrate):raise StartupBlocked('Older revision requires explicit rollback/check mode')
     if args.rollback or args.migrate:
         disabled(settings)
     if args.rollback and args.migrate:
