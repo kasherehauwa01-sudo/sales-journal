@@ -177,6 +177,11 @@ async def catalog_filters():
  try:return await get_product_filters()
  except VrCatalogError as exc:raise HTTPException(502,str(exc)) from exc
 
+@router.get("/catalog/category-tree")
+async def catalog_category_tree(db:AsyncSession=Depends(get_db)):
+ from app.services.catalog_category_tree import category_tree
+ return await category_tree(db)
+
 @router.get("/catalog/tree")
 async def catalog_tree():
  try:return await get_catalog_tree()

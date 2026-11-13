@@ -1,3 +1,4 @@
+import {CategoryTreeFilter} from "../components/CategoryTreeFilter";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import { useEffect, useState } from "react";
@@ -234,8 +235,6 @@ export function ProductAnalyticsPage() {
     [managers, setManagers] = useState<string[]>([]),
     [buyerTypes, setBuyerTypes] = useState<string[]>([]),
     [subcategories, setSubcategories] = useState<string[]>([]),
-    [subcategorySearch, setSubcategorySearch] = useState(""),
-    [debouncedSubcategorySearch, setDebouncedSubcategorySearch] = useState(""),
     [selected, setSelected] = useState<Row>(),
     [detailPeriod, setDetailPeriod] = useState<
       "week" | "month" | "quarter" | "year"
@@ -245,13 +244,7 @@ export function ProductAnalyticsPage() {
     "/reports/product-analytics/manager-options",
   );
   const { data: buyerTypeOptions, error: buyerTypeError } = useApi<string[]>("/integrations/clients-vr/buyer-types");
-  useEffect(() => {
-    const timer = setTimeout(
-      () => setDebouncedSubcategorySearch(subcategorySearch),
-      300,
-    );
-    return () => clearTimeout(timer);
-  }, [subcategorySearch]);
+
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedBrandSearch(brandSearch), 300);
     return () => clearTimeout(timer);
@@ -277,9 +270,6 @@ export function ProductAnalyticsPage() {
     }
   }, [dateFrom, dateTo, comparePreset]);
   const { data: catalogState } = useApi<{ enabled?: boolean; has_unscanned_sales?: boolean; lookup_counts?: Record<string, number>; state: { completed: boolean; last_success_at: string | null; last_full_success_at: string | null } | null }>("/reports/product-analytics/catalog-status");
-  const { data: subcategoryOptions } = useApi<string[]>(
-    `/reports/product-analytics/catalog-options/subcategory?${query({ search: debouncedSubcategorySearch })}`,
-  );
   const { data: brandOptions } = useApi<string[]>(
     `/reports/product-analytics/catalog-options/brand?${query({ search: debouncedBrandSearch })}`,
   );
@@ -654,22 +644,10 @@ export function ProductAnalyticsPage() {
             <MultiSelect options={buyerTypeOptions || []} value={buyerTypes} onChange={setBuyerTypes} placeholder="Все виды покупателей" searchable showActions />
             {buyerTypeError && <small role="alert">Не удалось загрузить виды покупателей: {buyerTypeError}</small>}
           </label>
-          <label>
-            Подкатегория
-            <MultiSelect
-              options={[
-                ...new Set([...subcategories, ...(subcategoryOptions || [])]),
-              ]}
-              value={subcategories}
-              onChange={setSubcategories}
-              placeholder="Все подкатегории"
-              searchable
-              showActions
-              search={subcategorySearch}
-              onSearch={setSubcategorySearch}
-              emptyText="Подкатегории не найдены"
-            />
-          </label>
+          <div className="report-filter">
+            <span>Подкатегория</span>
+            <CategoryTreeFilter label="Подкатегория" kind="section" value={subcategories} onChange={setSubcategories}/>
+          </div>
           <label>
             Группировать по
             <select

@@ -74,6 +74,7 @@ class Request(BaseModel):
     manager: str | list[str] | None = None
     buyer_type: str | list[str] | None = None
     category: str | None = None
+    categories: list[str] = Field(default_factory=list)
     brand: str | None = None
     manufacturer: str | None = None
     reason: str | None = None
@@ -352,10 +353,15 @@ async def _dataset(data, db):
         analysis_end=data.date_to,
     )
     _stage("seasonality_read", started, rows=len(rows))
+    selected_categories = {v.strip().casefold() for v in data.categories if v.strip()}
     kept = 0
     for x in rows:
         if (
             (not data.category or x["category"].casefold() == data.category.casefold())
+            and (
+                not selected_categories
+                or x["category"].casefold() in selected_categories
+            )
             and (not data.brand or x["brand"].casefold() == data.brand.casefold())
             and (
                 not data.manufacturer

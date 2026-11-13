@@ -1,3 +1,4 @@
+import {CategoryTreeFilter} from "../components/CategoryTreeFilter";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import {ProductPhoto} from "../components/ProductPhoto";
@@ -32,7 +33,7 @@ export function PromotionCandidatesPage() {
     [departments, setDepartments] = useState<string[]>([]),
     [reason, setReason] = useState(""),
     [status, setStatus] = useState(""),
-    [category, setCategory] = useState(""),
+    [categories, setCategories] = useState<string[]>([]),
     [brand, setBrand] = useState(""),
     [manufacturer, setManufacturer] = useState(""),
     [manager, setManager] = useState<string[]>([]),
@@ -71,7 +72,7 @@ export function PromotionCandidatesPage() {
     departments,
     reason: reason || undefined,
     status: status || undefined,
-    category: category || undefined,
+    categories,
     brand: brand || undefined,
     manufacturer: manufacturer || undefined,
     manager: manager || undefined,
@@ -243,13 +244,10 @@ export function PromotionCandidatesPage() {
             Вид покупателя
             <MultiSelect options={[...new Set(["Нет", ...(buyerTypes || [])])]} value={buyerType} onChange={setBuyerType} placeholder="Все виды покупателей" searchable showActions />
           </label>
-          <label>
-            Категория
-            <input
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            />
-          </label>
+          <div className="report-filter">
+            <span>Категория</span>
+            <CategoryTreeFilter value={categories} onChange={setCategories}/>
+          </div>
           <div className="report-filter">
             <span>Бренд</span>
             <CatalogValueSelect field="brand" label="Бренд" value={brand} onChange={setBrand}/>
