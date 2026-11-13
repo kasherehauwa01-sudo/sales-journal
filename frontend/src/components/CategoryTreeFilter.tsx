@@ -58,12 +58,14 @@ export function CategoryTreeFilter({
   label = "Категория",
   options = [],
   kind = "legacy",
+  providedNodes,
 }: {
   value: string[];
   onChange: (v: string[]) => void;
   label?: string;
   options?: string[];
-  kind?: "legacy" | "section";
+  kind?: "legacy" | "section" | "id";
+  providedNodes?: CategoryNode[];
 }) {
   const [open, setOpen] = useState(false),
     [requested, setRequested] = useState(false),
@@ -79,14 +81,19 @@ export function CategoryTreeFilter({
     nodes: CategoryNode[];
     warning?: string | null;
   }>(
-    requested
+    requested && !providedNodes
       ? `/reports/product-sales/catalog/category-tree?retry=${retry}`
       : "",
   );
   const nodes = useMemo(() => {
     function adapt(node: CategoryNode): CategoryNode | null {
       if (node.value) {
-        const v = kind === "section" ? node.section : node.value;
+        const v =
+          kind === "id"
+            ? node.id
+            : kind === "section"
+              ? node.section
+              : node.value;
         return v ? { ...node, value: v } : null;
       }
       return {
@@ -96,7 +103,7 @@ export function CategoryTreeFilter({
           .filter((x): x is CategoryNode => !!x),
       };
     }
-    const result = (data?.nodes || [])
+    const result = (providedNodes || data?.nodes || [])
       .map(adapt)
       .filter((x): x is CategoryNode => !!x);
     const known = new Set(result.flatMap(values));
@@ -121,7 +128,7 @@ export function CategoryTreeFilter({
         })),
       });
     return result;
-  }, [data, options, value, kind]);
+  }, [data, options, value, kind, providedNodes]);
   const byId = useMemo(() => {
     const index = new Map<string, CategoryNode>();
     function walk(items: CategoryNode[]) {
