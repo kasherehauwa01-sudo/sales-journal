@@ -16,7 +16,7 @@ router = APIRouter(route_class=PdfRoute, prefix='/reports', tags=['Отчеты'
 REPORTS = {
     'rfm-analysis':'RFM-анализ клиентов', 'product-sales':'Продажи по товарам',
     'product-analytics':'Товарная аналитика', 'category-analytics':'Аналитика категорий',
-    'seasonality':'Сезонность', 'promotion-candidates':'Кандидаты в акцию',
+    'promotion-candidates':'Кандидаты в акцию',
     'sales-dynamics':'Динамика продаж', 'store-analytics':'Аналитика по магазинам',
 }
 

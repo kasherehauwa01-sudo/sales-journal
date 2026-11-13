@@ -248,8 +248,8 @@ def test_background_rfm_durable_coalescing_partial_import_restart_and_busy(monke
 def test_rfm_late_source_update_cancellation_and_cross_connection_singleflight(
     monkeypatch,
 ):
-    from app.services.seasonality_worker import advisory
-    from app.services.seasonality_storage import changed
+    from app.services.source_control import advisory
+    from app.services.sales_revision import changed
 
     async def run():
         async with database() as (engine, sessions):
@@ -419,7 +419,7 @@ def test_ftp_file_releases_transactions_during_download_import_and_remote_finish
 
 
 def test_coalesce_timestamp_never_hides_a_new_source_revision(monkeypatch):
-    from app.services.seasonality_storage import changed
+    from app.services.sales_revision import changed
 
     async def run():
         async with database() as (engine, sessions):

@@ -226,42 +226,6 @@ const report = {
 
 return report;
 }
-function seasonFixture(detail:boolean) {
-const meta = { ready: true, last_success: "2026-10-13", phase: "idle" };
-const season = {
-  status: "Сезон сейчас",
-  confidence: 80,
-  reason: "Модель по всей истории",
-  period: "10–12",
-};
-const product = {
-  identity: "a".repeat(64),
-  product_key: "code:001",
-  years: [2015, 2024, 2025],
-  seasonality: season,
-};
-const profile = {
-  years: product.years,
-  indices: [1],
-  historical_indices: [1],
-  windows: [],
-  historical_windows: [],
-  confidence: 80,
-  stability: 90,
-  trend_percent: 10,
-  annual: product.years.map((year) => ({
-    year,
-    eligible: true,
-    total_units: 100,
-    peak_month: 11,
-    observed_months: [1, 2],
-    windows: [],
-    weight: year === 2025 ? 1 : 0.5,
-  })),
-};
-
-return detail?{identity:product.identity,product_key:product.product_key,metadata:meta,profile,seasonality:season,display_scope:"Все магазины",display_note:"Только отображение",months:Array.from({length:24},(_,i)=>({year:2024+Math.floor(i/12),month:i%12+1,units:String(100+i),incomplete_source:false})),next_cursor:null}:{items:[product],next_cursor:null,metadata:meta};
-}
 export function pdfFixture(path:string):unknown {
  const route=path.split('?')[0],full=path.includes('full=true');
  if(route==='/reports/product-sales/details'||route==='/reports/category-analytics/product-sales/list'||/\/store-analytics\/stores\/.+\/sales$/.test(route)) {
@@ -273,7 +237,6 @@ export function pdfFixture(path:string):unknown {
  if(route.startsWith('/reports/product-analytics/catalog-options')) return ['Бренд1'];
  if(route==='/reports/product-analytics/catalog-status') return {enabled:false};
  if(route==='/reports/product-analytics/manager-options') return ['Менеджер1'];
- if(route==='/reports/seasonality'||route.startsWith('/reports/seasonality/')) return seasonFixture(route!=='/reports/seasonality');
  if(route==='/reports/product-sales/catalog/products/search') return {items:[product],total:1,page:1,pages:1};
  if(route==='/reports/product-sales/catalog/filters') return [];
  const r=baseFixture(path) as any;

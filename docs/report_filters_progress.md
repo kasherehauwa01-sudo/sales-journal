@@ -37,7 +37,7 @@ Implemented:
 Remaining original scope:
 
 - PDF download and visual layout.
-- Complete filter coverage in RFM, seasonality and the legacy Analytics section.
+- Complete filter coverage in RFM and the legacy Analytics section.
 - Production-specific diagnosis if Retail still fails after updating the reports.
 
 Validation for this checkpoint:

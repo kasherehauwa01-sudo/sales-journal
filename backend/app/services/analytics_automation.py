@@ -15,8 +15,8 @@ from sqlalchemy import select, text, func
 from app.config import settings
 from app.models import (AnalyticsAutomationPolicy as Policy, AnalyticsAutomationIdentity as Identity,
     AnalyticsAutomationRelease as Release, AnalyticsAutomationEvent as Event, AnalyticsAutomationDecision as Decision,
-    AnalyticsSignalRun, AnalyticsSignalState, AnalyticsClientEvaluation, AnalyticsPurchaseDay, ImportBatch, SeasonalityState)
-from app.services.seasonality_worker import SOURCE_LOCK
+    AnalyticsSignalRun, AnalyticsSignalState, AnalyticsClientEvaluation, AnalyticsPurchaseDay, ImportBatch, SalesSourceState)
+from app.services.source_control import SOURCE_LOCK
 from app.services.inactivity import json_value
 from app.services.churn_pilot import ALGORITHM_POLICY, GENERATOR_VERSION, POLICY as INACTIVITY_POLICY
 from app.services.analytics_scope import SCOPE_POLICY
@@ -80,7 +80,7 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
     if not run or run.status!='SUCCEEDED':reasons.append('RUN_NOT_SUCCEEDED')
     if run:
         control=await db.get(AnalyticsSignalState,1)
-        revision=await db.scalar(select(SeasonalityState.source_revision).where(SeasonalityState.id==1))
+        revision=await db.scalar(select(SalesSourceState.source_revision).where(SalesSourceState.id==1))
         pending=await db.scalar(select(ImportBatch.id).where(ImportBatch.status.in_(['queued','processing'])).limit(1))
         closed=(now.astimezone(ZoneInfo(settings.autoload_timezone)).date())
         from datetime import timedelta

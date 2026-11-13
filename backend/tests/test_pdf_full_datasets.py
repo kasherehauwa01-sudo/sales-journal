@@ -56,30 +56,8 @@ def test_product_analytics_full_does_not_change_summary_or_classification(monkey
 def test_promotion_full_retains_all_candidates_and_same_counters(monkeypatch):
     rows=[{'key':str(i),'status':'Кандидат','reasons':['Продажи падают']} for i in range(550)]
     monkeypatch.setattr(promotion_candidates_report,'_dataset',AsyncMock(return_value=(rows,True)))
-    monkeypatch.setattr(promotion_candidates_report,'metadata',AsyncMock(return_value={}))
     body={'date_from':'2026-01-01','date_to':'2026-10-30'}
     normal=call(promotion_candidates_report.router,'/reports/promotion-candidates',body)
     full=call(promotion_candidates_report.router,'/reports/promotion-candidates?full=true',body)
     assert len(normal['items'])==300 and len(full['items'])==full['total']==550
     assert normal['summary']==full['summary'] and normal['items']==full['items'][:300]
-
-
-def test_seasonality_full_uses_same_snapshot_filters_and_ignores_navigation_cursors(monkeypatch):
-    from app.routers import seasonality_report
-    from app.services.seasonality import identity
-    from test_seasonality_worker import fixture, finish
-    monkeypatch.setattr(seasonality_report,'today',lambda:date(2026,10,12))
-    async def run():
-        async with fixture() as (engine,factory):
-            await finish(factory,engine)
-            async with factory() as db:
-                digest=identity('code:001')
-                normal=await seasonality_report.history(digest,limit=5,db=db)
-                full=await seasonality_report.history(digest,after_year=2024,after_month=12,limit=5,db=db,full=True)
-                assert len(normal['months'])==5 and len(full['months'])==24
-                assert full['next_cursor'] is None and normal['profile']==full['profile']
-                selected=await seasonality_report.history(digest,years=[2025],limit=5,db=db,full=True)
-                assert len(selected['months'])==12 and {m['year'] for m in selected['months']}=={2025}
-                listing=await seasonality_report.products(after=digest,limit=1,db=db,full=True)
-                assert len(listing['items'])==1 and listing['next_cursor'] is None
-    asyncio.run(run())

@@ -42,7 +42,7 @@ def test_route_returns_private_attachment_without_database(monkeypatch):
                 assert (await client.post('/reports/pdf',json=payload)).status_code==422
             monkeypatch.setattr(router,'MAX_HTML_BYTES',10)
             assert (await client.post('/reports/pdf',content=b'x'*11)).status_code==413
-    asyncio.run(run());assert render.await_count==8
+    asyncio.run(run());assert render.await_count==len(router.REPORTS)
 
 
 @pytest.mark.skipif(os.environ.get('RUN_PDF_BROWSER_TESTS')!='1',reason='Requires local Chromium; opt-in without DB/production')

@@ -21,7 +21,7 @@ from app.database import get_db
 from app.models import (Base, AnalyticsSignalRun as Run, AnalyticsSignalState as State,
     AnalyticsAutomationPolicy as Policy, AnalyticsAutomationIdentity as Identity,
     AnalyticsAutomationRelease as Release, AnalyticsAutomationEvent as Event,
-    AnalyticsAutomationDecision as Decision, SeasonalityState)
+    AnalyticsAutomationDecision as Decision, SalesSourceState)
 from app.routers import churn_scenario
 from app.services.churn_monitor import build_status
 from app.services.churn_telemetry import Telemetry, load_telemetry, read_private_json, MAX_BYTES
@@ -175,7 +175,7 @@ def test_admin_api_projects_database_fields_and_never_writes(monkeypatch):
             db.add_all([
                 Policy(id=1,enabled=True,approved=True,revision=4,sequence=3,settings_json={'algorithm_policy':ALGORITHM_POLICY,'min_confidence':.4,'private_key':'SECRET'}),
                 Run(id='run-1',status='SUCCEEDED',phase='complete',as_of=CLOSED,source_revision=7,upper_sale_id=0,sale_cursor=0,client_cursor='',started_at=NOW,heartbeat_at=NOW,finished_at=NOW,counters={'processed':10,'CHURN_RISK':3},error_count=0,metadata_json={'generator_version':GENERATOR_VERSION,'scope':{'client_keys':['PERSONAL NAME']},'signature':'SECRET'}),
-                State(id=1,enabled=False,published_run_id='run-1'),SeasonalityState(id=1,source_revision=7),
+                State(id=1,enabled=False,published_run_id='run-1'),SalesSourceState(id=1,source_revision=7),
                 Identity(subject_key='private-hash',client_id='synthetic-id',manager_id=3,revision=1,status='VERIFIED',evidence={}),
                 Release(id='release-1',sequence=3,source_run_id='run-1',created_at=NOW,proof_hash='SECRET',metadata_json={'algorithm_policy':ALGORITHM_POLICY,'policy_revision':4,'run':{'mode':'AUTOMATION_APPROVED','source_decision':{'valid_until':(NOW+timedelta(hours=1)).isoformat()}},'manifest':{'signature':'SECRET'}}),
                 Event(id=1,release_id='release-1',payload={'private_key':'SECRET'}),

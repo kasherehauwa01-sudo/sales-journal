@@ -16,12 +16,12 @@ from app.models import (
     RfmSnapshot,
     RfmSnapshotClient,
     RfmSnapshotState,
-    SeasonalityState,
+    SalesSourceState,
     ImportBatch,
 )
 from app.services.rfm import SegmentSettings, enrich
 from app.services.rfm_data import rfm_rows
-from app.services.seasonality_worker import SOURCE_LOCK
+from app.services.source_control import SOURCE_LOCK
 
 log = logging.getLogger(__name__)
 RFM_LOCK = 734190222
@@ -223,7 +223,7 @@ async def source_signature(db):
     # Small existing metadata, NEVER a scan of sales/sale_items. added_rows is
     # committed with each inserted sale, including a crash before import finish.
     revision = await db.scalar(
-        select(SeasonalityState.source_revision).where(SeasonalityState.id == 1)
+        select(SalesSourceState.source_revision).where(SalesSourceState.id == 1)
     )
     total, upper = (
         await db.execute(

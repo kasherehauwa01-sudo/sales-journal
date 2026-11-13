@@ -7,13 +7,13 @@ from sqlalchemy import case, cast, Text, delete, func, literal, select, text
 from sqlalchemy.dialects.postgresql import insert, ARRAY
 from app.config import settings
 from app.models import (AnalyticsSignalRun, AnalyticsSignalState, AnalyticsPurchaseDay,
-    AnalyticsObservedPhone, AnalyticsSignal, ImportBatch, Sale, SeasonalityState)
+    AnalyticsObservedPhone, AnalyticsSignal, ImportBatch, Sale, SalesSourceState)
 from app.services.client_identity import analytical_name_sql, ANALYTICAL_NORMALIZATION_VERSION
 from app.services.client_features import load_inactivity_features
 from app.services.inactivity import GENERATOR_VERSION, PARAMETERS_VERSION, POLICY
 from app.services.churn_pilot import algorithm, GENERATOR_VERSION as PILOT_GENERATOR_VERSION
 from app.services.analytics_signal_store import reconcile_batch
-from app.services.seasonality_worker import advisory, SOURCE_LOCK, verify
+from app.services.source_control import advisory, SOURCE_LOCK, verify
 from app.services.product_analytics_runtime import ensure_headroom
 from app.services.analytics_source import resolve_stored_sales_source, STORED_SALES_POLICY_VERSION, stored_sales_contract_valid
 from app.services.analytics_scope import load_analytics_scope, SCOPE_POLICY
@@ -28,7 +28,7 @@ def last_closed_day():
 
 
 async def source_revision(db):
-    return int(await db.scalar(select(SeasonalityState.source_revision).where(SeasonalityState.id == 1)) or 0)
+    return int(await db.scalar(select(SalesSourceState.source_revision).where(SalesSourceState.id == 1)) or 0)
 
 
 async def state(db):

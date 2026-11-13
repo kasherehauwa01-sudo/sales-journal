@@ -87,7 +87,7 @@ async def sample(variant, count, trace, excel=False):
     vrcatalog._catalog_info_sizes.clear()
     vrcatalog._catalog_info_bytes = 0
     request = current.Request(
-        use_seasonality=False, date_from=date(2026, 1, 1), date_to=date(2026, 9, 30)
+        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30)
     )
     if trace:
         tracemalloc.start()

@@ -7,7 +7,7 @@ from app.config import settings
 from app.models import (AnalyticsSignalRun as Run, AnalyticsSignalState as State,
     AnalyticsAutomationPolicy as Policy, AnalyticsAutomationIdentity as Identity,
     AnalyticsAutomationRelease as Release, AnalyticsAutomationEvent as Event,
-    AnalyticsAutomationDecision as Decision, SeasonalityState, ImportBatch)
+    AnalyticsAutomationDecision as Decision, SalesSourceState, ImportBatch)
 from app.services.churn_pilot import ALGORITHM_POLICY, GENERATOR_VERSION
 from app.services.churn_telemetry import load_telemetry
 from app.services.churn_diagnostics import diagnostic
@@ -55,7 +55,7 @@ async def read_model(db):
         Decision.source_run_id == 'POLICY', Decision.data['action'].as_string() == 'approve',
         Decision.data['policy_revision'].as_integer() == (policy['revision'] if policy else -1))
         .order_by(Decision.created_at.desc()).limit(1))
-    revision = await db.scalar(select(SeasonalityState.source_revision).where(SeasonalityState.id == 1))
+    revision = await db.scalar(select(SalesSourceState.source_revision).where(SalesSourceState.id == 1))
     pending = await db.scalar(select(ImportBatch.id).where(ImportBatch.status.in_(['queued', 'processing'])).limit(1))
     return dict(policy=dict(policy) if policy else None, control=dict(control) if control else None,
                 runs=[dict(r) for r in runs], releases=[dict(r) for r in releases],
