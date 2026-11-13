@@ -1,3 +1,5 @@
+import logging
+import time
 from app.services.report_execution import FullReportRoute
 from typing import Annotated
 from datetime import date, datetime
@@ -5,16 +7,34 @@ from io import BytesIO
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from pydantic import BaseModel, Field, ConfigDict
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from sqlalchemy import String, and_, column, false, func, or_, select, table, text
+from sqlalchemy import (
+    String,
+    case,
+    literal,
+    and_,
+    column,
+    false,
+    func,
+    or_,
+    select,
+    table,
+    text,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 from app.models import Sale, SaleItem
-from app.services.report_filters import brand_sale_conditions, brand_item_condition, report_sale_amount, client_names_condition
+from app.services.report_filters import (
+    brand_sale_conditions,
+    brand_item_condition,
+    report_sale_amount,
+    client_names_condition,
+)
 from app.services.category_analytics import (
     NOT_FOUND,
     UNCATEGORIZED,
@@ -35,7 +55,11 @@ from app.services.vrcatalog import (
     get_catalog_category_map,
 )
 
-router = APIRouter(route_class=FullReportRoute, prefix="/reports/category-analytics", tags=["Отчеты"])
+log = logging.getLogger(__name__)
+
+router = APIRouter(
+    route_class=FullReportRoute, prefix="/reports/category-analytics", tags=["Отчеты"]
+)
 
 
 def _sale_conditions(start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None):
@@ -123,23 +147,57 @@ async def _catalog_map(products: list[dict]):
     return mapped, catalog
 
 
-async def _mapping_table(db: AsyncSession, mapping: list[tuple[str | None, str | None, str]]):
+async def _mapping_table(
+    db: AsyncSession, mapping: list[tuple[str | None, str | None, str]]
+):
     """Загружает компактную карту CatalogVR во временную таблицу без огромного VALUES."""
     name = f"category_map_{uuid4().hex}"
-    await db.execute(text(f"CREATE TEMP TABLE {name} (code text, article text, category text NOT NULL) ON COMMIT DROP"))
-    rows = [{"code": code, "article": article, "category": category} for code, article, category in mapping]
-    if rows:
-        # Список параметров включает executemany: размер одного SQL-запроса не
-        # растёт вместе с ассортиментом и не упирается в лимит параметров asyncpg.
-        await db.execute(text(f"INSERT INTO {name} (code, article, category) VALUES (:code, :article, :category)"), rows)
-        await db.execute(text(f"CREATE INDEX ON {name} (code)")); await db.execute(text(f"CREATE INDEX ON {name} (article)"))
+    await db.execute(
+        text(
+            f"CREATE TEMP TABLE {name} (category text NOT NULL, lookup_key text) ON COMMIT DROP"
+        )
+    )
+    if mapping:
+        for offset in range(0, len(mapping), 1000):
+            rows = [
+                {
+                    "category": category,
+                    "lookup_key": (
+                        "c:" + code
+                        if code is not None
+                        else "a:" + article if article is not None else None
+                    ),
+                }
+                for code, article, category in mapping[offset : offset + 1000]
+            ]
+            await db.execute(
+                text(
+                    f"INSERT INTO {name} (category, lookup_key) VALUES (:category, :lookup_key)"
+                ),
+                rows,
+            )
+        await db.execute(text(f"CREATE INDEX ON {name} (lookup_key)"))
         await db.execute(text(f"ANALYZE {name}"))
-    return table(name, column("code", String), column("article", String), column("category", String))
+    return table(
+        name,
+        column("category", String),
+        column("lookup_key", String),
+    )
 
 
 def _mapped_items(category_map):
-    code = func.lower(func.trim(SaleItem.code)); article = func.lower(func.trim(SaleItem.article))
-    join = or_(and_(category_map.c.code.is_not(None), code == category_map.c.code), and_(or_(SaleItem.code.is_(None), func.trim(SaleItem.code) == ""), category_map.c.code.is_(None), article == category_map.c.article))
+    code = func.lower(func.trim(SaleItem.code))
+    article = func.lower(func.trim(SaleItem.article))
+    # One equality permits a hash/index join; OR previously forced repeated
+    # scans of the mapping. Keep exact code priority, including blank/nulls.
+    key = case(
+        (
+            and_(SaleItem.code.is_not(None), func.trim(SaleItem.code) != ""),
+            literal("c:") + code,
+        ),
+        else_=literal("a:") + article,
+    )
+    join = key == category_map.c.lookup_key
     category = func.coalesce(category_map.c.category, UNCATEGORIZED).label("category")
     return category_map, join, category
 
@@ -250,6 +308,37 @@ async def _scope(
     return base
 
 
+async def _selected_checks(
+    db, start, end, stores, clients, category_map, names, brands=None
+):
+    if not names:
+        return 0
+    category_map, join, category = _mapped_items(category_map)
+    return int(
+        await db.scalar(
+            select(func.count(func.distinct(Sale.id)))
+            .select_from(SaleItem)
+            .join(Sale)
+            .outerjoin(category_map, join)
+            .where(
+                *_sale_conditions(start, end, stores, clients, brands),
+                category.in_(names),
+            )
+        )
+        or 0
+    )
+
+
+def _select_categories(rows, category=None, categories=None):
+    names = {v.strip().casefold() for v in categories or [] if v.strip()}
+    return [
+        r
+        for r in rows
+        if (not category or r["category"].casefold() == category.strip().casefold())
+        and (not names or r["category"].casefold() in names)
+    ]
+
+
 @router.get("")
 async def report(
     date_from: date,
@@ -260,16 +349,18 @@ async def report(
     buyer_type: Annotated[list[str] | None, Query()] = None,
     category: str | None = None,
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None):
+    brands: Annotated[list[str] | None, Query()] = None,
+    categories: Annotated[list[str] | None, Query()] = None,
+):
     (
         start,
         end,
         old_start,
         old_end,
         warning,
-        _,
-        _,
-        _,
+        clients,
+        category_map,
+        clients_catalog_unused,
         all_rows,
         checks,
         old_checks,
@@ -287,23 +378,37 @@ async def report(
         None,
         db,
         include_year=True,
-     **({"brands": brands} if brands else {}))
-    year_rows = [
-        row
-        for row in year_rows
-        if not category or row["category"].casefold() == category.strip().casefold()
-    ]
-    if category:
-        year_checks = year_rows[0]["previous_checks"] if year_rows else 0
+        **({"brands": brands} if brands else {}),
+    )
+    year_rows = _select_categories(year_rows, category, categories)
     options = sorted(row["category"] for row in all_rows)
-    rows = [
-        row
-        for row in all_rows
-        if not category or row["category"].casefold() == category.strip().casefold()
-    ]
-    if category:
+    rows = _select_categories(all_rows, category, categories)
+    if categories and len(rows) <= 1:
         checks = rows[0]["current_checks"] if rows else 0
         old_checks = rows[0]["previous_checks"] if rows else 0
+        year_checks = year_rows[0]["previous_checks"] if year_rows else 0
+    elif categories:
+        names = [r["category"] for r in rows]
+        checks = await _selected_checks(
+            db, start, end, stores, clients, category_map, names, brands
+        )
+        old_checks = await _selected_checks(
+            db, old_start, old_end, stores, clients, category_map, names, brands
+        )
+        year_checks = await _selected_checks(
+            db,
+            year_start,
+            year_end,
+            stores,
+            clients,
+            category_map,
+            [r["category"] for r in year_rows],
+            brands,
+        )
+    elif category:
+        checks = rows[0]["current_checks"] if rows else 0
+        old_checks = rows[0]["previous_checks"] if rows else 0
+        year_checks = year_rows[0]["previous_checks"] if year_rows else 0
     public_rows = [
         {key: value for key, value in row.items() if key != "products"} for row in rows
     ]
@@ -315,7 +420,10 @@ async def report(
         "year_comparison": {
             "period": {"start": year_start, "end": year_end},
             "metrics": report_summary(year_rows, checks, year_checks),
-            "categories": [{key: value for key, value in row.items() if key != "products"} for row in year_rows],
+            "categories": [
+                {key: value for key, value in row.items() if key != "products"}
+                for row in year_rows
+            ],
             "growth_drivers": sorted(
                 (row for row in year_rows if row["revenue_change"] > 0),
                 key=lambda row: row["revenue_change"],
@@ -341,6 +449,24 @@ async def report(
     }
 
 
+class CategoryReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    date_from:date
+    date_to:date
+    period_kind:str='custom'
+    stores:list[str]=Field(default_factory=list)
+    manager:list[str]|None=None
+    buyer_type:list[str]|None=None
+    category:str|None=None
+    brands:list[str]|None=None
+    categories:list[str]|None=Field(default=None,max_length=10000)
+
+
+@router.post('')
+async def report_post(data:CategoryReportRequest,db:AsyncSession=Depends(get_db)):
+    return await report(**data.model_dump(),db=db)
+
+
 async def _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name, brands: list[str] | None = None):
     category_map, join, category = _mapped_items(category_map)
     async def period_rows(period_start, period_end):
@@ -357,7 +483,7 @@ async def _product_details(db, start, end, old_start, old_end, stores, clients, 
     return sorted(result, key=lambda row: row["revenue"], reverse=True)
 
 
-@router.get("/{category_name}/details")
+@router.get("/{category_name:path}/details")
 async def details(
     category_name: str,
     date_from: date,
@@ -371,7 +497,9 @@ async def details(
     buyer_type: Annotated[list[str] | None, Query()] = None,
     group_by: str | None = Query(None, pattern="^(day|week|month)$"),
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None):
+    brands: Annotated[list[str] | None, Query()] = None,
+):
+    started = time.perf_counter()
     start, end, old_start, old_end, _, clients, category_map, _, rows, _, _ = (
         await _scope(
             date_from,
@@ -383,12 +511,21 @@ async def details(
             category_name,
             db,
             comparison_mode=comparison_mode,
-         **({"brands": brands} if brands else {}))
+            **({"brands": brands} if brands else {}),
+        )
     )
     if not rows:
         raise HTTPException(404, "Категория не найдена")
     products = await _product_details(
-        db, start, end, old_start, old_end, stores, clients, category_map, category_name,
+        db,
+        start,
+        end,
+        old_start,
+        old_end,
+        stores,
+        clients,
+        category_map,
+        category_name,
         **({"brands": brands} if brands else {}),
     )
     category_map, join, category = _mapped_items(category_map)
@@ -405,13 +542,25 @@ async def details(
             .join(Sale)
             .outerjoin(category_map, join)
             .where(
-                *_sale_conditions(start, end, stores, clients, **({"brands": brands} if brands else {})),
+                *_sale_conditions(
+                    start,
+                    end,
+                    stores,
+                    clients,
+                    **({"brands": brands} if brands else {}),
+                ),
                 category == category_name,
             )
             .group_by(bucket)
             .order_by(bucket)
         )
     ).all()
+    log.info(
+        "category_details duration_ms=%.3f products=%d points=%d",
+        (time.perf_counter() - started) * 1000,
+        len(products),
+        len(points),
+    )
     return {
         "category": {key: value for key, value in rows[0].items() if key != "products"},
         "products": products,
@@ -435,16 +584,167 @@ def _sheet(book, title, headers, rows):
 
 
 @router.get("/export/xlsx")
-async def export(date_from: date, date_to: date, period_kind: str = "custom", stores: list[str] = Query(default=[]), manager: Annotated[list[str] | None, Query()] = None, buyer_type: Annotated[list[str] | None, Query()] = None, category: str | None = None, db: AsyncSession = Depends(get_db), brands: Annotated[list[str] | None, Query()] = None):
-    start, end, old_start, old_end, _, clients, category_map, _, rows, checks, old_checks = await _scope(date_from, date_to, period_kind, stores, manager, buyer_type, category, db, **({"brands": brands} if brands else {}))
-    metrics = report_summary(rows, checks, old_checks); products = await _product_details(db, start, end, old_start, old_end, stores, clients, category_map, None, **({"brands": brands} if brands else {}))
-    book = Workbook(); book.remove(book.active)
-    _sheet(book, "Итоги", ["Показатель", "Текущий", "Предыдущий", "Изменение", "Изменение, %"], [[name, value["current"], value["previous"], value["difference"], value["change_percent"]] for name, value in metrics.items()] + [["Период", str(start), str(end), str(old_start), str(old_end)]])
-    headers = ["Категория", "Выручка", "Доля, %", "Продано", "Чеков", "Средний чек", "Прошлая выручка", "Изменение", "Изменение, %", "Изменение доли, п.п.", "Вклад, %"]
-    category_rows = [[row["category"], row["current_revenue"], row["current_share"], row["current_units"], row["current_checks"], row["current_average_check"], row["previous_revenue"], row["revenue_change"], row["revenue_change_percent"], row["share_change_pp"], row["contribution_percent"]] for row in rows]
-    _sheet(book, "Категории", headers, category_rows); _sheet(book, "Драйверы роста", headers, [row for row in category_rows if row[7] > 0]); _sheet(book, "Категории с падением", headers, [row for row in category_rows if row[7] < 0]); _sheet(book, "Товары", ["Категория", "Артикул", "Код", "Наименование", "Выручка", "Прошлая выручка", "Изменение", "Продано", "Чеков", "Доля"], [[row[key] for key in ("category", "article", "code", "name", "revenue", "previous_revenue", "revenue_change", "units", "checks", "share")] for row in products])
-    output = BytesIO(); book.save(output)
-    return Response(output.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=category-analytics.xlsx"})
+async def export(
+    date_from: date,
+    date_to: date,
+    period_kind: str = "custom",
+    stores: list[str] = Query(default=[]),
+    manager: Annotated[list[str] | None, Query()] = None,
+    buyer_type: Annotated[list[str] | None, Query()] = None,
+    category: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    brands: Annotated[list[str] | None, Query()] = None,
+    categories: Annotated[list[str] | None, Query()] = None,
+):
+    (
+        start,
+        end,
+        old_start,
+        old_end,
+        _,
+        clients,
+        category_map,
+        _,
+        rows,
+        checks,
+        old_checks,
+    ) = await _scope(
+        date_from,
+        date_to,
+        period_kind,
+        stores,
+        manager,
+        buyer_type,
+        category,
+        db,
+        **({"brands": brands} if brands else {}),
+    )
+    rows = _select_categories(rows, category, categories)
+    if categories:
+        names = [r["category"] for r in rows]
+        checks = await _selected_checks(
+            db, start, end, stores, clients, category_map, names, brands
+        )
+        old_checks = await _selected_checks(
+            db, old_start, old_end, stores, clients, category_map, names, brands
+        )
+    metrics = report_summary(rows, checks, old_checks)
+    products = await _product_details(
+        db,
+        start,
+        end,
+        old_start,
+        old_end,
+        stores,
+        clients,
+        category_map,
+        None,
+        **({"brands": brands} if brands else {}),
+    )
+    products = _select_categories(products, category, categories)
+    book = Workbook()
+    book.remove(book.active)
+    _sheet(
+        book,
+        "Итоги",
+        ["Показатель", "Текущий", "Предыдущий", "Изменение", "Изменение, %"],
+        [
+            [
+                name,
+                value["current"],
+                value["previous"],
+                value["difference"],
+                value["change_percent"],
+            ]
+            for name, value in metrics.items()
+        ]
+        + [["Период", str(start), str(end), str(old_start), str(old_end)]],
+    )
+    headers = [
+        "Категория",
+        "Выручка",
+        "Доля, %",
+        "Продано",
+        "Чеков",
+        "Средний чек",
+        "Прошлая выручка",
+        "Изменение",
+        "Изменение, %",
+        "Изменение доли, п.п.",
+        "Вклад, %",
+    ]
+    category_rows = [
+        [
+            row["category"],
+            row["current_revenue"],
+            row["current_share"],
+            row["current_units"],
+            row["current_checks"],
+            row["current_average_check"],
+            row["previous_revenue"],
+            row["revenue_change"],
+            row["revenue_change_percent"],
+            row["share_change_pp"],
+            row["contribution_percent"],
+        ]
+        for row in rows
+    ]
+    _sheet(book, "Категории", headers, category_rows)
+    _sheet(
+        book, "Драйверы роста", headers, [row for row in category_rows if row[7] > 0]
+    )
+    _sheet(
+        book,
+        "Категории с падением",
+        headers,
+        [row for row in category_rows if row[7] < 0],
+    )
+    _sheet(
+        book,
+        "Товары",
+        [
+            "Категория",
+            "Артикул",
+            "Код",
+            "Наименование",
+            "Выручка",
+            "Прошлая выручка",
+            "Изменение",
+            "Продано",
+            "Чеков",
+            "Доля",
+        ],
+        [
+            [
+                row[key]
+                for key in (
+                    "category",
+                    "article",
+                    "code",
+                    "name",
+                    "revenue",
+                    "previous_revenue",
+                    "revenue_change",
+                    "units",
+                    "checks",
+                    "share",
+                )
+            ]
+            for row in products
+        ],
+    )
+    output = BytesIO()
+    book.save(output)
+    return Response(
+        output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=category-analytics.xlsx"},
+    )
+
+
+@router.post('/export/xlsx')
+async def export_post(data:CategoryReportRequest,db:AsyncSession=Depends(get_db)):
+    return await export(**data.model_dump(),db=db)
 
 
 @router.get("/product-sales/list")

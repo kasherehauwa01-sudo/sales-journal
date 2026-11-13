@@ -112,6 +112,7 @@ beforeEach(() => {
       return Promise.resolve(json(["Бренд A"]));
     if (url.includes("/catalog-options/manufacturer"))
       return Promise.resolve(json(["Завод A"]));
+    if(url.includes('/catalog/category-tree'))return Promise.resolve(json({nodes:[{id:'p',name:'Посуда',children:[{id:'s',name:'Раздел A',value:'Раздел A',section:'Раздел A',children:[]}]}]}));
     if (url.includes("/catalog-options/subcategory"))
       return Promise.resolve(json(["Раздел A"]));
     return Promise.resolve(json(["Подсказка товара"]));
@@ -138,6 +139,7 @@ async function generate() {
 }
 async function choose(placeholder: string, value: string) {
   fireEvent.click(screen.getByText(placeholder).closest("button")!);
+  if(placeholder==='Все подкатегории')fireEvent.click(await screen.findByRole('button',{name:'Развернуть: Посуда'}));
   fireEvent.click(await screen.findByLabelText(value));
   fireEvent.mouseDown(document.body);
 }

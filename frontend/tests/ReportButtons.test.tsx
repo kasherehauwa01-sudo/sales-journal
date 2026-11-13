@@ -106,6 +106,7 @@ const metrics = Object.fromEntries(
 );
 function fixture(path: string): unknown {
   const route = path.split("?")[0];
+  if(route==='/reports/product-sales/catalog/category-tree')return {nodes:[{id:'p',name:'Родитель',children:[{id:'a',name:'Категория1',value:'Категория1',section:'Категория1',children:[]},{id:'b',name:'Категория2',value:'Категория2',section:'Категория2',children:[]}]}]};
   if (route.includes("/sales-dynamics/client-directory")) return {items:["Клиент1","Клиент2"],next_cursor:null};
   if (route === "/reports/product-analytics/catalog-options/brand") return ["Бренд1", "Бренд2"];
   if (route === "/filters") return { departments: ["Магазин1", "Магазин2"], clients: ["Клиент1","Клиент2"] };
@@ -327,6 +328,7 @@ async function selectManagers(values: string[]) {
   fireEvent.mouseDown(document.body);
 }
 async function editFilter(page:{name:string;label:string},value:string){
+  if(page.label==='Категория'){fireEvent.click(screen.getByRole('button',{name:'Категория'}));fireEvent.click(screen.getByRole('button',{name:'Сбросить'}));const expand=await screen.findByRole('button',{name:'Развернуть: Родитель'}).catch(()=>null);if(expand)fireEvent.click(expand);fireEvent.click(await screen.findByRole('checkbox',{name:value}));fireEvent.mouseDown(document.body);return;}
   if (page.label === "Менеджер") { await selectManagers(value ? [value] : []); return; }
   if(page.name!=="Динамика"){fireEvent.change(screen.getByLabelText(page.label),{target:{value}});return;}
   fireEvent.click(screen.getByRole("button",{name:"Клиент"}));
@@ -716,3 +718,52 @@ for (const selected of [[], ["Розница"], ["Розница", "Оптови
     expect(JSON.parse(String(init.body)).manager).toBeNull();
   });
 }
+it('category drawer opens before response, rejects double requests and reuses a report-scoped result',async()=>{
+ render(<CategoryAnalyticsReportPage/>);fireEvent.click(build());await finish(1);
+ const reply=deferred<Response>();const original=fetchMock.getMockImplementation()!;
+ fetchMock.mockImplementation((url:string,init?:RequestInit)=>String(url).includes('/details?')?reply.promise:original(url,init));
+ const row=screen.getByText('Категория1',{selector:'b'});
+ act(()=>{fireEvent.click(row);fireEvent.click(row)});
+ const dialog=screen.getByRole('dialog',{name:'Статистика категории: Категория1'});
+ expect(within(dialog).getByText('Загружаем статистику категории…')).toBeTruthy();
+ expect(within(dialog).getByText('Выручка')).toBeTruthy();
+ const requests=()=>fetchMock.mock.calls.filter(([u])=>String(u).includes('/details?'));
+ expect(requests()).toHaveLength(1);
+ await act(async()=>reply.resolve(json(fixture('/reports/category-analytics/a/details'))));
+ await within(dialog).findByText('ТОП товаров категории');
+ fireEvent.click(within(dialog).getByRole('button',{name:'Закрыть'}));
+ fireEvent.click(row);await screen.findByText('ТОП товаров категории');expect(requests()).toHaveLength(1);
+ fireEvent.click(screen.getByRole('button',{name:'Закрыть'}));fireEvent.click(build());await finish(2);
+ fireEvent.click(screen.getByText('Категория1',{selector:'b'}));await waitFor(()=>expect(requests()).toHaveLength(2));
+});
+it('category error stays in drawer and permits explicit retry',async()=>{
+ render(<CategoryAnalyticsReportPage/>);fireEvent.click(build());await finish(1);
+ const original=fetchMock.getMockImplementation()!;let failed=true;
+ fetchMock.mockImplementation((u:string,init?:RequestInit)=>String(u).includes('/details?')?Promise.resolve(failed?json({detail:'Временная ошибка категории'},502):json(fixture('/reports/category-analytics/a/details'))):original(u,init));
+ fireEvent.click(screen.getByText('Категория1',{selector:'b'}));
+ const retry=await screen.findByRole('button',{name:'Повторить загрузку категории'});failed=false;fireEvent.click(retry);await screen.findByText('ТОП товаров категории');
+});
+it('large category groups use JSON for report and Excel without oversized URLs',async()=>{
+ const original=fetchMock.getMockImplementation()!;
+ const children=Array.from({length:100},(_,i)=>({id:String(i),name:'Длинное название подкатегории '+i,value:'Длинное название подкатегории '+i,children:[]}));
+ fetchMock.mockImplementation((u:string,init?:RequestInit)=>String(u).includes('/catalog/category-tree')?Promise.resolve(json({nodes:[{id:'p',name:'Большая категория',children}]})):original(u,init));
+ render(<CategoryAnalyticsReportPage/>);fireEvent.click(screen.getByRole('button',{name:'Категория'}));fireEvent.click(await screen.findByRole('checkbox',{name:'Большая категория'}));fireEvent.mouseDown(document.body);
+ fireEvent.click(build());await finish(1);
+ expect(heavy.mock.calls[0][0]).toBe('/reports/category-analytics');
+ expect(heavy.mock.calls[0][1].method).toBe('POST');expect(JSON.parse(heavy.mock.calls[0][1].body).categories).toHaveLength(100);
+ fireEvent.click(screen.getByRole('button',{name:'Выгрузить в Excel'}));
+ await waitFor(()=>expect(fetchMock.mock.calls.some(([u,init])=>String(u).endsWith('/category-analytics/export/xlsx')&&init?.method==='POST')).toBe(true));
+});
+it('closing a pending category holds admission and caches the late response',async()=>{
+ render(<CategoryAnalyticsReportPage/>);fireEvent.click(build());await finish(1);
+ const reply=deferred<Response>();const original=fetchMock.getMockImplementation()!;
+ fetchMock.mockImplementation((u:string,init?:RequestInit)=>String(u).includes('/details?')?reply.promise:original(u,init));
+ fireEvent.click(screen.getByText('Категория1',{selector:'b'}));
+ const dialog=screen.getByRole('dialog',{name:'Статистика категории: Категория1'});
+ fireEvent.click(within(dialog).getByRole('button',{name:'Закрыть'}));
+ expect((build() as HTMLButtonElement).disabled).toBe(true);
+ await act(async()=>reply.resolve(json(fixture('/reports/category-analytics/a/details'))));
+ expect(screen.queryByRole('dialog')).toBeNull();expect(screen.queryByText('ТОП товаров категории')).toBeNull();
+ fireEvent.click(screen.getByText('Категория1',{selector:'b'}));await screen.findByText('ТОП товаров категории');
+ expect(fetchMock.mock.calls.filter(([u])=>String(u).includes('/details?'))).toHaveLength(1);
+});

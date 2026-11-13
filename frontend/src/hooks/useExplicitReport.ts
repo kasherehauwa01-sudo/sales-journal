@@ -157,6 +157,7 @@ export function useExplicitReport<P, T>(
         JSON.stringify(comparable(snapshot)),
     generate,
     perform,
+    clearError: () => setError(""),
     retry: () => retry.current?.(),
   };
 }
