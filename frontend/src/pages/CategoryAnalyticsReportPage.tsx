@@ -99,6 +99,7 @@ export function CategoryAnalyticsReportPage() {
     );
   const detailCache = useRef(new Map<string, Detail>());
   const detailSerial = useRef(0);
+  const detailEpoch = useRef(0);
   const detailPending = useRef(false);
   const params = {
     date_from: from,
@@ -112,6 +113,7 @@ export function CategoryAnalyticsReportPage() {
   };
   const controller = useExplicitReport(params, (p, signal) => {
     detailCache.current.clear();
+    detailEpoch.current++;
     detailSerial.current++;
     setDetail(undefined);
     setSelected(undefined);
@@ -140,6 +142,7 @@ export function CategoryAnalyticsReportPage() {
     controller.clearError();
     const key = JSON.stringify([value, group, mode]);
     const serial = ++detailSerial.current;
+    const epoch = detailEpoch.current;
     setSelected(value);
     setDetailGroup(group);
     setDetailMode(mode);
@@ -166,13 +169,13 @@ export function CategoryAnalyticsReportPage() {
             signal,
           ),
         (valueData) => {
-          if (serial !== detailSerial.current) return;
+          if (epoch !== detailEpoch.current) return;
           detailCache.current.set(key, valueData);
           while (detailCache.current.size > 2)
             detailCache.current.delete(
               detailCache.current.keys().next().value!,
             );
-          setDetail(valueData);
+          if(serial===detailSerial.current)setDetail(valueData);
         },
       )
       .finally(() => {
@@ -183,7 +186,7 @@ export function CategoryAnalyticsReportPage() {
     detailSerial.current++;
     setSelected(undefined);
     setDetail(undefined);
-    if (detailLoading) controller.cancel();
+    // Dismissal does not release the request slot while backend work may continue.
   }
   function openProduct(row: Detail["products"][number], page = 1) {
     if (!controller.snapshot) return;

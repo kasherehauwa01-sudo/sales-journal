@@ -754,13 +754,16 @@ it('large category groups use JSON for report and Excel without oversized URLs',
  fireEvent.click(screen.getByRole('button',{name:'Выгрузить в Excel'}));
  await waitFor(()=>expect(fetchMock.mock.calls.some(([u,init])=>String(u).endsWith('/category-analytics/export/xlsx')&&init?.method==='POST')).toBe(true));
 });
-it('closing a pending category ignores the cancelled late response',async()=>{
+it('closing a pending category holds admission and caches the late response',async()=>{
  render(<CategoryAnalyticsReportPage/>);fireEvent.click(build());await finish(1);
  const reply=deferred<Response>();const original=fetchMock.getMockImplementation()!;
  fetchMock.mockImplementation((u:string,init?:RequestInit)=>String(u).includes('/details?')?reply.promise:original(u,init));
  fireEvent.click(screen.getByText('Категория1',{selector:'b'}));
  const dialog=screen.getByRole('dialog',{name:'Статистика категории: Категория1'});
  fireEvent.click(within(dialog).getByRole('button',{name:'Закрыть'}));
+ expect((build() as HTMLButtonElement).disabled).toBe(true);
  await act(async()=>reply.resolve(json(fixture('/reports/category-analytics/a/details'))));
  expect(screen.queryByRole('dialog')).toBeNull();expect(screen.queryByText('ТОП товаров категории')).toBeNull();
+ fireEvent.click(screen.getByText('Категория1',{selector:'b'}));await screen.findByText('ТОП товаров категории');
+ expect(fetchMock.mock.calls.filter(([u])=>String(u).includes('/details?'))).toHaveLength(1);
 });
