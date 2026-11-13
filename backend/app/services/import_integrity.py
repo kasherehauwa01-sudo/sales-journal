@@ -25,12 +25,12 @@ log = logging.getLogger(__name__)
 async def owned_lock(selected_engine, key):
     # Reuse the existing shielded cleanup: repeated cancellation must not leave
     # a session lock on a connection returned to the pool.
-    from app.services.seasonality_worker import advisory, SeasonalityBusy
+    from app.services.source_control import advisory, ResourceBusy
 
     async with AsyncExitStack() as stack:
         try:
             await stack.enter_async_context(advisory(selected_engine, key=key))
-        except SeasonalityBusy:
+        except ResourceBusy:
             yield False
             return
         yield True

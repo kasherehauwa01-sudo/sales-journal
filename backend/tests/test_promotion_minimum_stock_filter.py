@@ -27,18 +27,9 @@ def test_minimum_filters_table_kpis_and_export_not_only_status(monkeypatch):
     async def clients(*args):
         return None
 
-    async def seasons(rows, *args, **kwargs):
-        for row in rows:
-            row["seasonality"] = {"status": "Недостаточно данных", "priority": 0}
-
-    async def metadata(*args):
-        return {}
-
     monkeypatch.setattr(router, "_sales", sales)
     monkeypatch.setattr(router, "_catalog", catalog)
     monkeypatch.setattr(router, "get_sales_filter_clients", clients)
-    monkeypatch.setattr(router, "attach", seasons)
-    monkeypatch.setattr(router, "metadata", metadata)
     monkeypatch.setattr(router, "ensure_headroom", lambda: None)
 
     async def run():
@@ -57,7 +48,7 @@ def test_minimum_filters_table_kpis_and_export_not_only_status(monkeypatch):
         try:
             rows = list(book["Кандидаты"].values)
             assert len(rows) == 3
-            assert [row[23] for row in rows[1:]] == [200, 201]
+            assert [row[16] for row in rows[1:]] == [200, 201]
         finally:
             book.close()
         data.criteria.min_stock = None

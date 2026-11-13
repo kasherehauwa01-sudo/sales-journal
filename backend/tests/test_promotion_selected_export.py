@@ -47,7 +47,7 @@ def test_selected_workbook_all_columns_and_embedded_photo(monkeypatch):
         assert [cell.value for cell in sheet[1]] == export.HEADERS
         assert sheet.max_row == 2
         assert sheet["B2"].value == "=1+1" and sheet["B2"].data_type == "s"
-        assert sheet["C2"].value == "001" and sheet["M2"].value == 2
+        assert sheet["C2"].value == "001" and sheet["K2"].value == 2
         assert len(sheet._images) == 1
         assert book.sheetnames == ["Выбранные товары"]
         assert sheet["B2"].alignment.wrap_text is True
@@ -207,7 +207,7 @@ def test_widths_name_wrapping_and_single_sheet(monkeypatch):
         assert sheet["B2"].alignment.wrap_text
         assert sheet.row_dimensions[2].height > 24
         assert sheet.column_dimensions["D"].width == 13
-        assert sheet["H2"].number_format == "#,##0.##"
+        assert sheet["F2"].number_format == "#,##0.##"
         assert sheet["A2"].value == "Нет фото"
     finally:
         book.close()
@@ -291,16 +291,16 @@ def test_export_width_caps_wrapped_reasons_and_unfilled_rows(monkeypatch):
         sheet = book["Выбранные товары"]
         for column, width in {
             "B": 50,
-            "G": 50,
+            "E": 50,
             "D": 13,
+            "I": 13,
             "K": 13,
             "M": 13,
-            "O": 13,
         }.items():
             assert sheet.column_dimensions[column].width <= width
-        assert sheet["G2"].alignment.wrap_text
+        assert sheet["E2"].alignment.wrap_text
         assert sheet["B2"].value == "Название " * 30
-        assert sheet["G2"].value == "Причина " * 30
+        assert sheet["E2"].value == "Причина " * 30
         assert sheet.row_dimensions[2].height > 24
         assert sheet.row_dimensions[1].height > 26
         for values in sheet.iter_rows(min_row=2):

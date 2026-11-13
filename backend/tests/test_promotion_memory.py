@@ -109,7 +109,7 @@ def test_alias_conflicts_across_5000_boundary_and_compact_warm_cache(monkeypatch
 
     monkeypatch.setattr(vrcatalog, "_integration_batch", integration)
     data = router.Request(
-        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30), use_seasonality=False
+        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30)
     )
 
     async def run():
@@ -153,7 +153,7 @@ def test_catalog_unavailable_preserves_old_fallback(monkeypatch):
         monkeypatch.setattr(module, "get_sales_filter_clients", no_clients)
         monkeypatch.setattr(module, "get_catalog_batch_info", fail)
     data = router.Request(
-        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30), use_seasonality=False
+        date_from=date(2026, 1, 1), date_to=date(2026, 9, 30)
     )
 
     async def run():
@@ -335,7 +335,7 @@ def test_streamed_sales_match_original_sql_aggregates(monkeypatch):
     from test_catalog_directory import database
 
     data = router.Request(
-        date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), use_seasonality=False
+        date_from=date(2026, 9, 1), date_to=date(2026, 9, 30)
     )
 
     async def run():
@@ -383,7 +383,6 @@ def test_sales_cursor_is_closed_on_memory_error(monkeypatch):
                 router.Request(
                     date_from=date(2026, 1, 1),
                     date_to=date(2026, 9, 30),
-                    use_seasonality=False,
                 ),
                 Database(),
                 None,

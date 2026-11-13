@@ -7,8 +7,8 @@ export const FILTER_LABELS: Record<string,string> = {
  brands:"Бренды",brand:"Бренд",category:"Категория",manufacturers:"Производители",manufacturer:"Производитель",
  subcategories:"Подкатегории",segment:"Сегмент",search:"Поиск",article:"Артикул",products:"Товары",clients:"Клиенты",
  compare:"Сравнение",comparison_mode:"Режим сравнения",group:"Группировка",group_by:"Группировка",tab:"Раздел",
- years:"Годы",reason:"Причина",status:"Статус",criteria:"Критерии",use_seasonality:"Учитывать сезонность",
- seasonality_status:"Сезонность",min_revenue:"Минимальная выручка",min_purchases:"Минимум покупок",
+ years:"Годы",reason:"Причина",status:"Статус",criteria:"Критерии",
+ min_revenue:"Минимальная выручка",min_purchases:"Минимум покупок",
  r_score:"R",f_score:"F",m_score:"M",rfm_code:"RFM-код",display:"Показ истории",
  compare_from:"Начало сравнения",compare_to:"Конец сравнения",period:"Период",period_kind:"Период",
 };

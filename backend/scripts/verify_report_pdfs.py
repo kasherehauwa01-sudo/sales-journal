@@ -19,7 +19,6 @@ CASES = [
  ('product-sales','product-sales','Продажи по товарам','Тестовый товар 549'),
  ('product-analytics','product-analytics','Товарная аналитика','Тестовый товар 549'),
  ('category-analytics','category-analytics','Аналитика категорий','Категория1'),
- ('seasonality','seasonality','Сезонность','Сезон сейчас'),
  ('promotion-candidates','promotion-candidates','Кандидаты в акцию','Тестовый кандидат 499'),
  ('sales-dynamics','sales-dynamics','Динамика продаж','Выручка'),
  ('store-analytics','store-analytics','Аналитика по магазинам','Магазин1'),
@@ -75,10 +74,6 @@ async def run(base_url, output):
                 await page.get_by_role('button',name='Сформировать отчёт',exact=True).click()
                 button=page.get_by_role('button',name='Скачать PDF',exact=True)
                 await page.wait_for_function("()=>!document.querySelector('.pdf-export-action button')?.disabled")
-                if path=='seasonality':
-                    await page.get_by_role('button',name='001',exact=True).click()
-                    await page.get_by_text('Модель по всей истории',exact=True).wait_for()
-                    await page.wait_for_function("()=>!document.querySelector('.pdf-export-action button')?.disabled")
                 if path=='product-analytics':
                     await page.locator('.product-analytics-table tbody tr').first.click()
                     await page.get_by_role('heading',name='Тестовый товар 0',exact=True).wait_for()

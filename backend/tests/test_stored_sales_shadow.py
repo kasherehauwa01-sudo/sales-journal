@@ -540,16 +540,16 @@ def test_reconciliation_rejects_false_completeness_before_any_query():
 
 
 def test_source_lock_failure_prevents_state_or_database_access(monkeypatch):
-    from app.services.seasonality_worker import SeasonalityBusy
+    from app.services.source_control import ResourceBusy
     @asynccontextmanager
     async def busy(*args, **kwargs):
-        raise SeasonalityBusy('resource_busy')
+        raise ResourceBusy('resource_busy')
         yield
     monkeypatch.setattr(worker, 'advisory', busy)
     monkeypatch.setattr(worker, 'ensure_headroom', Mock())
     factory = Mock(side_effect=AssertionError('Lock not acquired'))
     engine = SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
-    with pytest.raises(SeasonalityBusy):
+    with pytest.raises(ResourceBusy):
         asyncio.run(worker.run_batch(factory, engine, configuration_enabled=True))
     factory.assert_not_called()
 

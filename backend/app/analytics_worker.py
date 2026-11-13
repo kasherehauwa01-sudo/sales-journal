@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.models import AnalyticsSignalRun, AnalyticsSignalState
 from app.services.analytics_signal_worker import (WORKER_LOCK, last_closed_day, record_failure, run_batch, state)
-from app.services.seasonality_worker import advisory, verify, SeasonalityBusy
+from app.services.source_control import advisory, verify, ResourceBusy
 
 
 async def execute(options):
@@ -59,7 +59,7 @@ async def execute(options):
                     checkpoint_id = result.get("run_id")
                     checkpoint_heartbeat = datetime.fromisoformat(result["heartbeat_at"]) if result.get("heartbeat_at") else None
                     print(json.dumps(result, default=str), flush=True)
-                except SeasonalityBusy:
+                except ResourceBusy:
                     result = {"status": "BUSY"}
                 except Exception as exc:
                     await record_failure(SessionLocal, type(exc).__name__,
@@ -73,7 +73,7 @@ async def execute(options):
                 try:await asyncio.wait_for(shutdown.wait(), delay)
                 except TimeoutError:pass
         return 0
-    except SeasonalityBusy:
+    except ResourceBusy:
         logging.error("Another shadow worker holds leadership")
         return 1
     finally:

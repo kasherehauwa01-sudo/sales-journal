@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy import select
 from app.database import SessionLocal, engine
-from app.services.seasonality_worker import advisory
-from app.services.seasonality_storage import changed
+from app.services.source_control import advisory
+from app.services.sales_revision import changed
 from app.importer.parser import include_document, include_for_filename, normalize_sale, read_sales
 from app.importer.source_period import extract_declared_period
 from app.models import ImportBatch, ImportError, Sale, SaleItem
@@ -106,8 +106,8 @@ async def _process_import_with_source(import_id:int):
 
 
 async def process_import(import_id:int):
- # Shared advisory ownership covers parsing and partial row commits. A seasonal
- # batch cannot race with a new import, even in another backend process.
+ # Shared ownership covers parsing and partial commits; RFM/risk snapshots
+ # cannot race with a new import, even in another backend process.
  async with advisory(engine,shared=True,wait=True):
   try:
    await _process_import_with_source(import_id)

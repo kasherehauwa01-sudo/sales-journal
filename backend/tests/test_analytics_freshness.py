@@ -9,7 +9,7 @@ from sqlalchemy import select, update, func, text
 from app.importer.source_period import extract_declared_period, METHOD, INVALID
 from app.services.analytics_source import ImportEvidence, resolve_source
 from app.services import analytics_signal_worker as worker
-from app.models import ImportBatch, SeasonalityState, AnalyticsSignalRun, AnalyticsSignalState, AnalyticsSignal, AnalyticsClientEvaluation
+from app.models import ImportBatch, SalesSourceState, AnalyticsSignalRun, AnalyticsSignalState, AnalyticsSignal, AnalyticsClientEvaluation
 from test_inactivity_shadow import database, seed, finish, ANCHOR, analytical_test_scope
 
 D=date(2026,10,6);REQUEST=date(2026,10,19);NOW=datetime(2026,10,20,9,tzinfo=timezone.utc)
@@ -116,7 +116,7 @@ def test_resume_new_revision_in_evaluate_preserves_frozen_date(monkeypatch):
                 old=await db.get(AnalyticsSignalRun,first['run_id']);frozen=old.metadata_json['source_decision']
                 assert old.as_of==requested
                 await db.execute(update(ImportBatch).values(declared_period_end=requested))
-                await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
+                await db.execute(update(SalesSourceState).values(source_revision=1));await db.commit()
             assert (await worker.run_batch(factory,engine,as_of=requested,configuration_enabled=True))['status']=='SUPERSEDED'
             async with factory() as db:
                 old=await db.get(AnalyticsSignalRun,first['run_id']);assert old.metadata_json['source_decision']==frozen
@@ -134,7 +134,7 @@ def test_backwards_safe_date_blocks_without_rewriting_lifecycle(monkeypatch):
             async with factory() as db:
                 old=await db.scalar(select(AnalyticsSignal));sid,rev=old.id,old.revision
                 await db.execute(update(ImportBatch).values(declared_period_end=ANCHOR+timedelta(days=8)))
-                await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
+                await db.execute(update(SalesSourceState).values(source_revision=1));await db.commit()
             blocked=await worker.run_batch(factory,engine,as_of=ANCHOR+timedelta(days=8),configuration_enabled=True)
             assert blocked['status']=='BLOCKED' and 'EFFECTIVE_DATE_PRECEDES_PUBLISHED_RUN' in blocked['source_decision']['reason_codes']
             async with factory() as db:

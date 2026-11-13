@@ -32,10 +32,10 @@ async def current_release(db, run_id):
     from datetime import datetime, timezone, timedelta
     from zoneinfo import ZoneInfo
     from app.config import settings
-    from app.models import SeasonalityState, ImportBatch, AnalyticsAutomationIdentity
+    from app.models import SalesSourceState, ImportBatch, AnalyticsAutomationIdentity
     evidence=release.metadata_json['run']['source_decision']
     now=datetime.now(timezone.utc)
-    revision=await db.scalar(select(SeasonalityState.source_revision).where(SeasonalityState.id==1))
+    revision=await db.scalar(select(SalesSourceState.source_revision).where(SalesSourceState.id==1))
     pending=await db.scalar(select(ImportBatch.id).where(ImportBatch.status.in_(['queued','processing'])).limit(1))
     if (revision!=evidence['source_revision'] or pending is not None
         or datetime.fromisoformat(evidence['valid_until'])<=now

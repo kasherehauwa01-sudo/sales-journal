@@ -40,8 +40,6 @@ HEADERS = [
     "Товар",
     "Код / артикул",
     "Категория",
-    "Сезонность",
-    "Сезонный приоритет",
     "Причины",
     "30 дней",
     "Пред. 30",
@@ -56,11 +54,6 @@ HEADERS = [
 ]
 
 
-class Season(BaseModel):
-    status: str = Field(default="Недостаточно данных", max_length=100)
-    priority: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
-
-
 class SelectedRow(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     key: str = Field(max_length=1000)
@@ -70,7 +63,6 @@ class SelectedRow(BaseModel):
     category: str = Field(default="", max_length=1000)
     catalog_manager: str | None = Field(default=None, max_length=1000)
     image_url: str | None = Field(default=None, max_length=2048)
-    seasonality: Season | None = None
     reasons: list[Annotated[str, Field(max_length=1000)]] = Field(
         default_factory=list, max_length=30
     )
@@ -253,14 +245,11 @@ def safe_cell(sheet, value):
 
 
 def row_values(row):
-    season = row.seasonality or Season()
     return [
         "",
         row.name,
         row.code or row.article or "—",
         row.category,
-        season.status,
-        season.priority,
         ", ".join(row.reasons),
         row.units_30,
         row.units_previous_30,
@@ -302,7 +291,17 @@ def excel_selected(data):
                         + 2,
                     )
             widths[0] = 15  # 96-pixel photograph.
-            limits = {1: 50, 6: 50, 3: 13, 10: 13, 12: 13, 14: 13}
+            limits = {
+                HEADERS.index(name): width
+                for name, width in {
+                    "Товар": 50,
+                    "Причины": 50,
+                    "Категория": 13,
+                    "Изменение категории, %": 13,
+                    "Остатки Авиаторов Зал+Склад": 13,
+                    "Без продажи, дней": 13,
+                }.items()
+            }
             for column, limit in limits.items():
                 widths[column] = min(limit, widths[column])
             for index, width in enumerate(widths, 1):

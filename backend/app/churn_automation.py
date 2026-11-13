@@ -14,7 +14,7 @@ from app.services import churn_schedule as schedule
 from app.services.analytics_automation import release_churn, digest, canonical
 from app.services.churn_receiver_evidence import attach
 from app.services.analytics_signal_worker import run_batch, WORKER_LOCK
-from app.services.seasonality_worker import advisory, verify
+from app.services.source_control import advisory, verify
 
 
 def now():

@@ -13,7 +13,7 @@ from sqlalchemy import event, func, insert, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models import (Base, Sale, ImportBatch, SeasonalityState, AnalyticsSignalRun, AnalyticsSignalState,
+from app.models import (Base, Sale, ImportBatch, SalesSourceState, AnalyticsSignalRun, AnalyticsSignalState,
     AnalyticsSignal, AnalyticsSignalChange, AnalyticsPurchaseDay, AnalyticsObservedPhone, AnalyticsClientEvaluation)
 from app.database import get_db
 from app.routers.analytics_signals import router
@@ -22,7 +22,7 @@ from app.services.client_identity import normalize_client_name, analytical_name_
 from app.services.client_features import interval_statistics, load_inactivity_features
 from app.services.inactivity import evaluate
 from app.services.analytics_signal_worker import run_batch, WORKER_LOCK, record_failure
-from app.services.seasonality_worker import advisory, SeasonalityBusy
+from app.services.source_control import advisory, ResourceBusy
 
 ANCHOR = date(2026, 8, 1)
 
@@ -107,7 +107,7 @@ async def database():
             db.add_all([ImportBatch(id=1,filename="synthetic",file_size=0,status="completed",finished_at=datetime.now(timezone.utc),
                         declared_period_start=ANCHOR-timedelta(days=200),declared_period_end=ANCHOR+timedelta(days=40),
                         source_period_method="DECLARED_REPORT_PERIOD"),
-                        SeasonalityState(id=1),AnalyticsSignalState(id=1,enabled=True)])
+                        SalesSourceState(id=1),AnalyticsSignalState(id=1,enabled=True)])
             await db.commit()
         yield engine,factory
     finally:
@@ -167,7 +167,7 @@ def test_postgres_lifecycle_resume_no_duplicates_multiple_phones_and_report():
                 assert (await db.scalars(select(AnalyticsSignalChange.event_type).order_by(AnalyticsSignalChange.id))).all()==["CREATED","ESCALATED"]
                 db.add(Sale(id=100,sale_date=ANCHOR+timedelta(days=16),document_number="return",client="client 0",
                     department="Shop",total_amount=1000,fingerprint="new",import_id=1))
-                await db.execute(update(SeasonalityState).values(source_revision=SeasonalityState.source_revision+1))
+                await db.execute(update(SalesSourceState).values(source_revision=SalesSourceState.source_revision+1))
                 await db.commit()
             await finish(factory,engine,ANCHOR+timedelta(days=16))
             async with factory() as db:
@@ -229,12 +229,12 @@ def test_postgres_disabled_superseded_and_leadership():
             at=ANCHOR+timedelta(days=8)
             await run_batch(factory,engine,as_of=at,scan_size=5,configuration_enabled=True)
             async with factory() as db:
-                await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
+                await db.execute(update(SalesSourceState).values(source_revision=1));await db.commit()
             result=await run_batch(factory,engine,as_of=at,configuration_enabled=True)
             assert result['status']=='SUPERSEDED'
             async with factory() as db:assert await db.scalar(select(func.count()).select_from(AnalyticsSignal))==0
             async with advisory(engine,key=WORKER_LOCK):
-                with pytest.raises(SeasonalityBusy):
+                with pytest.raises(ResourceBusy):
                     async with advisory(engine,key=WORKER_LOCK):pass
     asyncio.run(run())
 
@@ -272,7 +272,7 @@ def test_postgres_same_phone_different_clients_no_change_events_and_unhealthy_so
             await finish(factory,engine,at)
             async with factory() as db:
                 assert await db.scalar(select(func.count()).select_from(AnalyticsSignalChange))==2
-                await db.execute(update(SeasonalityState).values(source_revision=1));await db.commit()
+                await db.execute(update(SalesSourceState).values(source_revision=1));await db.commit()
             await finish(factory,engine,at)
             async with factory() as db:
                 assert await db.scalar(select(func.count()).select_from(AnalyticsSignalChange))==4

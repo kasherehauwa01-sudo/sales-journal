@@ -12,8 +12,8 @@ from app.services.clients_vr import ClientsVrError,resolve_manager_filter
 from app.services.sale_details import load_sale_detail
 from app.services.sales_client_filters import get_sales_buyer_type_clients
 from app.services.product_analytics_cache import invalidate_product_analytics_cache
-from app.services.seasonality_worker import advisory
-from app.services.seasonality_storage import changed
+from app.services.source_control import advisory
+from app.services.sales_revision import changed
 router=APIRouter(prefix="/sales",tags=["Продажи"])
 class SaleFilters(BaseModel):
  search:str|None=None;date_from:date|None=None;date_to:date|None=None;departments:list[str]|None=None;manager:str|None=None;buyer_type:str|None=None;client:str|None=None;author:str|None=None;price_type:str|None=None;promotion:str|None=None;social:bool|None=None;discount_card_percent:Decimal|None=None;min_amount:Decimal|None=None;max_amount:Decimal|None=None;min_discount:Decimal|None=None;max_discount:Decimal|None=None
@@ -61,7 +61,7 @@ async def _delete_sales(payload,db):
  else:
   if not payload.ids:raise HTTPException(400,"Не выбраны продажи для удаления")
   result=await db.execute(delete(Sale).where(Sale.id.in_(payload.ids)))
- await changed(db,rebuild=True)
+ await changed(db)
  await db.commit()
  invalidate_product_analytics_cache()
  return {"deleted":result.rowcount or 0}
