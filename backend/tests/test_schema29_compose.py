@@ -168,7 +168,17 @@ def test_real_transition_bridge_recovery_and_frontend_independence(tmp_path):
     )
     bindings.chmod(0o600)
     active = project / "docker-compose.report-fix.override.yml"
-    active.write_text("services: {}\n")
+    active.write_text(
+        yaml.safe_dump(
+            {
+                "services": {
+                    "backend": {"image": image_ids["old"]},
+                    "frontend": {"image": fronts["old"]},
+                }
+            },
+            default_flow_style=False,
+        )
+    )
     # Local fixture commit keeps main clean and keeps the required release ancestor.
     with (project / ".git/info/exclude").open("a") as f:
         f.write(
