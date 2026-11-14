@@ -1,3 +1,5 @@
+from contextvars import ContextVar
+_snapshot_uncached = ContextVar("clients_snapshot_uncached", default=False)
 import asyncio,json,time
 from urllib.error import HTTPError
 from urllib.parse import quote,urlencode
@@ -44,7 +46,12 @@ def _request(paths:list[str]):
  last=None
  for path in paths:
   try:
-   with urlopen(Request(f"{base}{path}",headers=headers),timeout=15) as response:return json.load(response)
+   with urlopen(Request(f"{base}{path}",headers=headers),timeout=15) as response:
+    if _snapshot_uncached.get():
+     raw=response.read(8*1024*1024+1)
+     if len(raw)>8*1024*1024:raise ClientsVrError("Snapshot directory response exceeds safe bound")
+     return json.loads(raw)
+    return json.load(response)
   except HTTPError as exc:
    last=exc
    # Старые публичные endpoints остаются резервным вариантом только когда
@@ -110,11 +117,16 @@ def _buyer_type_clients(payload,buyer_type):
  return _items(source,("client","name","client_name","full_name","Клиент"))
 
 async def _cached(key,loader):
- saved=cache.get(key)
+ saved=None if _snapshot_uncached.get() else cache.get(key)
  if saved and time.monotonic()-saved[0]<CACHE_TTL_SECONDS:return saved[1]
- try:values=await asyncio.to_thread(loader)
+ try:
+  if _snapshot_uncached.get():
+   from app.services.product_analytics_runtime import run_cpu
+   values=await run_cpu(loader)
+  else:values=await asyncio.to_thread(loader)
  except Exception as exc:raise ClientsVrError(f"clients_vr недоступен: {exc}") from exc
- cache[key]=(time.monotonic(),values);return values
+ if not _snapshot_uncached.get():cache[key]=(time.monotonic(),values)
+ return values
 
 async def get_managers():
  managers=await _cached("managers",lambda:_items(_request(["/integration/managers","/managers","/clients/managers","/employees?role=manager","/integration/clients","/clients"]),("manager","manager_name","manager_full_name","Менеджер","name","full_name")))
@@ -226,3 +238,23 @@ async def get_analytics_buyer_type_names(buyer_types:tuple[str,...]):
   return result
  value=await _cached("analytics-buyer-names-list-v1:"+json.dumps(buyer_types,ensure_ascii=False),load)
  return dict(value)
+
+
+async def get_snapshot_filter_clients(kind,value,db=None):
+ """Same filter loaders, no retained per-value cache population during a full scan.
+ Context-local: other reports and their 300-second TTL are unchanged.
+ """
+ token=_snapshot_uncached.set(True)
+ try:
+  if db is not None:
+   from app.services.sales_client_filters import get_sales_filter_clients
+   return await get_sales_filter_clients(db,[value] if kind=='manager' else None,[value] if kind=='buyer_type' else None)
+  return await (get_manager_clients(value) if kind=='manager' else get_buyer_type_clients(value))
+ finally:_snapshot_uncached.reset(token)
+
+
+async def get_snapshot_filter_values(kind):
+ """Bounded, cancellation-safe source labels; never fills another report cache."""
+ token=_snapshot_uncached.set(True)
+ try:return await (get_managers() if kind=='manager' else get_buyer_types())
+ finally:_snapshot_uncached.reset(token)

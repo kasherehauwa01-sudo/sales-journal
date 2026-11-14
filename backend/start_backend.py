@@ -13,14 +13,15 @@ sys.path.insert(0, str(app_root))
 
 import sqlalchemy as sa
 
-SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26', '20261111_27', '20261112_28'}
-DEFAULT_REVISION = '20261112_28'
+SUPPORTED_REVISIONS = {'20261020_23', '20261022_24', '20261030_25', '20261109_26', '20261111_27', '20261112_28', '20261114_29'}
+DEFAULT_REVISION = '20261114_29'
 MIGRATION_SOURCES = {
     '20261022_24': {'20261020_23', '20261022_24'},
     '20261030_25': {'20261022_24', '20261030_25'},
     '20261109_26': {'20261030_25', '20261109_26'},
     '20261111_27': {'20261109_26', '20261111_27'},
     '20261112_28': {'20261111_27', '20261112_28'},
+    '20261114_29': {'20261112_28', '20261114_29'},
 }
 SCHEMA_LOCK = 734190249
 
@@ -471,9 +472,10 @@ def _check_schema(conn, metadata, expected):
         inspector = sa.inspect(conn)
         tables = set(inspector.get_table_names(schema=schema))
         for table in metadata.sorted_tables:
-            if expected not in ('20261111_27','20261112_28') and table.name in IMPORT_HISTORY_CONTRACT:
+            if expected != "20261114_29" and table.name.startswith("category_season_"):continue
+            if expected not in ('20261111_27','20261112_28','20261114_29') and table.name in IMPORT_HISTORY_CONTRACT:
                 continue
-            if expected!='20261112_28' and table.name in SALES_CONTROL_CONTRACT:continue
+            if expected not in ('20261112_28','20261114_29') and table.name in SALES_CONTROL_CONTRACT:continue
             if table.name not in tables:
                 raise StartupBlocked('Missing required table: '+table.name)
             actual = {c['name']: c for c in inspector.get_columns(table.name, schema=schema)}
@@ -505,16 +507,17 @@ def _check_schema(conn, metadata, expected):
                 if not any(x['constrained_columns'] == names and x['referred_table'] == target
                            and x['referred_columns'] == columns for x in actual_fks):
                     raise StartupBlocked('Foreign key mismatch: '+table.name)
-        if expected in ('20261030_25', '20261109_26', '20261111_27','20261112_28'):
+        if expected in ('20261030_25', '20261109_26', '20261111_27','20261112_28','20261114_29'):
             check_churn_schema(conn, schema, inspector)
-        if expected in ('20261109_26', '20261111_27','20261112_28'):
-            check_import_control_schema(conn, schema, inspector, historical=expected in ('20261111_27','20261112_28'))
-        if expected=='20261112_28':check_sales_control_schema(conn,schema,inspector)
+        if expected in ('20261109_26', '20261111_27','20261112_28','20261114_29'):
+            check_import_control_schema(conn, schema, inspector, historical=expected in ('20261111_27','20261112_28','20261114_29'))
+        if expected in ('20261112_28','20261114_29'):check_sales_control_schema(conn,schema,inspector)
+        if expected=='20261114_29':check_category_season_schema(conn,schema,inspector)
 
 
 def migrate(engine, target, metadata=None):
     if target not in MIGRATION_SOURCES:
-        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 20261109_26 20261111_27 and 20261112_28 are supported')
+        raise StartupBlocked('Only reviewed migration targets 20261022_24, 20261030_25 20261109_26 20261111_27 20261112_28 and 20261114_29 are supported')
     with engine.connect() as conn:
         acquired = conn.scalar(sa.text('SELECT pg_try_advisory_lock(:key)'), {'key': SCHEMA_LOCK})
         conn.commit()
@@ -575,6 +578,138 @@ def main(argv=None):
         command += ['--lifespan', 'off', '--timeout-graceful-shutdown', '20']
     os.execvp(command[0], command)
 
+
+
+CATEGORY_SEASON_CONTRACT = {'category_season_categories': {'checks': [],
+                                'columns': {'id': ('INTEGER', False),
+                                            'key': ('TEXT', False),
+                                            'name': ('TEXT', False),
+                                            'parent': ('TEXT', False),
+                                            'parent_key': ('TEXT', False),
+                                            'snapshot_id': ('VARCHAR(36)', False)},
+                                'fk': [(['snapshot_id'], 'category_season_snapshots', ['id'])],
+                                'indexes': {},
+                                'pk': ['snapshot_id', 'id'],
+                                'unique': []},
+ 'category_season_clients': {'checks': [],
+                             'columns': {'id': ('INTEGER', False),
+                                         'name': ('VARCHAR(512)', False),
+                                         'snapshot_id': ('VARCHAR(36)', False)},
+                             'fk': [(['snapshot_id'], 'category_season_snapshots', ['id'])],
+                             'indexes': {},
+                             'pk': ['snapshot_id', 'id'],
+                             'unique': [['snapshot_id', 'name']]},
+ 'category_season_coverage': {'checks': ['ck_cs_coverage_days', 'ck_cs_coverage_method'],
+                              'columns': {'calendar_days': ('INTEGER', False),
+                                          'method': ('VARCHAR(24)', False),
+                                          'month': ('INTEGER', False),
+                                          'recorded_days': ('INTEGER', False),
+                                          'snapshot_id': ('VARCHAR(36)', False),
+                                          'store': ('VARCHAR(512)', False),
+                                          'year': ('INTEGER', False)},
+                              'fk': [(['snapshot_id'], 'category_season_snapshots', ['id'])],
+                              'indexes': {},
+                              'pk': ['snapshot_id', 'store', 'year', 'month'],
+                              'unique': []},
+ 'category_season_facts': {'checks': ['ck_cs_fact_month_lines'],
+                           'columns': {'brand': ('TEXT', False),
+                                       'category_id': ('INTEGER', False),
+                                       'client_id': ('INTEGER', False),
+                                       'id': ('BIGINT', False),
+                                       'lines': ('BIGINT', False),
+                                       'manufacturer': ('TEXT', False),
+                                       'month': ('INTEGER', False),
+                                       'revenue': ('NUMERIC', False),
+                                       'snapshot_id': ('VARCHAR(36)', False),
+                                       'store': ('VARCHAR(512)', False),
+                                       'units': ('NUMERIC', False),
+                                       'year': ('INTEGER', False)},
+                           'fk': [(['snapshot_id', 'client_id'],
+                                   'category_season_clients',
+                                   ['snapshot_id', 'id']),
+                                  (['snapshot_id', 'category_id'],
+                                   'category_season_categories',
+                                   ['snapshot_id', 'id'])],
+                           'indexes': {'ix_category_season_fact_category': ['snapshot_id', 'category_id'],
+                                       'ix_category_season_fact_scope': ['snapshot_id',
+                                                                         'store',
+                                                                         'year',
+                                                                         'month']},
+                           'pk': ['id'],
+                           'unique': []},
+ 'category_season_memberships': {'checks': ['ck_cs_membership_kind'],
+                                 'columns': {'client_id': ('INTEGER', False),
+                                             'kind': ('VARCHAR(16)', False),
+                                             'snapshot_id': ('VARCHAR(36)', False),
+                                             'value': ('VARCHAR(255)', False)},
+                                 'fk': [(['snapshot_id', 'client_id'],
+                                         'category_season_clients',
+                                         ['snapshot_id', 'id'])],
+                                 'indexes': {'ix_category_season_membership_filter': ['snapshot_id',
+                                                                                      'kind',
+                                                                                      'value',
+                                                                                      'client_id']},
+                                 'pk': ['snapshot_id', 'client_id', 'kind', 'value'],
+                                 'unique': []},
+ 'category_season_snapshots': {'checks': ['ck_cs_snapshot_status'],
+                               'columns': {'duration_ms': ('BIGINT', True),
+                                           'error_code': ('VARCHAR(64)', True),
+                                           'fact_rows': ('BIGINT', False),
+                                           'id': ('VARCHAR(36)', False),
+                                           'options': ('JSON', False),
+                                           'published_at': ('TIMESTAMPWITHTIMEZONE', True),
+                                           'started_at': ('TIMESTAMPWITHTIMEZONE', False),
+                                           'status': ('VARCHAR(16)', False),
+                                           'through': ('DATE', False),
+                                           'week': ('DATE', True)},
+                               'fk': [],
+                               'indexes': {},
+                               'pk': ['id'],
+                               'unique': [['week']]},
+ 'category_season_state': {'checks': ['ck_cs_state_singleton'],
+                           'columns': {'active_id': ('VARCHAR(36)', True),
+                                       'id': ('INTEGER', False),
+                                       'next_due': ('TIMESTAMPWITHTIMEZONE', True)},
+                           'fk': [(['active_id'], 'category_season_snapshots', ['id'])],
+                           'indexes': {},
+                           'pk': ['id'],
+                           'unique': []}}
+
+def check_category_season_schema(conn,schema,inspector):
+    for table,spec in CATEGORY_SEASON_CONTRACT.items():
+        if not inspector.has_table(table,schema=schema):raise StartupBlocked('Missing category snapshot table: '+table)
+        columns={c['name']:c for c in inspector.get_columns(table,schema=schema)}
+        for name,(typ,nullable) in spec['columns'].items():
+            actual=columns.get(name)
+            if not actual or type_name(actual['type'],conn.dialect)!=typ or actual['nullable']!=nullable:raise StartupBlocked('Snapshot column contract mismatch: '+table+'.'+name)
+        if inspector.get_pk_constraint(table,schema=schema)['constrained_columns']!=spec['pk']:raise StartupBlocked('Snapshot PK mismatch: '+table)
+        for names,target,cols in spec['fk']:
+            if not any(f['constrained_columns']==names and f['referred_table']==target and f['referred_columns']==cols and f.get('referred_schema') in {None,schema} and f.get('options',{}).get('ondelete') == ('RESTRICT' if table=='category_season_state' else 'CASCADE') and f.get('options',{}).get('onupdate') in {None,'NO ACTION'} for f in inspector.get_foreign_keys(table,schema=schema)):raise StartupBlocked('Snapshot FK mismatch: '+table)
+        unique={tuple(c['column_names']) for c in inspector.get_unique_constraints(table,schema=schema)}
+        if any(tuple(c) not in unique for c in spec['unique']):raise StartupBlocked('Snapshot unique mismatch: '+table)
+        indexes={i['name']:i for i in inspector.get_indexes(table,schema=schema)}
+        for name,cols in spec['indexes'].items():
+            if name not in indexes or indexes[name]['column_names']!=cols:raise StartupBlocked('Snapshot index mismatch: '+table)
+        checks={c['name'] for c in inspector.get_check_constraints(table,schema=schema)}
+        if not set(spec['checks'])<=checks:raise StartupBlocked('Snapshot check constraint mismatch: '+table)
+
+    import re
+    expected_checks={
+      'ck_cs_snapshot_status':'statusinbuildingpublishedfailed',
+      'ck_cs_state_singleton':'id=1',
+      'ck_cs_membership_kind':'kindinmanagerbuyer_type',
+      'ck_cs_fact_month_lines':'month>=1andmonth<=12andlines>0',
+      'ck_cs_coverage_method':'methodinconfirmedestimatedexcluded',
+      'ck_cs_coverage_days':'month>=1andmonth<=12andrecorded_days>=0andrecorded_days<=31',
+    }
+    for table,spec in CATEGORY_SEASON_CONTRACT.items():
+        for check in inspector.get_check_constraints(table,schema=schema):
+            if check['name'] in expected_checks:
+                value=re.sub(r'::(?:character varying|text|integer|bigint)(?:\[\])?','',check['sqltext'].lower())
+                value=re.sub(r'[^a-z0-9_><=]','',value).replace('=anyarray','in')
+                if value!=expected_checks[check['name']]:raise StartupBlocked('Snapshot check definition mismatch: '+check['name'])
+    if conn.scalar(sa.text("SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=:schema AND c.relname LIKE 'category_season_%' AND (NOT i.indisvalid OR NOT i.indisready OR i.indpred IS NOT NULL OR i.indexprs IS NOT NULL))"),{'schema':schema}):raise StartupBlocked('Snapshot indexes must be ready, valid and unconditional')
+    if conn.scalar(sa.text("SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=:schema AND t.relname LIKE 'category_season_%' AND (NOT c.convalidated OR c.condeferrable OR c.condeferred))"),{'schema':schema}):raise StartupBlocked('Snapshot constraints must be validated and immediate')
 
 if __name__ == '__main__':
     try:

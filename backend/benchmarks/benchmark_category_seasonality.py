@@ -16,7 +16,7 @@ from app.services.product_analytics_runtime import memory_snapshot
 from app.services.report_execution import REPORT_SETTINGS
 
 
-async def run(engine, factory):
+async def run(engine, factory, cold_reset=None):
     async with engine.begin() as db:
         await db.execute(
             text(
@@ -69,62 +69,78 @@ async def run(engine, factory):
             "import_control_receipts",
         ]:
             await db.execute(text("ANALYZE " + table))
+
+    from datetime import datetime, timezone
+    from app.services import category_seasonality_snapshot as snapshots
+
+    before = memory_snapshot()
+    started = time.perf_counter()
+    published = await snapshots.rebuild(
+        engine, manual=True, clock=datetime(2026, 11, 13, tzinfo=timezone.utc)
+    )
+    build_ms = (time.perf_counter() - started) * 1000
+    after = memory_snapshot()
+    assert published["status"] == "published"
+    async with factory() as db:
+        size = await db.scalar(
+            text(
+                "SELECT sum(pg_total_relation_size(c.oid)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname LIKE 'category_season_%' AND c.relkind='r'"
+            )
+        )
+        counts = dict(
+            (
+                await db.execute(
+                    text(
+                        "SELECT 'facts',count(*) FROM category_season_facts UNION ALL SELECT 'memberships',count(*) FROM category_season_memberships UNION ALL SELECT 'coverage',count(*) FROM category_season_coverage"
+                    )
+                )
+            ).all()
+        )
     results = []
-    for name, filters in [
-        ("wide", {}),
+    for scope, params in [
+        ("wide", Request()),
         (
             "multiple_filters",
-            dict(
+            Request(
                 stores=["S1", "S2"],
                 brands=["Бренд 1", "Бренд 2"],
                 manufacturers=["Завод 1", "Завод 2"],
-                manager=["Менеджер"],
+                manager=["M"],
                 buyer_type=["Опт"],
             ),
         ),
     ]:
-        async with factory() as db:
-            for sql in REPORT_SETTINGS:
-                await db.execute(text(sql))
-            await db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
-            data = Request(years=[2023, 2024, 2025], **filters)
-            captured = []
-            original = service.aggregate
-
-            async def measured(*args):
-                r, q = await original(*args)
-                captured.append(q)
-                return r, q
-
-            service.aggregate = measured
-            before = memory_snapshot()
-            started = time.perf_counter()
-            try:
-                result = await service.build(db, data, date(2026, 11, 13))
-            finally:
-                service.aggregate = original
-            elapsed = (time.perf_counter() - started) * 1000
-            after = memory_snapshot()
-            from sqlalchemy.dialects import postgresql
-            compiled = captured[0].compile(dialect=postgresql.dialect(paramstyle="named"), compile_kwargs={"render_postcompile": True})
-            plan = (await db.execute(text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + str(compiled)), compiled.params)).scalar_one()[0]
-            results.append(
-                dict(
-                    scope=name,
-                    sales=120000,
-                    items=480000,
-                    catalog_products=12000,
-                    years=[2023, 2024, 2025],
-                    rows=len(result["rows"]),
-                    full_ms=elapsed,
-                    rss_before=before,
-                    rss_after=after,
-                    plan=plan,
+        # Optional reset is injected only by an explicitly opted-in owned local
+        # fixture. It clears PostgreSQL shared buffers, not OS filesystem caches.
+        if cold_reset:
+            await cold_reset()
+        for cache in ["postgres_cold" if cold_reset else "first_read", "warm"]:
+            async with factory() as db:
+                await snapshots.settings_sql(db)
+                started = time.perf_counter()
+                result = await snapshots.read_report(db, params)
+                elapsed = (time.perf_counter() - started) * 1000
+                results.append(
+                    dict(
+                        scope=scope,
+                        cache=cache,
+                        read_ms=elapsed,
+                        categories=len(result["rows"]),
+                    )
                 )
-            )
-            assert result["rows"]
-            await db.rollback()
-    output = Path("docs/benchmarks/category_seasonality.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(results, ensure_ascii=False, indent=2))
-    return results
+                assert result["rows"]
+    measured = dict(
+        sales=120000,
+        items=480000,
+        products=12000,
+        build_ms=build_ms,
+        build_result=published,
+        relations_bytes=int(size),
+        row_counts=counts,
+        rss_before=before,
+        rss_after=after,
+        reads=results,
+    )
+    output = Path("docs/benchmarks/category_seasonality_snapshot.json")
+    output.write_text(json.dumps(measured, ensure_ascii=False, indent=2))
+    return measured

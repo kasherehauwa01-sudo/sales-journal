@@ -24,3 +24,4 @@ from .import_control import (ImportControlConfig,ImportDepartment,ImportRule,Imp
 
 from .import_control import ImportHistoryJob, ImportHistoryResult
 from .sales_control import SalesControlSettings,SalesControlExclusion,SalesControlAudit,SalesControlDelivery
+from .category_seasonality import (CategorySeasonSnapshot,CategorySeasonState,CategorySeasonCategory,CategorySeasonClient,CategorySeasonMembership,CategorySeasonFact,CategorySeasonCoverage)

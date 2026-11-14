@@ -1,12 +1,11 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
-  LineChart,
   Line,
+  LineChart,
   CartesianGrid,
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from "recharts";
 import {
@@ -14,24 +13,31 @@ import {
   type CategoryNode,
 } from "../components/CategoryTreeFilter";
 import { MultiSelect } from "../components/MultiSelect";
-import { ReportActions, ReportEmpty } from "../components/ReportActions";
-import { useApi } from "../hooks/useApi";
-import { useExplicitReport, reportJson } from "../hooks/useExplicitReport";
+import { reportJson } from "../hooks/useExplicitReport";
 
-type Annual = {
-  year: number;
-  values: number[];
-  indices: number[] | null;
-  included: boolean;
+type Cell = {
+  index: number | null;
+  stores: string[];
+  years: number[];
+  estimated: boolean;
   reason: string | null;
-  coverage: boolean[];
+  notes: string[];
+};
+type Actual = {
+  store: string;
+  year: number;
+  month: number;
+  value: number;
+  included: boolean;
+  method: string;
+  reason: string | null;
 };
 type Profile = {
-  indices: number[] | null;
-  years: number[];
-  annual: Annual[];
-  peaks: { month: number; count: number; total: number; repeating: boolean }[];
-  message: string | null;
+  cells: Cell[];
+  peaks: number[];
+  troughs: number[];
+  actual: Actual[];
+  estimated: boolean;
 };
 type Row = {
   key: string;
@@ -50,35 +56,29 @@ type Params = {
   manager: string[];
   buyer_type: string[];
 };
-type Result = {
-  rows: Row[];
-  years: number[];
-  filters: Params;
-  warning: string;
-  coverage: Record<string, boolean[]>;
-  category_labels?: string[];
-};
 type Options = {
   years: number[];
+  stores: string[];
   nodes: CategoryNode[];
   brand: string[];
   manufacturer: string[];
+  managers: string[];
+  buyer_types: string[];
+};
+type Result = {
+  state: "ready" | "uninitialized";
+  rows: Row[];
+  options: Partial<Options>;
+  filters: Params;
+  snapshot_id: string | null;
+  last_success: string | null;
+  through: string | null;
+  next_update: string;
+  updating: boolean;
+  previous_after_error: boolean;
+  warning?: string;
 };
 const months = [
-  "Янв",
-  "Фев",
-  "Мар",
-  "Апр",
-  "Май",
-  "Июн",
-  "Июл",
-  "Авг",
-  "Сен",
-  "Окт",
-  "Ноя",
-  "Дек",
-];
-const fullMonths = [
   "Январь",
   "Февраль",
   "Март",
@@ -92,60 +92,104 @@ const fullMonths = [
   "Ноябрь",
   "Декабрь",
 ];
-const colors = [
-  "#2878ff",
-  "#9864c8",
-  "#dc8c26",
-  "#1d9a96",
-  "#cc5771",
-  "#698334",
-];
-const signed = (n: number | null | undefined) =>
-  n == null
-    ? "Нет данных"
-    : `${n > 0 ? "+" : ""}${n.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`;
-const amount = (n: number) =>
+const signed = (n: number | null) =>
+  n !== null && n !== 0 && Math.abs(n) < 0.05
+    ? `${n > 0 ? "+" : "−"}<0,1%`
+    : n == null
+      ? "Нет данных"
+      : `${n > 0 ? "+" : ""}${n.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`;
+const value = (n: number) =>
   n.toLocaleString("ru-RU", { maximumFractionDigits: 3 });
-const heat = (n: number | null | undefined) =>
-  n == null ? "no-data" : n > 5 ? "above" : n < -5 ? "below" : "normal";
+const moscow = (s: string | null) =>
+  s ? new Date(s).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "—";
+function tooltip(c: Cell, m: number) {
+  return `${months[m]}: ${signed(c.index)}. Магазины (${c.stores.length}): ${c.stores.join(", ") || "нет"}. Годы (${c.years.length}): ${c.years.join(", ") || "нет"}. ${c.estimated ? "Ориентировочный профиль. " : ""}${c.notes.join(". ")}${c.reason ? ". " + c.reason : ""}`;
+}
+function heat(c: Cell) {
+  if (c.index === null) return undefined;
+  const n = c.index;
+  if (Math.abs(n) < 1) return { background: "#f1f4f7", color: "#304357" };
+  const a = Math.min(0.65, 0.12 + Math.abs(n) / 250);
+  return {
+    background: n > 0 ? `rgba(20,150,95,${a})` : `rgba(38,116,210,${a})`,
+    color: Math.abs(n) > 100 ? "#102334" : "#203c53",
+  };
+}
 
 function Detail({
   row,
   metric,
   filters,
+  origin,
   onClose,
-  returnFocus,
-  categoryLabels,
+  snapshotId,
 }: {
   row: Row;
   metric: "units" | "revenue";
   filters: Params;
+  origin: HTMLElement | null;
   onClose: () => void;
-  returnFocus: HTMLElement | null;
-  categoryLabels?: string[];
+  snapshotId: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    const origin = returnFocus;
     dialog.current?.showModal();
     return () => {
       dialog.current?.close();
       origin?.focus();
     };
   }, []);
-  const p = row[metric],
-    points = months.map((month, i) =>
-      Object.fromEntries([
-        ["month", month],
-        ["Типичный профиль", p.indices?.[i] ?? null],
-        ...p.annual
-          .filter((a) => a.included)
-          .map((a) => [String(a.year), a.indices?.[i] ?? null]),
-      ]),
+  const [detail, setDetail] = useState<Row>(),
+    [detailError, setDetailError] = useState(""),
+    [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setDetailError("");
+    void reportJson<Result>(
+      "/reports/category-seasonality/detail",
+      controller.signal,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...filters,
+          categories: [row.key],
+          snapshot_id: snapshotId,
+        }),
+      },
+    )
+      .then((result) => {
+        if (result.rows.length !== 1)
+          throw new Error("Детализация снимка недоступна. Обновите карту.");
+        if (!controller.signal.aborted) setDetail(result.rows[0]);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted)
+          setDetailError(e instanceof Error ? e.message : "Ошибка детализации");
+      });
+    return () => controller.abort();
+  }, [row.key, snapshotId, retry]);
+  const current = detail ?? row;
+  const p = current[metric],
+    points = p.cells.map((c, i) => ({
+      month: months[i].slice(0, 3),
+      index: c.index,
+    }));
+  const rows = [
+    ...new Set(p.actual.map((a) => JSON.stringify([a.store, a.year]))),
+  ];
+  const lookup = (
+    metric: "units" | "revenue",
+    store: string,
+    year: number,
+    month: number,
+  ) =>
+    current[metric].actual.find(
+      (a) => a.store === store && a.year === year && a.month === month,
     );
   const labels: Record<string, string> = {
     years: "Годы",
-    stores: "Магазины",
+    stores: "Магазин",
     categories: "Ветки каталога",
     brands: "Бренд",
     manufacturers: "Производитель",
@@ -154,9 +198,9 @@ function Detail({
   };
   return (
     <dialog
-      ref={dialog}
       className="category-season-detail"
-      aria-labelledby="category-season-detail-title"
+      ref={dialog}
+      aria-labelledby="cs-detail-title"
       onCancel={(e) => {
         e.preventDefault();
         onClose();
@@ -165,170 +209,217 @@ function Detail({
       <div className="category-season-detail-head">
         <div>
           <small>{row.parent}</small>
-          <h2 id="category-season-detail-title">{row.name}</h2>
+          <h2 id="cs-detail-title">{row.name}</h2>
         </div>
         <button autoFocus onClick={onClose}>
           Закрыть
         </button>
       </div>
-      <p>Фильтры сформированного отчёта:</p>
+      <p>Применённые фильтры опубликованного снимка:</p>
       <dl className="category-season-filters">
-        {Object.entries(filters).map(([k, v]) => (
-          <div key={k}>
-            <dt>{labels[k]}</dt>
-            <dd>
-              {k === "categories"
-                ? v.length
-                  ? categoryLabels?.join(", ") ||
-                    `${v.length} выбранных веток; открыта ${row.parent} → ${row.name}`
-                  : "Все категории"
-                : v.length
-                  ? v.join(", ")
-                  : "Все"}
-            </dd>
-          </div>
-        ))}
+        {Object.entries(filters)
+          .filter(([k]) => k !== "snapshot_id")
+          .map(([k, v]) => (
+            <div key={k}>
+              <dt>{labels[k]}</dt>
+              <dd>
+                {k === "categories"
+                  ? v.length
+                    ? `Выбраны ветки: ${v
+                        .map((x) => {
+                          try {
+                            const a = JSON.parse(String(x));
+                            return Array.isArray(a) ? a[1] : x;
+                          } catch {
+                            return x;
+                          }
+                        })
+                        .join(", ")}; ${row.parent} → ${row.name}`
+                    : "Все категории"
+                  : v.length
+                    ? v.join(", ")
+                    : k === "years"
+                      ? "Вся история"
+                      : "Все"}
+              </dd>
+            </div>
+          ))}
       </dl>
-      <h3>
-        Отклонение от среднемесячного уровня, % ·{" "}
-        {metric === "units" ? "Штуки" : "Выручка"}
-      </h3>
-      {p.indices ? (
-        <div className="category-season-chart">
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={points}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis unit="%" />
-              <Tooltip formatter={(v) => signed(Number(v))} />
-              <Legend />
-              {p.annual
-                .filter((a) => a.included)
-                .map((a, i) => (
-                  <Line
-                    key={a.year}
-                    dataKey={String(a.year)}
-                    stroke={colors[i % colors.length]}
-                    dot={false}
-                  />
-                ))}
-              <Line
-                dataKey="Типичный профиль"
-                stroke="#152a46"
-                strokeWidth={3}
-                connectNulls={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <p role="status">Нет пригодных лет: сезонный профиль не рассчитан.</p>
-      )}
-      {p.message && <p role="status">{p.message}</p>}
-      <h3>Фактические продажи по месяцам</h3>
+      <h3>Сезонный профиль · {metric === "units" ? "Штуки" : "Выручка"}</h3>
       <p>
-        «Нет данных» означает неподтверждённое покрытие. Отдельные
-        зарегистрированные продажи показаны в скобках и не включаются в профиль.
+        Отклонение от собственного среднемесячного уровня, %. Магазины имеют
+        равный вес.
       </p>
+      <ResponsiveContainer width="100%" height={280}>
+        <LineChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="month" />
+          <YAxis unit="%" />
+          <Tooltip formatter={(n) => signed(Number(n))} />
+          <Line
+            dataKey="index"
+            name="Индекс"
+            stroke="#2674d2"
+            connectNulls={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+      {p.estimated && (
+        <p role="status">
+          Ориентировочный профиль: часть месяцев оценена по регулярности записей
+          или меняется состав магазинов.
+        </p>
+      )}
+      {!detail && !detailError && (
+        <p role="status">Загрузка детализации из снимка…</p>
+      )}
+      {detailError && (
+        <p role="alert">
+          {detailError}{" "}
+          <button onClick={() => setRetry((r) => r + 1)}>
+            Повторить детализацию
+          </button>
+        </p>
+      )}
       <div className="category-season-scroll">
         <table>
           <thead>
             <tr>
-              <th>Год / показатель</th>
+              <th>Магазин / год</th>
               {months.map((m) => (
-                <th key={m}>{m}</th>
+                <th key={m}>{m.slice(0, 3)}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {p.annual.map((a) => (
-              <tr key={a.year}>
-                <th scope="row">
-                  {a.year}
-                  <small>{a.included ? "В профиле" : a.reason}</small>
-                </th>
-                {months.map((m, i) => (
-                  <td key={m}>
-                    <div>
-                      {a.coverage[i]
-                        ? amount(
-                            row.units.annual.find((v) => v.year === a.year)!
-                              .values[i],
-                          )
-                        : `Нет данных (${amount(row.units.annual.find((v) => v.year === a.year)!.values[i])})`}{" "}
-                      шт.
-                    </div>
-                    <div>
-                      {a.coverage[i]
-                        ? amount(
-                            row.revenue.annual.find((v) => v.year === a.year)!
-                              .values[i],
-                          )
-                        : `Нет данных (${amount(row.revenue.annual.find((v) => v.year === a.year)!.values[i])})`}{" "}
-                      ₽
-                    </div>
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {rows.map((k) => {
+              const [store, year] = JSON.parse(k) as [string, number];
+              return (
+                <tr key={k}>
+                  <th scope="row">
+                    {store}
+                    <small>{year}</small>
+                  </th>
+                  {months.map((m, i) => {
+                    const a = lookup("units", store, year, i + 1),
+                      r = lookup("revenue", store, year, i + 1);
+                    return (
+                      <td key={m}>
+                        {a ? (
+                          <>
+                            <div>{value(a.value)} шт.</div>
+                            <div>{value(r?.value ?? 0)} ₽</div>
+                            <small>
+                              {a.included
+                                ? a.method === "estimated"
+                                  ? "Ориентировочно"
+                                  : "Покрытие подтверждено"
+                                : `Неполные: ${a.reason}`}
+                            </small>
+                          </>
+                        ) : (
+                          <small>Нет данных</small>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+      <details>
+        <summary>Магазины, годы и причины исключения месяцев</summary>
+        {p.cells.map((c, i) => (
+          <p key={i}>{tooltip(c, i)}</p>
+        ))}
+      </details>
     </dialog>
   );
 }
 
 export function CategorySeasonalityPage() {
-  const {
-    data: options,
-    error: optionsError,
-    loading: optionsLoading,
-  } = useApi<Options>("/reports/category-seasonality/options");
-  const { data: filters } = useApi<{ departments: string[] }>("/filters");
-  const { data: managers, error: managersError } = useApi<string[]>(
-    "/integrations/clients-vr/managers",
-  );
-  const { data: buyers, error: buyersError } = useApi<string[]>(
-    "/integrations/clients-vr/buyer-types",
-  );
-  const [years, setYears] = useState<number[] | null>(null),
+  const [years, setYears] = useState<number[]>([]),
     [stores, setStores] = useState<string[]>([]),
     [categories, setCategories] = useState<string[]>([]),
     [brands, setBrands] = useState<string[]>([]),
     [manufacturers, setManufacturers] = useState<string[]>([]),
     [manager, setManager] = useState<string[]>([]),
     [buyer, setBuyer] = useState<string[]>([]),
-    [metric, setMetric] = useState<"units" | "revenue">("units"),
+    [metric, setMetric] = useState<"units" | "revenue">("units");
+  const [data, setData] = useState<Result>(),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [retry, setRetry] = useState(0),
     [selected, setSelected] = useState<string>();
-  const detailOrigin = useRef<HTMLElement | null>(null);
-  function openDetail(key: string) {
-    detailOrigin.current = document.activeElement as HTMLElement | null;
+  const origin = useRef<HTMLElement | null>(null),
+    serial = useRef(0);
+  const params = useMemo<Params>(
+    () => ({
+      years,
+      stores,
+      categories,
+      brands,
+      manufacturers,
+      manager,
+      buyer_type: buyer,
+    }),
+    [years, stores, categories, brands, manufacturers, manager, buyer],
+  );
+  useEffect(() => {
+    const controller = new AbortController(),
+      id = ++serial.current;
+    setLoading(true);
+    setError("");
+    const timer = setTimeout(() => {
+      void reportJson<Result>(
+        "/reports/category-seasonality",
+        controller.signal,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        },
+      )
+        .then((result) => {
+          if (id === serial.current && !controller.signal.aborted) {
+            setData(result);
+            setSelected(undefined);
+            setLoading(false);
+          }
+        })
+        .catch((e) => {
+          if (!controller.signal.aborted && id === serial.current) {
+            setError(
+              e instanceof Error
+                ? e.message
+                : "Ошибка загрузки готового отчёта",
+            );
+            setLoading(false);
+          }
+        });
+    }, 200);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [params, retry]);
+  const options = data?.options,
+    groups = [...new Set(data?.rows.map((r) => r.parent_key))],
+    row = data?.rows.find((r) => r.key === selected);
+  function open(key: string) {
+    origin.current = document.activeElement as HTMLElement | null;
     setSelected(key);
   }
-  const params: Params = {
-    years: years ?? options?.years.slice(0, 3) ?? [],
-    stores,
-    categories,
-    brands,
-    manufacturers,
-    manager,
-    buyer_type: buyer,
-  };
-  const report = useExplicitReport(params, (p, signal) =>
-    reportJson<Result>("/reports/category-seasonality", signal, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(p),
-    }),
-  );
-  const row = report.data?.rows.find((r) => r.key === selected);
-  const groups = [...new Set(report.data?.rows.map((r) => r.parent_key))];
   return (
     <div className="page category-seasonality-page">
       <div className="page-title">
         <div>
           <h1>Сезонность категорий</h1>
-          <p>Типичный спрос по месяцам · подкатегории второго уровня</p>
+          <p>
+            В какие месяцы продажи выше или ниже собственного обычного уровня
+          </p>
         </div>
       </div>
       <section className="panel dynamics-filters">
@@ -337,9 +428,9 @@ export function CategorySeasonalityPage() {
             Годы расчёта
             <MultiSelect
               options={(options?.years ?? []).map(String)}
-              value={params.years.map(String)}
+              value={years.map(String)}
               onChange={(v) => setYears(v.map(Number))}
-              placeholder="Выберите завершённые годы"
+              placeholder="Вся история"
               searchable
               showActions
             />
@@ -347,7 +438,7 @@ export function CategorySeasonalityPage() {
           <label>
             Магазин
             <MultiSelect
-              options={filters?.departments ?? []}
+              options={options?.stores ?? []}
               value={stores}
               onChange={setStores}
               placeholder="Все магазины"
@@ -390,51 +481,105 @@ export function CategorySeasonalityPage() {
           <label>
             Вид покупателя
             <MultiSelect
-              options={buyers ?? []}
+              options={options?.buyer_types ?? []}
               value={buyer}
               onChange={setBuyer}
               placeholder="Все виды покупателей"
               searchable
               showActions
             />
-            {buyersError && (
-              <small role="alert">
-                Справочник видов покупателей недоступен
-              </small>
-            )}
           </label>
           <label>
             Менеджер
             <MultiSelect
-              options={managers ?? []}
+              options={options?.managers ?? []}
               value={manager}
               onChange={setManager}
               placeholder="Все менеджеры"
               searchable
               showActions
             />
-            {managersError && (
-              <small role="alert">Справочник менеджеров недоступен</small>
-            )}
           </label>
         </div>
-        {optionsLoading && <p role="status">Загрузка справочников…</p>}
-        {optionsError && (
-          <p role="alert">Не удалось загрузить справочники: {optionsError}</p>
-        )}
-        <ReportActions report={report} />
       </section>
-      <ReportEmpty show={!report.data && !report.busy} />
-      {report.data && (
-        <section className="panel">
+      {data &&
+        Object.keys(params).some(
+          (k) =>
+            JSON.stringify(params[k as keyof Params]) !==
+            JSON.stringify(data.filters[k as keyof Params]),
+        ) && (
+          <p role="status">
+            На карте предыдущий выбор фильтров.{" "}
+            {loading
+              ? "Обновление из снимка…"
+              : "Повторите загрузку после ошибки."}
+          </p>
+        )}
+      {loading && (
+        <p role="status">
+          Загрузка готового отчёта…{data ? " На экране предыдущий выбор." : ""}
+        </p>
+      )}
+      {error && (
+        <section className="panel" role="alert">
+          <p>Ошибка быстрого запроса: {error}</p>
+          <button onClick={() => setRetry((r) => r + 1)}>
+            Повторить загрузку
+          </button>
+        </section>
+      )}
+      {data && (
+        <section className="panel cs-snapshot-info">
+          <p>
+            Последнее успешное обновление: <b>{moscow(data.last_success)}</b>{" "}
+            МСК. Последний завершённый месяц:{" "}
+            <b>
+              {data.through
+                ? new Date(data.through).toLocaleDateString("ru-RU", {
+                    timeZone: "Europe/Moscow",
+                    month: "long",
+                    year: "numeric",
+                  })
+                : "—"}
+            </b>
+            .
+          </p>
+          <p>
+            Следующее плановое обновление: {moscow(data.next_update)} МСК
+            (суббота, 19:00).
+          </p>
+          {data.updating && (
+            <p role="status">
+              Снимок обновляется. Показаны предыдущие опубликованные данные.
+            </p>
+          )}
+          {data.previous_after_error && (
+            <p role="alert">
+              Очередное обновление не удалось. Показаны данные предыдущего
+              успешного расчёта.
+            </p>
+          )}
+        </section>
+      )}
+      {data?.state === "uninitialized" && (
+        <section className="panel analytics-empty">
+          <h2>Отчёт ещё не рассчитан</h2>
+          <p>
+            Первое заполнение выполняет администратор отдельной командой.
+            Посещение страницы не запускает расчёт.
+          </p>
+        </section>
+      )}
+      {data?.state === "ready" && (
+        <section className="panel cs-map-panel">
           <div className="category-season-toolbar">
             <h2>Тепловая карта спроса</h2>
             <div role="group" aria-label="Метрика">
               {(["units", "revenue"] as const).map((m) => (
                 <button
                   key={m}
-                  aria-pressed={metric === m}
-                  className={metric === m ? "primary" : ""}
+                  aria-pressed={m === metric}
+                  className={m === metric ? "primary" : ""}
                   onClick={() => setMetric(m)}
                 >
                   {m === "units" ? "Штуки" : "Выручка"}
@@ -442,101 +587,98 @@ export function CategorySeasonalityPage() {
               ))}
             </div>
           </div>
-          <p>
-            Годы: {report.data.years.join(", ")}. Значения — отклонение от
-            среднемесячного уровня внутри года, а не рост к соседнему месяцу.
-          </p>
-          <p className="hint">{report.data.warning}</p>
+          <p>{data.warning}</p>
           <div className="category-season-legend">
-            {[
-              ["above", "Выше обычного"],
-              ["below", "Ниже обычного"],
-              ["normal", "Около обычного (±5%)"],
-              ["no-data", "Нет данных"],
-            ].map(([c, t]) => (
-              <span key={c}>
-                <i className={c} />
-                {t}
-              </span>
-            ))}
+            <span>
+              <i className="above" />
+              Выше обычного
+            </span>
+            <span>
+              <i className="cs-below" />
+              Ниже обычного
+            </span>
+            <span>
+              <i className="normal" />
+              Около нуля
+            </span>
+            <span>
+              <i className="no-data" />
+              Нет данных
+            </span>
           </div>
-          {!report.data.rows.length ? (
-            <p role="status">Нет продаж по выбранным фильтрам.</p>
+          {!data.rows.length ? (
+            <p role="status">Нет данных по выбранным фильтрам.</p>
           ) : (
             <div className="category-season-scroll">
               <table className="category-season-heatmap">
-                <caption className="category-season-caption">
-                  Сезонный профиль подкатегорий; нажмите на название или месяц
-                  для детализации
-                </caption>
                 <thead>
                   <tr>
-                    <th scope="col">Подкатегория / родитель</th>
+                    <th>Подкатегория / родитель</th>
                     {months.map((m) => (
-                      <th scope="col" key={m}>
-                        {m}
-                      </th>
+                      <th key={m}>{m}</th>
                     ))}
-                    <th scope="col">Пик и повторяемость</th>
                   </tr>
                 </thead>
                 <tbody>
                   {groups.map((g) => {
-                    const members = report.data!.rows.filter(
-                      (r) => r.parent_key === g,
-                    );
+                    const members = data.rows.filter((r) => r.parent_key === g);
                     return (
                       <Fragment key={g}>
                         <tr className="category-season-parent">
-                          <th colSpan={14} scope="colgroup">
+                          <th colSpan={13} scope="colgroup">
                             {members[0].parent}
                           </th>
                         </tr>
-                        {members.map((r, i) => {
-                          const p = r[metric];
-                          return (
-                            <tr
-                              key={r.key}
-                              className={
-                                i === 0 ? "category-season-group-start" : ""
-                              }
-                            >
-                              <th scope="row">
-                                <small>{r.parent}</small>
-                                <button onClick={() => openDetail(r.key)}>
-                                  {r.name}
-                                </button>
-                                <small>
-                                  В профиле:{" "}
-                                  {p.years.join(", ") || "нет пригодных лет"}
-                                </small>
-                              </th>
-                              {months.map((m, j) => (
-                                <td key={m} className={heat(p.indices?.[j])}>
-                                  <button
-                                    onClick={() => openDetail(r.key)}
-                                    aria-label={`${r.parent} → ${r.name}, ${fullMonths[j]}: ${signed(p.indices?.[j])}; лет: ${p.years.length}`}
-                                    title={`${r.name} · ${fullMonths[j]} · ${signed(p.indices?.[j])} · ${p.years.length} лет`}
+                        {members.map((r) => (
+                          <tr key={r.key}>
+                            <th scope="row">
+                              <small>{r.parent}</small>
+                              <button onClick={() => open(r.key)}>
+                                {r.name}
+                              </button>
+                              {r[metric].estimated && (
+                                <small>Ориентировочно</small>
+                              )}
+                              {r[metric].cells.some((c) =>
+                                c.notes.includes("База по доступным месяцам"),
+                              ) && <small>База по доступным месяцам</small>}
+                            </th>
+                            {r[metric].cells.map((c, i) => (
+                              <td
+                                key={i}
+                                className={c.index === null ? "no-data" : ""}
+                                style={heat(c)}
+                              >
+                                <button
+                                  className="cs-cell"
+                                  onClick={() => open(r.key)}
+                                  aria-label={`${r.parent} → ${r.name}. ${tooltip(c, i)}`}
+                                >
+                                  <span>
+                                    {c.index === null
+                                      ? "Нет данных"
+                                      : signed(c.index)}
+                                  </span>
+                                  {c.years.length === 1 && (
+                                    <small>Данные за один год</small>
+                                  )}
+                                  {r[metric].peaks.includes(i + 1) && (
+                                    <small>Пик спроса</small>
+                                  )}
+                                  {r[metric].troughs.includes(i + 1) && (
+                                    <small>Максимальный спад</small>
+                                  )}
+                                  <span
+                                    role="tooltip"
+                                    className="cs-cell-tooltip"
                                   >
-                                    {p.indices ? signed(p.indices[j]) : "—"}
-                                  </button>
-                                </td>
-                              ))}
-                              <td>
-                                {p.peaks.map((k) => (
-                                  <div key={k.month}>
-                                    {months[k.month - 1]} · {k.count} из{" "}
-                                    {k.total} лет
-                                    {k.repeating
-                                      ? " · повторяется"
-                                      : " · не подтверждён"}
-                                  </div>
-                                ))}
-                                {p.message && <small>{p.message}</small>}
+                                    {tooltip(c, i)}
+                                  </span>
+                                </button>
                               </td>
-                            </tr>
-                          );
-                        })}
+                            ))}
+                          </tr>
+                        ))}
                       </Fragment>
                     );
                   })}
@@ -545,27 +687,35 @@ export function CategorySeasonalityPage() {
             </div>
           )}
           <details>
-            <summary>Как читать отчёт</summary>
+            <summary>Как рассчитаны индексы</summary>
             <p>
-              Для каждого полного года: (месяц / среднее за 12 месяцев − 1) ×
-              100%. Типичный профиль — медиана годовых индексов. Годы с нулевой
-              или отрицательной базой исключены. Пик — максимум не ниже +20%;
-              повторяющийся пик достигает +20% минимум в двух годах и не менее
-              чем в двух третях пригодных лет. При одном годе повторяемость не
-              оценивается. Цвет дополняет число, отсутствие данных не означает
-              ноль.
+              Для каждого магазина усредняются пригодные одноимённые месяцы всех
+              лет. База — среднее типичных значений по доступным календарным
+              месяцам с равными весами. Индекс = (типичный месяц / база − 1) ×
+              100%. Затем усредняются индексы магазинов с равным весом. Это не
+              сравнение с другим месяцем или годом. Текущий месяц исключён по
+              Москве. При одном календарном месяце или неположительной базе
+              индекса нет.
+            </p>
+            <p>
+              Успешные файлы с объявленным периодом подтверждают обработку
+              заявленного интервала, но не независимую полноту выгрузки 1С. Без
+              них ≥90% дней с записями дают только ориентировочную регулярность.
+              Отсутствие подходящих продаж в таком месяце не превращается в
+              подтверждённый ноль. Магазины и годы показаны в подсказке, один
+              год не доказывает повторяемость.
             </p>
           </details>
         </section>
       )}
-      {row && report.snapshot && (
+      {row && data && (
         <Detail
-          key={`${row.key}:${metric}`}
+          key={row.key}
           row={row}
-          returnFocus={detailOrigin.current}
-          categoryLabels={report.data?.category_labels}
+          snapshotId={data.snapshot_id!}
           metric={metric}
-          filters={report.snapshot}
+          filters={data.filters}
+          origin={origin.current}
           onClose={() => setSelected(undefined)}
         />
       )}

@@ -16,54 +16,100 @@ vi.mock("recharts", () => ({
   XAxis: () => null,
   YAxis: () => null,
   Tooltip: () => null,
-  Legend: () => null,
 }));
-const p = (month: number) => ({
-  indices: Array.from({ length: 12 }, (_, i) => (i === month ? 100 : -10)),
-  years: [2023, 2024, 2025],
-  annual: [2023, 2024, 2025].map((year) => ({
-    year,
-    values: Array.from({ length: 12 }, (_, i) => (i === month ? 50 : 10)),
-    indices: Array.from({ length: 12 }, (_, i) => (i === month ? 100 : -10)),
-    included: true,
-    reason: null,
-    coverage: Array(12).fill(true),
+const profile = (peak: number, trough: number) => ({
+  cells: Array.from({ length: 12 }, (_, i) => ({
+    index: i === 1 ? null : i === peak ? 50 : i === trough ? -30 : 0,
+    stores: i === 1 ? [] : ["Store"],
+    years: [2024, 2025, 2026],
+    estimated: true,
+    reason: i === 1 ? "Недостаточная регулярность" : null,
+    notes: [],
   })),
-  peaks: [{ month: month + 1, count: 3, total: 3, repeating: true }],
-  message: null,
+  peaks: [peak + 1],
+  troughs: [trough + 1],
+  estimated: true,
+  actual: [
+    {
+      store: "Store",
+      year: 2025,
+      month: peak + 1,
+      value: 50,
+      method: "estimated",
+      included: true,
+      reason: null,
+    },
+  ],
 });
-const rows = [
+export const rows = [
   {
-    key: "a",
-    parent_key: "parent",
+    key: '["category:1","Чашки"]',
+    parent_key: "category:1",
     parent: "Посуда",
     name: "Чашки",
-    units: p(3),
-    revenue: p(3),
+    units: profile(3, 0),
+    revenue: profile(3, 0),
   },
   {
-    key: "b",
-    parent_key: "parent",
+    key: '["category:1","Тарелки"]',
+    parent_key: "category:1",
     parent: "Посуда",
     name: "Тарелки",
-    units: p(6),
-    revenue: p(6),
+    units: profile(6, 2),
+    revenue: profile(6, 2),
   },
 ];
-let calls: any[],
-  fail: boolean,
-  release: ((v: Response) => void) | undefined,
-  hold: boolean;
-const reply = (body: any, status = 200) =>
-  new Response(JSON.stringify(body), {
+const options = {
+  years: [2026, 2025, 2024],
+  stores: ["Store"],
+  nodes: [
+    {
+      id: "category:1",
+      name: "Посуда",
+      children: rows.map((r) => ({
+        id: r.key,
+        value: r.key,
+        name: r.name,
+        children: [],
+      })),
+    },
+  ],
+  brand: ["A", "B"],
+  manufacturer: ["X", "Y"],
+  managers: ["M"],
+  buyer_types: ["Опт"],
+};
+let calls: any[], fail: boolean, missing: boolean;
+const reply = (v: any, status = 200) =>
+  new Response(JSON.stringify(v), {
     status,
     headers: { "Content-Type": "application/json" },
   });
+function result(p: any) {
+  return {
+    state: missing ? "uninitialized" : "ready",
+    rows: missing
+      ? []
+      : rows.filter(
+          (r) =>
+            !p.categories.length ||
+            p.categories.includes("category:1") ||
+            p.categories.includes(r.key),
+        ),
+    options: missing ? {} : options,
+    filters: p,
+    snapshot_id: missing ? null : "snapshot-1",
+    last_success: missing ? null : "2026-11-13T12:00:00Z",
+    through: "2026-10-31",
+    next_update: "2026-11-14T16:00:00Z",
+    updating: false,
+    previous_after_error: false,
+  };
+}
 beforeEach(() => {
   calls = [];
   fail = false;
-  hold = false;
-  release = undefined;
+  missing = false;
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -72,46 +118,10 @@ beforeEach(() => {
   };
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      if (
-        url.endsWith("/reports/category-seasonality") &&
-        init?.method === "POST"
-      ) {
-        const data = JSON.parse(init.body as string);
-        calls.push(data);
-        if (hold)
-          return new Promise<Response>((r) => {
-            release = r;
-          });
-        if (fail) return reply({ detail: "busy" }, 503);
-        return reply({
-          rows,
-          years: data.years,
-          filters: data,
-          coverage: {},
-          warning: "Покрытие проверено",
-        });
-      }
-      if (url.includes("/category-seasonality/options"))
-        return reply({
-          years: [2025, 2024, 2023],
-          brand: ["Бренд"],
-          manufacturer: ["Завод"],
-          nodes: [
-            {
-              id: "parent",
-              name: "Посуда",
-              children: rows.map((r) => ({
-                id: r.key,
-                value: r.key,
-                name: r.name,
-                children: [],
-              })),
-            },
-          ],
-        });
-      if (url.endsWith("/filters")) return reply({ departments: ["A"] });
-      return reply([]);
+    vi.fn(async (url: string, init: RequestInit) => {
+      const p = JSON.parse(init.body as string);
+      calls.push({ url, p });
+      return fail ? reply({ detail: "failure" }, 503) : reply(result(p));
     }),
   );
 });
@@ -119,79 +129,74 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-test("does not calculate on mount or editing filters; one click and metric/detail reuse the snapshot", async () => {
+test("automatically reads ready snapshot, all history default, no build button, metric and detail use snapshot", async () => {
   render(<CategorySeasonalityPage />);
-  await screen.findByText("Сформируйте отчёт");
-  await waitFor(() =>
-    expect(screen.queryByText("Загрузка справочников…")).toBeNull(),
-  );
-  expect(calls).toHaveLength(0);
-  fireEvent.click(screen.getByRole("button", { name: "Магазин", exact: true }));
-  fireEvent.click(screen.getByText("A"));
-  expect(calls).toHaveLength(0);
-  fireEvent.click(screen.getByRole("button", { name: "Сформировать отчёт" }));
   await screen.findByText("Тепловая карта спроса");
   expect(calls).toHaveLength(1);
-  expect(calls[0].stores).toEqual(["A"]);
-  fireEvent.click(screen.getByRole("button", { name: "Выручка" }));
+  expect(calls[0].p.years).toEqual([]);
+  expect(screen.queryByText("Сформировать отчёт")).toBeNull();
+  expect(screen.queryByText(/2026 к 2025/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Выручка", exact: true }));
   expect(calls).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Чашки", exact: true }));
+  await waitFor(() => expect(calls).toHaveLength(2));
+  expect(calls[1].url).toContain("/detail");
+  expect(calls[1].p.snapshot_id).toBe("snapshot-1");
   expect(screen.getByRole("dialog").textContent).toContain("Чашки");
-  expect(screen.getByRole("dialog").textContent).toContain("Посуда");
   expect(screen.getByRole("dialog").textContent).not.toContain("Тарелки");
-  expect(calls).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Закрыть" }));
-  fireEvent.click(screen.getByRole("button", { name: "Тарелки", exact: true }));
-  expect(screen.getByRole("dialog").textContent).toContain("Тарелки");
+  expect(screen.getAllByText("Пик спроса").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Максимальный спад").length).toBeGreaterThan(0);
 });
-test("503 has no automatic retry, manual retry succeeds", async () => {
-  fail = true;
+test("filters update automatically and 503 retries are manual quick reads", async () => {
   render(<CategorySeasonalityPage />);
-  await waitFor(() =>
-    expect(screen.queryByText("Загрузка справочников…")).toBeNull(),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Сформировать отчёт" }));
-  await screen.findByText(/Сервер занят/);
-  expect(calls).toHaveLength(1);
-  fail = false;
-  fireEvent.click(screen.getByRole("button", { name: "Повторить запрос" }));
   await screen.findByText("Тепловая карта спроса");
-  expect(calls).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Магазин", exact: true }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Store" }));
+  await waitFor(() => expect(calls).toHaveLength(2));
+  expect(calls[1].p.stores).toEqual(["Store"]);
+  fail = true;
+  fireEvent.click(screen.getByRole("button", { name: "Бренд", exact: true }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "A", exact: true }));
+  await screen.findByText(/Ошибка быстрого запроса/);
+  expect(calls).toHaveLength(3);
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
+  await waitFor(() => expect(calls).toHaveLength(4));
+  expect(
+    calls.every((c) => c.url.includes("/reports/category-seasonality")),
+  ).toBe(true);
 });
-test("double click while pending sends one request", async () => {
-  hold = true;
+test("uninitialized never launches background calculation", async () => {
+  missing = true;
   render(<CategorySeasonalityPage />);
-  await waitFor(() =>
-    expect(screen.queryByText("Загрузка справочников…")).toBeNull(),
-  );
-  const b = screen.getByRole("button", { name: "Сформировать отчёт" });
-  fireEvent.click(b);
-  fireEvent.click(b);
-  await waitFor(() => expect(calls).toHaveLength(1));
-  expect(b.hasAttribute("disabled")).toBe(true);
+  await screen.findByText("Отчёт ещё не рассчитан");
+  expect(calls).toHaveLength(1);
+  expect(
+    screen.getByText(/Первое заполнение выполняет администратор/),
+  ).toBeTruthy();
+});
+test("late response cannot overwrite newer filter result", async () => {
+  let release: ((v: Response) => void) | undefined;
+  const fn = vi.fn(async (url: string, init: RequestInit) => {
+    const p = JSON.parse(init.body as string);
+    calls.push({ url, p });
+    if (calls.length === 2) return new Promise<Response>((r) => (release = r));
+    return reply(result(p));
+  });
+  vi.stubGlobal("fetch", fn);
+  render(<CategorySeasonalityPage />);
+  await screen.findByText("Тепловая карта спроса");
+  fireEvent.click(screen.getByRole("button", { name: "Магазин", exact: true }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Store" }));
+  await waitFor(() => expect(calls).toHaveLength(2));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Store" }));
+  await waitFor(() => expect(calls).toHaveLength(3));
   release!(
     reply({
-      rows,
-      years: [2025, 2024, 2023],
-      filters: calls[0],
-      warning: "Покрытие",
+      ...result(calls[1].p),
+      rows: [{ ...rows[0], name: "УСТАРЕВШИЙ" }],
     }),
   );
-  await screen.findByText("Тепловая карта спроса");
-});
-
-test("editing after generation preserves snapshot and does not recalculate", async () => {
-  render(<CategorySeasonalityPage />);
-  await waitFor(() =>
-    expect(screen.queryByText("Загрузка справочников…")).toBeNull(),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Сформировать отчёт" }));
-  await screen.findByText("Тепловая карта спроса");
-  fireEvent.click(screen.getByRole("button", { name: "Магазин", exact: true }));
-  fireEvent.click(screen.getByText("A"));
-  expect(calls).toHaveLength(1);
-  expect(screen.getByText(/Параметры изменены/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Чашки", exact: true }));
-  expect(screen.getByRole("dialog").textContent).not.toContain("МагазиныA");
-  expect(calls).toHaveLength(1);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByText("УСТАРЕВШИЙ")).toBeNull();
 });

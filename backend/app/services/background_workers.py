@@ -79,10 +79,15 @@ async def run():
     async def rfm():
         return await rfm_snapshot.refresh_tick(engine)
 
+    from app.services.category_seasonality_snapshot import tick as category_tick
+    async def category_seasonality():
+        return await category_tick(engine)
+
     rfm_snapshot.refresh_requested = asyncio.Event()
     # Existing daily FTP23:55 and hourly scenarios retain their own schedule.
     # Non-network metadata jobs can be safely rolled back on cancellation.
     async with asyncio.TaskGroup() as group:
+        group.create_task(periodic("category_seasonality", category_seasonality, interval=60))
         group.create_task(periodic("ftp_daily", ftp_autoload.scheduler, interval=60))
         group.create_task(periodic("scenarios", scenarios, interval=60))
         group.create_task(
