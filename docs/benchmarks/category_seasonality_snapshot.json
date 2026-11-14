@@ -1,0 +1,53 @@
+{
+  "sales": 120000,
+  "items": 480000,
+  "products": 12000,
+  "build_ms": 9498.900955999943,
+  "build_result": {
+    "status": "published",
+    "id": "2c07e39f-1c41-47b3-ae08-3a4ea5d49de9",
+    "rows": 60480
+  },
+  "relations_bytes": 11984896,
+  "row_counts": {
+    "facts": 60480,
+    "memberships": 4,
+    "coverage": 552
+  },
+  "rss_before": {
+    "rss_bytes": 95305728,
+    "swap_bytes": 0,
+    "process_peak_rss_bytes": 95039488
+  },
+  "rss_after": {
+    "rss_bytes": 96378880,
+    "swap_bytes": 0,
+    "process_peak_rss_bytes": 96088064
+  },
+  "reads": [
+    {
+      "scope": "wide",
+      "cache": "postgres_cold",
+      "read_ms": 536.6968329999509,
+      "categories": 120
+    },
+    {
+      "scope": "wide",
+      "cache": "warm",
+      "read_ms": 458.7284960002762,
+      "categories": 120
+    },
+    {
+      "scope": "multiple_filters",
+      "cache": "postgres_cold",
+      "read_ms": 38.32940600022994,
+      "categories": 4
+    },
+    {
+      "scope": "multiple_filters",
+      "cache": "warm",
+      "read_ms": 29.918077000274934,
+      "categories": 4
+    }
+  ]
+}

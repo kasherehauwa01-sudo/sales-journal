@@ -278,3 +278,23 @@ def test_invalid_configured_token_does_not_bypass_integration_auth(monkeypatch):
     with pytest.raises(HTTPError) as error:
         clients_vr._request(["/integration/managers", "/managers"])
     assert error.value.code == 401
+
+
+def test_snapshot_memberships_keep_existing_rules_without_filling_or_evicting_report_cache(monkeypatch):
+    monkeypatch.setattr(clients_vr,'_request',lambda paths:[{'name':' A ','manager':'M'}])
+    clients_vr.cache['unrelated']=(time.monotonic(),['keep'])
+    result=asyncio.run(clients_vr.get_snapshot_filter_clients('manager','M'))
+    assert result==['A'] and 'clients:M' not in clients_vr.cache
+    assert clients_vr.cache['unrelated'][1]==['keep']
+    asyncio.run(clients_vr.get_manager_clients('M'))
+    assert 'clients:M' in clients_vr.cache and clients_vr.CACHE_TTL_SECONDS==300
+
+
+def test_snapshot_directory_response_is_bounded_and_context_does_not_leak(monkeypatch):
+    from contextlib import contextmanager
+    @contextmanager
+    def response(*args,**kwargs):yield io.BytesIO(b' '* (8*1024*1024+1))
+    monkeypatch.setattr(clients_vr,'urlopen',response)
+    with pytest.raises(clients_vr.ClientsVrError,match='safe bound'):
+        asyncio.run(clients_vr.get_snapshot_filter_clients('manager','M'))
+    assert clients_vr._snapshot_uncached.get() is False
