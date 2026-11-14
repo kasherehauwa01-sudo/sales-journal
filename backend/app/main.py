@@ -47,3 +47,6 @@ from app.routers.report_pdf import router as report_pdf_router
 app.include_router(report_pdf_router, prefix="/api")
 from app.routers.sales_control import router as sales_control_router
 app.include_router(sales_control_router,prefix='/api')
+
+from app.routers.category_seasonality_report import router as category_seasonality_router
+app.include_router(category_seasonality_router, prefix="/api")
