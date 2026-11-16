@@ -262,7 +262,11 @@ async def materialize(db, sid, end):
     labels = await freeze_clients(db, sid, end)
     set_build_stage("facts")
     ensure_headroom()
-    await db.execute(facts_statement(pairs), dict(sid=sid, end=end))
+    from app.services.category_snapshot_facts import build_facts
+
+    await build_facts(
+        db, pairs, sid, end, facts_statement(pairs), ensure_headroom, set_build_stage
+    )
     set_build_stage("coverage")
     # Coverage is independent of all product/client filters. O(store/month) data.
     observed = (

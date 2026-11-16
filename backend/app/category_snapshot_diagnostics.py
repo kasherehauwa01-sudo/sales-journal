@@ -48,7 +48,7 @@ async def collect(engine):
                 (
                     await db.execute(
                         text(
-                            """SELECT relname,n_live_tup,n_mod_since_analyze,last_analyze,last_autoanalyze,
+                            """SELECT relname,n_live_tup,n_dead_tup,n_mod_since_analyze,last_analyze,last_autoanalyze,
                 pg_relation_size(relid) AS heap_bytes,pg_indexes_size(relid) AS index_bytes
                 FROM pg_stat_user_tables WHERE schemaname=current_schema() AND relname=ANY(:names) ORDER BY relname"""
                         ),

@@ -240,3 +240,45 @@ def test_comparison_timeout_retains_successful_sql_plan_but_not_equivalence(
     assert candidate["status"] == "failed" and candidate["phase"] == "comparison"
     assert candidate["facts_status"] == "complete" and candidate["actual_plan"]
     assert candidate["sqlstate"] == "57014" and candidate["equivalent"] is None
+
+
+def test_monthly_materialized_physical_contract_and_exact_results(engine):
+    report = lab.run(
+        engine,
+        50,
+        200,
+        20,
+        10,
+        1,
+        sql_timeout=60,
+        comparison="monthly_materialized",
+        baseline_timeout=180,
+        physical=True,
+        fresh_client_statistics=True,
+    )
+    assert report["status"] == "complete" and report["physical_target"]
+    assert report["source_fk_validated"] and report["input_ordered_by_date"]
+    baseline, candidate = report["runs"]
+    assert baseline["effective_settings"]["statement_timeout"] == "3min"
+    assert candidate["effective_settings"]["statement_timeout"] == "1min"
+    assert all(
+        r["effective_settings"]["enable_nestloop"] == "on" for r in report["runs"]
+    )
+    assert all(
+        r["effective_settings"]["transaction_isolation"] == "repeatable read"
+        for r in report["runs"]
+    )
+    assert candidate["equivalent"] is True and candidate["totals"]["lines"] == 200
+    assert len(candidate["batches"]) == 36 and len(candidate["staging"]) == 3
+    assert candidate["storage_final"]["cs_monthly_input"] > 0
+    assert all(b["status"] == "complete" for b in candidate["batches"])
+    with engine.connect() as db:
+        assert (
+            db.scalar(
+                sa.text(
+                    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=:name)"
+                ),
+                {"name": report["target_schema"]},
+            )
+            is False
+        )

@@ -10,6 +10,12 @@ from pathlib import Path
 import sqlalchemy as sa
 from app.services.category_seasonality_snapshot import facts_statement, sqlstate
 from app.services.report_execution import REPORT_SETTINGS
+from benchmarks.snapshot_monthly import (
+    execute_facts,
+    physical_target,
+    sizes,
+    reset_physical_clients,
+)
 
 PAIRS = "cs_pairs_" + "a" * 32
 
@@ -28,6 +34,15 @@ def plan_nodes(node, path="0"):
             plan_rows=node.get("Plan Rows"),
             actual_rows=node.get("Actual Rows"),
             actual_loops=node.get("Actual Loops"),
+            rows_removed_by_filter=node.get("Rows Removed by Filter"),
+            exact_heap_blocks=node.get("Exact Heap Blocks"),
+            lossy_heap_blocks=node.get("Lossy Heap Blocks"),
+            index_cond=node.get("Index Cond"),
+            hashagg_batches=node.get("HashAgg Batches"),
+            shared_read_blocks=node.get("Shared Read Blocks", 0),
+            shared_hit_blocks=node.get("Shared Hit Blocks", 0),
+            local_read_blocks=node.get("Local Read Blocks", 0),
+            local_hit_blocks=node.get("Local Hit Blocks", 0),
             relation=node.get("Relation Name"),
             index=node.get("Index Name"),
             temp_read_blocks=node.get("Temp Read Blocks", 0),
@@ -91,9 +106,14 @@ def run(
     sql_timeout=60,
     comparison="no_nested_loop",
     progress=None,
+    baseline_timeout=None,
+    physical=False,
+    fresh_client_statistics=False,
 ):
     results = []
+    preparation_started = time.perf_counter()
     with engine.connect() as db, db.begin():
+        db.execute(sa.text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
         db.execute(sa.text("SET LOCAL search_path TO pg_temp"))
         for setting in REPORT_SETTINGS:
             db.execute(sa.text(setting))
@@ -142,18 +162,35 @@ def run(
         )
         for table in ("sales", "sale_items", PAIRS):
             db.execute(sa.text("ANALYZE " + table))
+        if physical:
+            # Add after bulk generation, then validate before measuring facts.
+            # This mirrors the real sale_items→sales FK for join estimation.
+            db.execute(
+                sa.text(
+                    "ALTER TABLE sale_items ADD CONSTRAINT lab_items_sale_fk FOREIGN KEY(sale_id) REFERENCES sales(id) NOT VALID"
+                )
+            )
+            db.execute(
+                sa.text("ALTER TABLE sale_items VALIDATE CONSTRAINT lab_items_sale_fk")
+            )
         factddl = """(id bigserial PRIMARY KEY,snapshot_id text,category_id int,client_id int,store text,brand text,manufacturer text,
           year int,month int,units numeric,revenue numeric,lines bigint) ON COMMIT DROP"""
-        for table in ("category_season_facts", "baseline_facts"):
-            db.execute(sa.text("CREATE TEMP TABLE " + table + factddl))
-        db.execute(
-            sa.text(
-                "CREATE INDEX ON category_season_facts(snapshot_id,store,year,month)"
+        if physical:
+            target_schema = physical_target(db, PAIRS, date(2026, 1, 1))
+        else:
+            target_schema = None
+            db.execute(sa.text("CREATE TEMP TABLE category_season_facts" + factddl))
+            db.execute(
+                sa.text(
+                    "CREATE INDEX ON category_season_facts(snapshot_id,store,year,month)"
+                )
             )
-        )
-        db.execute(
-            sa.text("CREATE INDEX ON category_season_facts(snapshot_id,category_id)")
-        )
+            db.execute(
+                sa.text(
+                    "CREATE INDEX ON category_season_facts(snapshot_id,category_id)"
+                )
+            )
+        db.execute(sa.text("CREATE TEMP TABLE baseline_facts" + factddl))
         input_counts = dict(
             sales=sales,
             sale_items=items,
@@ -164,11 +201,20 @@ def run(
         header = dict(
             input=input_counts,
             statement_timeout_seconds=sql_timeout,
+            baseline_timeout_seconds=baseline_timeout or sql_timeout,
+            physical_target=physical,
+            source_fk_validated=physical,
+            fresh_client_statistics=fresh_client_statistics,
+            target_schema=target_schema,
+            preparation_seconds=time.perf_counter() - preparation_started,
+            isolation="repeatable read",
+            whole_snapshot_build_measured=False,
             block_size_bytes=int(db.scalar(sa.text("SHOW block_size"))),
             server_version=db.scalar(sa.text("SHOW server_version")),
             settings=list(REPORT_SETTINGS),
             temp_file_limit="1GB per backend",
             comparison_variant=comparison,
+            input_ordered_by_date=comparison == "monthly_materialized",
             production_scale_verified=False,
             source_heap_bytes={
                 table: db.scalar(
@@ -180,7 +226,11 @@ def run(
             limitations=[
                 "synthetic distribution; source rows narrower than production",
                 "single client generation in a temp table, not production multi-generation statistics",
-                "no target foreign-key triggers",
+                (
+                    "logged actual-model FK/index targets"
+                    if physical
+                    else "no target foreign-key triggers"
+                ),
                 "no other VPS services",
                 "warm caches; order alternated",
             ],
@@ -229,19 +279,40 @@ def run(
                             + ("off" if variant == "no_nested_loop" else "on")
                         )
                     )
-                    db.execute(sa.text("DROP TABLE IF EXISTS category_season_clients"))
                     db.execute(
-                        sa.text(
-                            "CREATE TEMP TABLE category_season_clients(snapshot_id text,id int,name text,PRIMARY KEY(snapshot_id,id),UNIQUE(snapshot_id,name)) ON COMMIT DROP"
-                        )
+                        sa.text("SELECT set_config('statement_timeout',:v,true)"),
+                        {
+                            "v": str(
+                                (baseline_timeout or sql_timeout)
+                                if variant == "baseline"
+                                else sql_timeout
+                            )
+                            + "s"
+                        },
                     )
+                    record["wal_start_lsn"] = str(
+                        db.scalar(sa.text("SELECT pg_current_wal_insert_lsn()"))
+                    )
+                    db.execute(sa.text("DROP TABLE IF EXISTS pg_temp.cs_monthly_input"))
+                    if physical:
+                        reset_physical_clients(db, target_schema)
+                    else:
+                        db.execute(
+                            sa.text("DROP TABLE IF EXISTS category_season_clients")
+                        )
+                    if not physical:
+                        db.execute(
+                            sa.text(
+                                "CREATE TEMP TABLE category_season_clients(snapshot_id text,id int,name text,PRIMARY KEY(snapshot_id,id),UNIQUE(snapshot_id,name)) ON COMMIT DROP"
+                            )
+                        )
                     db.execute(
                         sa.text(
                             "INSERT INTO category_season_clients SELECT 'synthetic',n,'client_'||n::text FROM generate_series(0,:n-1) n"
                         ),
                         dict(n=clients),
                     )
-                    if variant == "analyze_clients":
+                    if fresh_client_statistics or variant == "analyze_clients":
                         db.execute(sa.text("ANALYZE category_season_clients"))
                     db.execute(
                         sa.text("TRUNCATE category_season_facts RESTART IDENTITY")
@@ -249,42 +320,28 @@ def run(
                     record["effective_settings"] = dict(
                         db.execute(
                             sa.text(
-                                "SELECT current_setting('enable_nestloop') AS enable_nestloop,current_setting('work_mem') AS work_mem,current_setting('temp_file_limit') AS temp_file_limit,current_setting('statement_timeout') AS statement_timeout,current_setting('max_parallel_workers_per_gather') AS max_parallel_workers_per_gather,current_setting('hash_mem_multiplier') AS hash_mem_multiplier"
+                                "SELECT current_setting('transaction_isolation') AS transaction_isolation,current_setting('enable_nestloop') AS enable_nestloop,current_setting('work_mem') AS work_mem,current_setting('temp_file_limit') AS temp_file_limit,current_setting('statement_timeout') AS statement_timeout,current_setting('max_parallel_workers_per_gather') AS max_parallel_workers_per_gather,current_setting('hash_mem_multiplier') AS hash_mem_multiplier"
                             )
                         )
                         .mappings()
                         .one()
                     )
-                    record["phase"] = "estimated_plan"
-                    phase_started = time.perf_counter()
-                    statement = str(facts_statement(PAIRS))
-                    args = dict(sid="synthetic", end=date(2026, 1, 1))
-                    estimated = db.scalar(
-                        sa.text("EXPLAIN (FORMAT JSON, SETTINGS) " + statement), args
-                    )
-                    record.update(
-                        estimated_plan=estimated,
-                        estimated_nodes=plan_nodes(estimated[0]["Plan"]),
-                    )
-                    record["estimated_joins"] = chosen_joins(record["estimated_nodes"])
                     record["phase"] = "facts"
-                    checkpoint("running")
                     phase_started = facts_started = time.perf_counter()
-                    actual = db.scalar(
-                        sa.text(
-                            "EXPLAIN (ANALYZE, BUFFERS, SETTINGS, FORMAT JSON) "
-                            + statement
-                        ),
-                        args,
-                    )
-                    nodes = plan_nodes(actual[0]["Plan"])
-                    record.update(
-                        actual_plan=actual,
-                        actual_nodes=nodes,
-                        spill_nodes=nodes,
-                        chosen_joins=chosen_joins(nodes),
-                        facts_status="complete",
-                        elapsed_seconds=time.perf_counter() - facts_started,
+                    execute_facts(
+                        db,
+                        PAIRS,
+                        "synthetic",
+                        date(2026, 1, 1),
+                        record,
+                        variant.startswith("monthly"),
+                        plan_nodes,
+                        chosen_joins,
+                        checkpoint,
+                        statement_factory=facts_statement,
+                        materialized=variant.startswith("monthly_materialized"),
+                        input_ordered=variant != "monthly_materialized_unordered",
+                        row_counts={"sales": sales, "sale_items": items},
                     )
                     record["phase"] = "totals"
                     phase_started = time.perf_counter()
@@ -352,15 +409,35 @@ def run(
                     # 57014 aborts only this savepoint, not preparation or the
                     # following variant. Never reuse partial facts or actual rows.
                     transaction.rollback()
+                    record["io_measurement_complete"] = False
+                    batches = record.get("batches", [])
+                    record["longest_observed_batch_seconds"] = max(
+                        (b.get("elapsed_seconds", 0) for b in batches), default=0
+                    )
+                    if batches and batches[-1]["status"] == "running":
+                        batches[-1].update(status="failed", sqlstate=sqlstate(exc))
                     record.update(
                         status="failed",
                         sqlstate=sqlstate(exc),
                         phase_elapsed_seconds=time.perf_counter() - phase_started,
                     )
-                    if facts_started is not None and record["actual_plan"] is None:
+                    if (
+                        facts_started is not None
+                        and record.get("facts_status") != "complete"
+                    ):
                         record["elapsed_seconds"] = time.perf_counter() - facts_started
                         record["facts_status"] = "failed"
                 finally:
+                    record["storage_final"] = sizes(db)
+                    if record.get("wal_start_lsn"):
+                        record["cluster_wal_insert_bytes"] = int(
+                            db.scalar(
+                                sa.text(
+                                    "SELECT pg_wal_lsn_diff(pg_current_wal_insert_lsn(),CAST(:start AS pg_lsn))"
+                                ),
+                                {"start": record["wal_start_lsn"]},
+                            )
+                        )
                     record["attempt_elapsed_seconds"] = (
                         time.perf_counter() - attempt_started
                     )
@@ -376,7 +453,12 @@ def run(
                 else "failed"
             )
         )
-        return checkpoint(status)
+        report = checkpoint(status)
+        # The physical schema belongs exclusively to this synthetic run. Its
+        # rollback preserves measured WAL/IO but never leaves lab generations.
+        if physical:
+            db.rollback()
+        return report
 
 
 def main():
@@ -389,9 +471,18 @@ def main():
     parser.add_argument("--repetitions", type=int, default=2)
     parser.add_argument(
         "--comparison",
-        choices=("no_nested_loop", "analyze_clients"),
+        choices=(
+            "no_nested_loop",
+            "analyze_clients",
+            "monthly",
+            "monthly_materialized",
+            "monthly_materialized_unordered",
+        ),
         default="no_nested_loop",
     )
+    parser.add_argument("--fresh-client-statistics", action="store_true")
+    parser.add_argument("--physical-target", action="store_true")
+    parser.add_argument("--baseline-timeout-seconds", type=int)
     parser.add_argument("--sql-timeout-seconds", type=int, default=60)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -405,6 +496,10 @@ def main():
                 args.clients,
                 args.repetitions,
             )
+        )
+        or (
+            args.baseline_timeout_seconds is not None
+            and not 1 <= args.baseline_timeout_seconds <= 300
         )
         or not 1 <= args.sql_timeout_seconds <= 300
         or args.output.exists()
@@ -434,6 +529,9 @@ def main():
             args.sql_timeout_seconds,
             comparison=args.comparison,
             progress=writer,
+            baseline_timeout=args.baseline_timeout_seconds,
+            physical=args.physical_target,
+            fresh_client_statistics=args.fresh_client_statistics,
         )
         writer(result)
         if result["status"] != "complete":
