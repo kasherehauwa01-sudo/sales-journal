@@ -102,6 +102,11 @@ READ ONLY, statement_timeout3сек, lock_timeout500ms. Он читает тол
 
 ## Sales29Lab: одинаковые данные, планы и ограниченный сравнительный тест
 
+Обновление лабораторного скрипта: [no_nested_loop и SAVEPOINT](category_snapshot_no_nested_loop_lab.md).
+По умолчанию теперь baseline/no_nested_loop; старый эксперимент клиентов требует
+явного `--comparison analyze_clients`. Результаты smoke ниже — исторический
+опыт с ANALYZE clients, не результат нового варианта.
+
 Нужен PostgreSQL16 в выделенной локальной БД `category_snapshot_lab`, без рабочего
 дампа и production-подключений. URL с паролем задаётся локально через
 LAB_DATABASE_URL (не публиковать). Скрипт отвергает не-localhost и другое имя БД.
@@ -133,7 +138,7 @@ PYTHONPATH=backend python -m benchmarks.benchmark_snapshot_facts \
 
 20000клиентов здесь — synthetic assumption. Все объекты временные в pg_temp,
 ввод генерируется PostgreSQL, не большим Python-списком. Обрабатывается точный
-INSERT приложения, baseline и эксперимент `ANALYZE clients` на одном наборе,
+INSERT приложения, baseline и выбранный лабораторный вариант на одном наборе,
 в одинаковых настройках. Клиентский TEMP-словарь пересоздаётся перед каждым
 вариантом, чтобы статистика не перетекала в baseline; порядок чередуется.
 Это исследовательский вариант, он НЕ включён в production-код. У него один
@@ -165,8 +170,9 @@ prepare_pairs/freeze_clients там. Сохранять только синте�
 production-планы перед передачей проверять на литералы/чувствительные данные.
 
 Лимиты стенда: report settings60сек/4MB/serial, локальный temp_file_limit1GB.
-Если baseline прерывается, JSON получает status=failed/phase/SQLSTATE и уже
-полученный estimated plan, успех не объявляется. Только после оценки ресурсов
+Если baseline прерывается, отдельная попытка получает status=failed/phase/SQLSTATE
+и estimated plan; SAVEPOINT позволяет проверить второй вариант. Общий JSON
+может быть partial/failed; незавершённые результаты не сравниваются. Только после оценки ресурсов
 можно отдельным прогоном передать `--sql-timeout-seconds 300` (не более300).
 Оба варианта получают одинаковое значение; это **только стенд**, не патч runtime.
 Глобальные настройки PostgreSQL не меняются. Для temp_file_limit нужны права

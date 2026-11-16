@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import time
+import tempfile
 from datetime import date
 from pathlib import Path
 import sqlalchemy as sa
@@ -18,7 +19,79 @@ class LabFailure(Exception):
         self.report = report
 
 
-def run(engine, sales, items, products, clients, repetitions, sql_timeout=60):
+def plan_nodes(node, path="0"):
+    return [
+        dict(
+            path=path,
+            node_type=node["Node Type"],
+            join_type=node.get("Join Type"),
+            plan_rows=node.get("Plan Rows"),
+            actual_rows=node.get("Actual Rows"),
+            actual_loops=node.get("Actual Loops"),
+            relation=node.get("Relation Name"),
+            index=node.get("Index Name"),
+            temp_read_blocks=node.get("Temp Read Blocks", 0),
+            temp_written_blocks=node.get("Temp Written Blocks", 0),
+            sort_method=node.get("Sort Method"),
+            sort_space_kb=node.get("Sort Space Used"),
+            sort_space_type=node.get("Sort Space Type"),
+            disk_usage_kb=node.get("Disk Usage"),
+            hash_batches=node.get("Hash Batches"),
+            peak_memory_kb=node.get("Peak Memory Usage"),
+        )
+    ] + [
+        x
+        for i, child in enumerate(node.get("Plans", []))
+        for x in plan_nodes(child, path + "." + str(i))
+    ]
+
+
+def chosen_joins(nodes):
+    return [
+        n["node_type"]
+        for n in nodes
+        if n["node_type"] in {"Nested Loop", "Hash Join", "Merge Join"}
+    ]
+
+
+class ReportWriter:
+    """Keep the latest private checkpoint, including plans before timed execution."""
+
+    def __init__(self, path):
+        self.path = path
+        self.created = False
+
+    def __call__(self, report):
+        if not self.created:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            self.created = True
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.path.parent, delete=False
+            ) as file:
+                temporary = file.name
+                json.dump(report, file, default=str, indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def run(
+    engine,
+    sales,
+    items,
+    products,
+    clients,
+    repetitions,
+    sql_timeout=60,
+    comparison="no_nested_loop",
+    progress=None,
+):
     results = []
     with engine.connect() as db, db.begin():
         db.execute(sa.text("SET LOCAL search_path TO pg_temp"))
@@ -87,134 +160,23 @@ def run(engine, sales, items, products, clients, repetitions, sql_timeout=60):
             pairs=db.scalar(sa.text(f"SELECT count(*) FROM {PAIRS}")),
             clients=clients,
         )
-        for repeat in range(repetitions):
-            for variant in (
-                ("baseline", "analyze_clients")
-                if repeat % 2 == 0
-                else ("analyze_clients", "baseline")
-            ):
-                db.execute(sa.text("DROP TABLE IF EXISTS category_season_clients"))
-                db.execute(
-                    sa.text(
-                        "CREATE TEMP TABLE category_season_clients(snapshot_id text,id int,name text,PRIMARY KEY(snapshot_id,id),UNIQUE(snapshot_id,name)) ON COMMIT DROP"
-                    )
-                )
-                db.execute(
-                    sa.text(
-                        "INSERT INTO category_season_clients SELECT 'synthetic',n,'client_'||n::text FROM generate_series(0,:n-1) n"
-                    ),
-                    dict(n=clients),
-                )
-                if variant == "analyze_clients":
-                    db.execute(sa.text("ANALYZE category_season_clients"))
-                db.execute(sa.text("TRUNCATE category_season_facts RESTART IDENTITY"))
-                statement = str(facts_statement(PAIRS))
-                args = dict(sid="synthetic", end=date(2026, 1, 1))
-                estimated = db.scalar(
-                    sa.text("EXPLAIN (FORMAT JSON, SETTINGS) " + statement), args
-                )
-                started = time.perf_counter()
-                try:
-                    actual = db.scalar(
-                        sa.text(
-                            "EXPLAIN (ANALYZE, BUFFERS, SETTINGS, FORMAT JSON) "
-                            + statement
-                        ),
-                        args,
-                    )
-                except sa.exc.DBAPIError as exc:
-                    raise LabFailure(
-                        dict(
-                            status="failed",
-                            phase="facts",
-                            sqlstate=sqlstate(exc),
-                            variant=variant,
-                            repeat=repeat,
-                            input=input_counts,
-                            elapsed_seconds=time.perf_counter() - started,
-                            estimated_plan=estimated,
-                            runs=results,
-                            production_scale_verified=False,
-                        )
-                    ) from None
-                elapsed = time.perf_counter() - started
-                totals = dict(
-                    db.execute(
-                        sa.text(
-                            "SELECT count(*) AS groups,sum(lines) AS lines,sum(units) AS units,sum(revenue) AS revenue FROM category_season_facts"
-                        )
-                    )
-                    .mappings()
-                    .one()
-                )
-                # Compare every dimension and every numeric value in SQL, not in Python RAM.
-                columns = "snapshot_id,category_id,client_id,store,brand,manufacturer,year,month,units,revenue,lines"
-                if not results:
-                    db.execute(
-                        sa.text(
-                            "INSERT INTO baseline_facts("
-                            + columns
-                            + ") SELECT "
-                            + columns
-                            + " FROM category_season_facts"
-                        )
-                    )
-                difference = db.scalar(
-                    sa.text(
-                        "SELECT EXISTS((SELECT "
-                        + columns
-                        + " FROM category_season_facts EXCEPT ALL SELECT "
-                        + columns
-                        + " FROM baseline_facts) UNION ALL (SELECT "
-                        + columns
-                        + " FROM baseline_facts EXCEPT ALL SELECT "
-                        + columns
-                        + " FROM category_season_facts))"
-                    )
-                )
-                assert not difference, "Synthetic results differ"
-
-                def spill_nodes(node):
-                    return [
-                        dict(
-                            node_type=node["Node Type"],
-                            temp_read_blocks=node.get("Temp Read Blocks", 0),
-                            temp_written_blocks=node.get("Temp Written Blocks", 0),
-                            sort_space_kb=node.get("Sort Space Used"),
-                            sort_space_type=node.get("Sort Space Type"),
-                            disk_usage_kb=node.get("Disk Usage"),
-                        )
-                    ] + [
-                        x for child in node.get("Plans", []) for x in spill_nodes(child)
-                    ]
-
-                results.append(
-                    dict(
-                        variant=variant,
-                        repeat=repeat,
-                        elapsed_seconds=elapsed,
-                        totals=totals,
-                        estimated_plan=estimated,
-                        actual_plan=actual,
-                        spill_nodes=spill_nodes(actual[0]["Plan"]),
-                        equivalent=True,
-                    )
-                )
-        return dict(
-            status="complete",
+        columns = "snapshot_id,category_id,client_id,store,brand,manufacturer,year,month,units,revenue,lines"
+        header = dict(
             input=input_counts,
+            statement_timeout_seconds=sql_timeout,
+            block_size_bytes=int(db.scalar(sa.text("SHOW block_size"))),
+            server_version=db.scalar(sa.text("SHOW server_version")),
+            settings=list(REPORT_SETTINGS),
+            temp_file_limit="1GB per backend",
+            comparison_variant=comparison,
+            production_scale_verified=False,
             source_heap_bytes={
                 table: db.scalar(
-                    sa.text("SELECT pg_relation_size(CAST(:table AS regclass))"),
-                    {"table": table},
+                    sa.text("SELECT pg_relation_size(CAST(:t AS regclass))"),
+                    {"t": table},
                 )
                 for table in ("sales", "sale_items", PAIRS)
             },
-            statement_timeout_seconds=sql_timeout,
-            block_size_bytes=int(db.scalar(sa.text("SHOW block_size"))),
-            settings=list(REPORT_SETTINGS),
-            temp_file_limit="1GB per backend",
-            production_scale_verified=False,
             limitations=[
                 "synthetic distribution; source rows narrower than production",
                 "single client generation in a temp table, not production multi-generation statistics",
@@ -222,8 +184,199 @@ def run(engine, sales, items, products, clients, repetitions, sql_timeout=60):
                 "no other VPS services",
                 "warm caches; order alternated",
             ],
-            runs=results,
         )
+
+        def checkpoint(status):
+            report = dict(header, status=status, runs=results)
+            if progress:
+                progress(report)
+            return report
+
+        for repeat in range(repetitions):
+            # Only reference a completed result from this repetition. If just
+            # one variant succeeds, its output is NEVER declared equivalent.
+            reference = None
+            db.execute(sa.text("TRUNCATE baseline_facts RESTART IDENTITY"))
+            order = (
+                ("baseline", comparison)
+                if repeat % 2 == 0
+                else (comparison, "baseline")
+            )
+            for variant in order:
+                record = dict(
+                    variant=variant,
+                    repeat=repeat,
+                    status="running",
+                    phase="setup",
+                    sqlstate=None,
+                    estimated_plan=None,
+                    actual_plan=None,
+                    actual_nodes=None,
+                    equivalent=None,
+                    comparison_status="not_available",
+                )
+                results.append(record)
+                transaction = db.begin_nested()
+                attempt_started = time.perf_counter()
+                phase_started = attempt_started
+                facts_started = None
+                try:
+                    # Explicitly restore baseline ON; SET LOCAL is scoped to
+                    # this savepoint/transaction and never changes server defaults.
+                    db.execute(
+                        sa.text(
+                            "SET LOCAL enable_nestloop = "
+                            + ("off" if variant == "no_nested_loop" else "on")
+                        )
+                    )
+                    db.execute(sa.text("DROP TABLE IF EXISTS category_season_clients"))
+                    db.execute(
+                        sa.text(
+                            "CREATE TEMP TABLE category_season_clients(snapshot_id text,id int,name text,PRIMARY KEY(snapshot_id,id),UNIQUE(snapshot_id,name)) ON COMMIT DROP"
+                        )
+                    )
+                    db.execute(
+                        sa.text(
+                            "INSERT INTO category_season_clients SELECT 'synthetic',n,'client_'||n::text FROM generate_series(0,:n-1) n"
+                        ),
+                        dict(n=clients),
+                    )
+                    if variant == "analyze_clients":
+                        db.execute(sa.text("ANALYZE category_season_clients"))
+                    db.execute(
+                        sa.text("TRUNCATE category_season_facts RESTART IDENTITY")
+                    )
+                    record["effective_settings"] = dict(
+                        db.execute(
+                            sa.text(
+                                "SELECT current_setting('enable_nestloop') AS enable_nestloop,current_setting('work_mem') AS work_mem,current_setting('temp_file_limit') AS temp_file_limit,current_setting('statement_timeout') AS statement_timeout,current_setting('max_parallel_workers_per_gather') AS max_parallel_workers_per_gather,current_setting('hash_mem_multiplier') AS hash_mem_multiplier"
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                    record["phase"] = "estimated_plan"
+                    phase_started = time.perf_counter()
+                    statement = str(facts_statement(PAIRS))
+                    args = dict(sid="synthetic", end=date(2026, 1, 1))
+                    estimated = db.scalar(
+                        sa.text("EXPLAIN (FORMAT JSON, SETTINGS) " + statement), args
+                    )
+                    record.update(
+                        estimated_plan=estimated,
+                        estimated_nodes=plan_nodes(estimated[0]["Plan"]),
+                    )
+                    record["estimated_joins"] = chosen_joins(record["estimated_nodes"])
+                    record["phase"] = "facts"
+                    checkpoint("running")
+                    phase_started = facts_started = time.perf_counter()
+                    actual = db.scalar(
+                        sa.text(
+                            "EXPLAIN (ANALYZE, BUFFERS, SETTINGS, FORMAT JSON) "
+                            + statement
+                        ),
+                        args,
+                    )
+                    nodes = plan_nodes(actual[0]["Plan"])
+                    record.update(
+                        actual_plan=actual,
+                        actual_nodes=nodes,
+                        spill_nodes=nodes,
+                        chosen_joins=chosen_joins(nodes),
+                        facts_status="complete",
+                        elapsed_seconds=time.perf_counter() - facts_started,
+                    )
+                    record["phase"] = "totals"
+                    phase_started = time.perf_counter()
+                    record["totals"] = dict(
+                        db.execute(
+                            sa.text(
+                                "SELECT count(*) AS groups,sum(lines) AS lines,sum(units) AS units,sum(revenue) AS revenue FROM category_season_facts"
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                    record["phase"] = "comparison"
+                    phase_started = time.perf_counter()
+                    if reference is None:
+                        db.execute(
+                            sa.text(
+                                "INSERT INTO baseline_facts("
+                                + columns
+                                + ") SELECT "
+                                + columns
+                                + " FROM category_season_facts"
+                            )
+                        )
+                    else:
+                        differences = dict(
+                            db.execute(
+                                sa.text(
+                                    "WITH forward AS (SELECT "
+                                    + columns
+                                    + " FROM baseline_facts EXCEPT ALL SELECT "
+                                    + columns
+                                    + " FROM category_season_facts),reverse AS (SELECT "
+                                    + columns
+                                    + " FROM category_season_facts EXCEPT ALL SELECT "
+                                    + columns
+                                    + " FROM baseline_facts) SELECT (SELECT count(*) FROM forward) AS reference_minus_current,(SELECT count(*) FROM reverse) AS current_minus_reference"
+                                )
+                            )
+                            .mappings()
+                            .one()
+                        )
+                        equal = all(value == 0 for value in differences.values())
+                        detail = dict(
+                            reference_variant=reference["variant"],
+                            current_variant=variant,
+                            **differences,
+                        )
+                        record.update(
+                            equivalent=equal,
+                            comparison_status="equal" if equal else "different",
+                            comparison=detail,
+                        )
+                    transaction.commit()
+                    record.update(status="complete", phase="complete", sqlstate=None)
+                    if reference is None:
+                        reference = record
+                    else:
+                        reference.update(
+                            equivalent=record["equivalent"],
+                            comparison_status=record["comparison_status"],
+                            comparison=record["comparison"],
+                        )
+                except sa.exc.DBAPIError as exc:
+                    # 57014 aborts only this savepoint, not preparation or the
+                    # following variant. Never reuse partial facts or actual rows.
+                    transaction.rollback()
+                    record.update(
+                        status="failed",
+                        sqlstate=sqlstate(exc),
+                        phase_elapsed_seconds=time.perf_counter() - phase_started,
+                    )
+                    if facts_started is not None and record["actual_plan"] is None:
+                        record["elapsed_seconds"] = time.perf_counter() - facts_started
+                        record["facts_status"] = "failed"
+                finally:
+                    record["attempt_elapsed_seconds"] = (
+                        time.perf_counter() - attempt_started
+                    )
+                checkpoint("running")
+        status = (
+            "complete"
+            if all(
+                r["status"] == "complete" and r["equivalent"] is True for r in results
+            )
+            else (
+                "partial"
+                if any(r["status"] == "complete" for r in results)
+                else "failed"
+            )
+        )
+        return checkpoint(status)
 
 
 def main():
@@ -234,6 +387,11 @@ def main():
     parser.add_argument("--products", type=int, default=10000)
     parser.add_argument("--clients", type=int, default=2000)
     parser.add_argument("--repetitions", type=int, default=2)
+    parser.add_argument(
+        "--comparison",
+        choices=("no_nested_loop", "analyze_clients"),
+        default="no_nested_loop",
+    )
     parser.add_argument("--sql-timeout-seconds", type=int, default=60)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -264,6 +422,7 @@ def main():
     ):
         parser.error("Dedicated localhost category_snapshot_lab database required")
     engine = sa.create_engine(url, poolclass=sa.pool.NullPool)
+    writer = ReportWriter(args.output)
     try:
         result = run(
             engine,
@@ -273,12 +432,16 @@ def main():
             args.clients,
             args.repetitions,
             args.sql_timeout_seconds,
+            comparison=args.comparison,
+            progress=writer,
         )
-        with args.output.open("x") as file:
-            json.dump(result, file, default=str, indent=2)
+        writer(result)
+        if result["status"] != "complete":
+            raise SystemExit(
+                "SYNTHETIC_LAB_INCOMPLETE: see each attempt phase/sqlstate; no automatic retry"
+            )
     except LabFailure as exc:
-        with args.output.open("x") as file:
-            json.dump(exc.report, file, default=str, indent=2)
+        writer(exc.report)
         raise SystemExit(
             "SYNTHETIC_LAB_FAILED phase=facts sqlstate="
             + (exc.report["sqlstate"] or "unknown")
