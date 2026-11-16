@@ -282,3 +282,59 @@ def test_monthly_materialized_physical_contract_and_exact_results(engine):
             )
             is False
         )
+
+
+def test_chunked_two_orders_sparse_ids_and_bounded_batches(engine, monkeypatch):
+    from app.services import category_snapshot_facts as builder
+
+    monkeypatch.setattr(builder, "INPUT_SALES_BATCH", 10)
+    report = lab.run(
+        engine,
+        50,
+        200,
+        20,
+        10,
+        2,
+        comparison="monthly_chunked",
+        baseline_timeout=180,
+        physical=True,
+        fresh_client_statistics=True,
+    )
+    assert report["status"] == "complete" and report["input_ordered_by_date"]
+    assert [r["variant"] for r in report["runs"]] == [
+        "baseline",
+        "monthly_chunked",
+        "monthly_chunked",
+        "baseline",
+    ]
+    for r in report["runs"]:
+        assert (
+            r["equivalent"]
+            and r["comparison"]["reference_minus_current"]
+            == r["comparison"]["current_minus_reference"]
+            == 0
+        )
+        if r["variant"] == "monthly_chunked":
+            assert r["effective_settings"]["statement_timeout"] == "1min"
+            assert r["effective_settings"]["enable_nestloop"] == "on"
+            stages = r["staging"]
+            assert len([s for s in stages if s["kind"] == "input_chunk"]) == 5
+            assert all(s["status"] == "complete" for s in stages)
+            assert {"input_sort", "input_date_index", "input_statistics"} <= {
+                s["kind"] for s in stages
+            }
+            assert r["totals"]["lines"] == 200
+    # IDs need not be contiguous or start at one; boundaries consume actual rows.
+    with engine.connect() as db, db.begin():
+        db.execute(
+            sa.text("CREATE TEMP TABLE sales(id bigint PRIMARY KEY) ON COMMIT DROP")
+        )
+        db.execute(
+            sa.text("INSERT INTO sales VALUES (-100),(1),(1000000000),(2000000000)")
+        )
+        monkeypatch.setattr(builder, "INPUT_SALES_BATCH", 2)
+        assert db.scalar(builder.input_boundary_statement(), {"start": -100}) == 1
+        assert db.scalar(builder.input_boundary_statement(), {"start": 2}) == 2000000000
+        assert (
+            db.scalar(builder.input_boundary_statement(), {"start": 2000000001}) is None
+        )

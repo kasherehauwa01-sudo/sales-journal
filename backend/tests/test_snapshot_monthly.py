@@ -169,6 +169,7 @@ def test_complete_builder_matches_legacy_with_nulls_and_calendar_edges(
 
     _, engine, factory, _ = snapshot_pg
     candidate = builder.build_facts
+    monkeypatch.setattr(builder, "INPUT_SALES_BATCH", 137)
 
     async def legacy(db, pairs, sid, end, source, ensure_headroom, set_stage):
         await db.execute(source, dict(sid=sid, end=end))
@@ -277,3 +278,121 @@ def test_complete_builder_matches_legacy_with_nulls_and_calendar_edges(
             )
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("active,manual", [(False, True), (True, True), (True, False)])
+@pytest.mark.parametrize(
+    "stage", ["facts_input", "facts_sort", "facts_index", "facts_statistics"]
+)
+@pytest.mark.parametrize("failure", ["timeout", "cancelled"])
+def test_preparation_failure_is_atomic_and_manual_retry_works(
+    snapshot_pg, monkeypatch, active, manual, stage, failure
+):
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.services import category_snapshot_facts as builder
+
+    _, engine, factory, _ = snapshot_pg
+    execute = AsyncSession.execute
+
+    async def run():
+        async with factory() as db:
+            await seed(db)
+        prior = (
+            await service.rebuild(engine, manual=True, clock=CLOCK) if active else None
+        )
+        clock = service.next_slot(CLOCK) if not manual else CLOCK + timedelta(days=1)
+        chunks = 0
+        injected = False
+
+        async def intercepted(db, stmt, *args, **kwargs):
+            nonlocal chunks, injected
+            sql = str(stmt)
+            current_stage = service._BUILD_STAGE.get()[0]
+            if sql.startswith("INSERT INTO pg_temp.cs_input_"):
+                chunks += 1
+            # Fail preparation only after at least one input chunk was inserted.
+            target = current_stage == stage and (stage != "facts_input" or chunks == 2)
+            if (
+                target
+                and not injected
+                and sql.startswith(
+                    (
+                        "INSERT INTO pg_temp.cs_input_",
+                        "CREATE TEMP TABLE cs_input_",
+                        "CREATE INDEX ON cs_input_",
+                        "ANALYZE cs_input_",
+                    )
+                )
+            ):
+                injected = True
+                assert chunks > 0
+                if failure == "cancelled":
+                    raise asyncio.CancelledError()
+                await execute(db, sa.text("SET LOCAL statement_timeout='1ms'"))
+                return await execute(db, sa.text("SELECT pg_sleep(0.05)"))
+            return await execute(db, stmt, *args, **kwargs)
+
+        monkeypatch.setattr(builder, "INPUT_SALES_BATCH", 100)
+        monkeypatch.setattr(AsyncSession, "execute", intercepted)
+        with pytest.raises(
+            asyncio.CancelledError if failure == "cancelled" else sa.exc.DBAPIError
+        ):
+            await service.rebuild(engine, manual=manual, clock=clock)
+        assert injected
+        async with factory() as db:
+            state = await db.get(State, 1)
+            assert state.active_id == (prior["id"] if prior else None)
+            assert state.next_due == (
+                None if not active else service.next_slot(CLOCK if manual else clock)
+            )
+            attempt = await db.scalar(
+                sa.select(Snapshot).where(Snapshot.status == "failed")
+            )
+            assert attempt.fact_rows == 0
+            assert attempt.error_code == (
+                "cancelled" if failure == "cancelled" else stage + ":57014"
+            )
+            assert (
+                await db.scalar(
+                    sa.select(sa.func.count())
+                    .select_from(Fact)
+                    .where(Fact.snapshot_id == attempt.id)
+                )
+                == 0
+            )
+            assert (
+                await db.scalar(
+                    sa.text(
+                        "SELECT count(*) FROM pg_class WHERE relpersistence='t' AND relname ~ '^cs_input_[0-9a-f]{32}$'"
+                    )
+                )
+                == 0
+            )
+        monkeypatch.setattr(AsyncSession, "execute", execute)
+        assert (
+            await service.rebuild(engine, manual=True, clock=CLOCK + timedelta(days=1))
+        )["status"] == "published"
+
+    asyncio.run(run())
+
+
+def test_chunk_sql_preserves_source_and_half_open_id_bounds():
+    from app.services.category_snapshot_facts import (
+        chunk_input_statement,
+        empty_input_statement,
+        ordered_input_statement,
+    )
+
+    source = service.facts_statement("cs_pairs_" + "a" * 32)
+    name = "cs_input_" + "b" * 32
+    result = str(chunk_input_statement(source, name))
+    joins = str(source)[
+        str(source).index("FROM sale_items i") : str(source).index("GROUP BY")
+    ]
+    assert joins in result
+    assert result.endswith("AND i.sale_id>=:id_start AND i.sale_id<:id_end")
+    assert "ORDER BY" not in result
+    assert str(empty_input_statement(source, name)).endswith("AND false")
+    assert str(ordered_input_statement(name, "cs_input_" + "c" * 32)).endswith(
+        "ORDER BY sale_date"
+    )

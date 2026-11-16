@@ -1,0 +1,629 @@
+{
+  "scope": "Agent synthetic native PostgreSQL 16.2, UTF8/C.utf8, not Docker or FirstVDS. Two orders. Work_mem4MB, temp_file_limit1GB, baseline180s/candidate60s. Raw input_ordered_by_date=false is an initial header omission for monthly_chunked, corrected in code after launch; actual input_sort plans prove ordering. Raw JSON not rewritten. Timed SQL sum excludes boundary/select/EXPLAIN estimates and checkpoints; elapsed_seconds includes instrumented pipeline/checkpoint overhead, not full application snapshot. Temp is cumulative IO, not peak files; includes roots of instrumented staging and facts only, not plain index/ANALYZE/setup/comparison. Relation sums are post-statement samples, not peak. Cluster WAL delta is cluster-global.",
+  "reports": [
+    {
+      "file": "chunked-100k.json.gz",
+      "raw_sha256": "52c3aa5a53aa5b190ac490ffbb06cec628fe3baef57a5a2206958489928a9a03",
+      "input": {
+        "sales": 25000,
+        "sale_items": 100000,
+        "pairs": 20000,
+        "clients": 2000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "physical_target": true,
+      "source_fk_validated": true,
+      "runs": [
+        {
+          "repeat": 0,
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 2.598937181999645,
+          "attempt_elapsed_seconds": 2.812923288998718,
+          "longest_measured_sql_seconds": 2.572888098999101,
+          "longest_batch_seconds": 2.572888098999101,
+          "sql_seconds": 2.572888098999101,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803,
+          "executor_wal_bytes": 14618836,
+          "cluster_wal_insert_bytes": 15410752,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_chunked",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "3min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 801,
+          "instrumented_temp_written_blocks": 803,
+          "staging_elapsed_sum_seconds": 0,
+          "timed_sql_sum_seconds": 2.572888098999101,
+          "staging_kinds": {},
+          "max_observed_input_relations_sum_bytes": 0,
+          "input_scan_proof": {
+            "chunks": 0,
+            "source_nodes": 0,
+            "node_types": [],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 0,
+            "sum_rows_times_loops": 0,
+            "max_exact_heap_blocks": 0,
+            "max_local_read_blocks": 0
+          }
+        },
+        {
+          "repeat": 0,
+          "variant": "monthly_chunked",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 7.152858643999934,
+          "attempt_elapsed_seconds": 7.6306945539981825,
+          "longest_measured_sql_seconds": 0.5417170139990048,
+          "longest_batch_seconds": 0.06605282999953488,
+          "sql_seconds": 1.0599816860012652,
+          "temp_read_blocks": 0,
+          "temp_written_blocks": 0,
+          "executor_wal_bytes": 14617088,
+          "cluster_wal_insert_bytes": 15436200,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_chunked",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 5931008,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024,
+            "cs_monthly_input": 10158080
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "1min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 890,
+          "instrumented_temp_written_blocks": 892,
+          "staging_elapsed_sum_seconds": 1.82894700000179,
+          "timed_sql_sum_seconds": 2.888928686003055,
+          "staging_kinds": {
+            "input_chunk": {
+              "count": 3,
+              "sum_seconds": 1.3713476390003052,
+              "max_seconds": 0.5417170139990048
+            },
+            "input_date_index": {
+              "count": 1,
+              "sum_seconds": 0.10666440600107308,
+              "max_seconds": 0.10666440600107308
+            },
+            "input_empty": {
+              "count": 1,
+              "sum_seconds": 0.004339928000263171,
+              "max_seconds": 0.004339928000263171
+            },
+            "input_raw_drop": {
+              "count": 1,
+              "sum_seconds": 0.0015397120005218312,
+              "max_seconds": 0.0015397120005218312
+            },
+            "input_sort": {
+              "count": 1,
+              "sum_seconds": 0.1988953580002999,
+              "max_seconds": 0.1988953580002999
+            },
+            "input_statistics": {
+              "count": 1,
+              "sum_seconds": 0.14615995699932682,
+              "max_seconds": 0.14615995699932682
+            }
+          },
+          "max_observed_input_relations_sum_bytes": 18587648,
+          "input_scan_proof": {
+            "chunks": 3,
+            "source_nodes": 3,
+            "node_types": [
+              "Bitmap Heap Scan"
+            ],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 40000,
+            "sum_rows_times_loops": 100000,
+            "max_exact_heap_blocks": 360,
+            "max_local_read_blocks": 421
+          }
+        },
+        {
+          "repeat": 1,
+          "variant": "monthly_chunked",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 8.631264391999139,
+          "attempt_elapsed_seconds": 8.867988945999969,
+          "longest_measured_sql_seconds": 0.5243994299999031,
+          "longest_batch_seconds": 0.09696117700150353,
+          "sql_seconds": 1.569495397994615,
+          "temp_read_blocks": 0,
+          "temp_written_blocks": 0,
+          "executor_wal_bytes": 14617088,
+          "cluster_wal_insert_bytes": 15447832,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "monthly_chunked",
+            "current_variant": "baseline",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 5931008,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024,
+            "cs_monthly_input": 10158080
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "1min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 890,
+          "instrumented_temp_written_blocks": 892,
+          "staging_elapsed_sum_seconds": 1.1388527220042306,
+          "timed_sql_sum_seconds": 2.7083481199988455,
+          "staging_kinds": {
+            "input_chunk": {
+              "count": 3,
+              "sum_seconds": 0.8808089590020245,
+              "max_seconds": 0.5243994299999031
+            },
+            "input_date_index": {
+              "count": 1,
+              "sum_seconds": 0.050765815001796,
+              "max_seconds": 0.050765815001796
+            },
+            "input_empty": {
+              "count": 1,
+              "sum_seconds": 0.002922577998106135,
+              "max_seconds": 0.002922577998106135
+            },
+            "input_raw_drop": {
+              "count": 1,
+              "sum_seconds": 0.0012353589991107583,
+              "max_seconds": 0.0012353589991107583
+            },
+            "input_sort": {
+              "count": 1,
+              "sum_seconds": 0.11039213500043843,
+              "max_seconds": 0.11039213500043843
+            },
+            "input_statistics": {
+              "count": 1,
+              "sum_seconds": 0.09272787600275478,
+              "max_seconds": 0.09272787600275478
+            }
+          },
+          "max_observed_input_relations_sum_bytes": 18587648,
+          "input_scan_proof": {
+            "chunks": 3,
+            "source_nodes": 3,
+            "node_types": [
+              "Bitmap Heap Scan"
+            ],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 40000,
+            "sum_rows_times_loops": 100000,
+            "max_exact_heap_blocks": 360,
+            "max_local_read_blocks": 421
+          }
+        },
+        {
+          "repeat": 1,
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 2.0524706470023375,
+          "attempt_elapsed_seconds": 2.278879783996672,
+          "longest_measured_sql_seconds": 1.8728046109972638,
+          "longest_batch_seconds": 1.8728046109972638,
+          "sql_seconds": 1.8728046109972638,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803,
+          "executor_wal_bytes": 14618836,
+          "cluster_wal_insert_bytes": 15432424,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "monthly_chunked",
+            "current_variant": "baseline",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "3min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 801,
+          "instrumented_temp_written_blocks": 803,
+          "staging_elapsed_sum_seconds": 0,
+          "timed_sql_sum_seconds": 1.8728046109972638,
+          "staging_kinds": {},
+          "max_observed_input_relations_sum_bytes": 0,
+          "input_scan_proof": {
+            "chunks": 0,
+            "source_nodes": 0,
+            "node_types": [],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 0,
+            "sum_rows_times_loops": 0,
+            "max_exact_heap_blocks": 0,
+            "max_local_read_blocks": 0
+          }
+        }
+      ]
+    },
+    {
+      "file": "chunked-4m6.json.gz",
+      "raw_sha256": "f1558b0b8e4aebbf3fdbd315efb6e6d1dc76570033d5d2c3fed388f175da00a6",
+      "input": {
+        "sales": 1190000,
+        "sale_items": 4600000,
+        "pairs": 73412,
+        "clients": 20000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "physical_target": true,
+      "source_fk_validated": true,
+      "runs": [
+        {
+          "repeat": 0,
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 63.34118619199944,
+          "attempt_elapsed_seconds": 64.9380742100002,
+          "longest_measured_sql_seconds": 63.32688542300093,
+          "longest_batch_seconds": 63.32688542300093,
+          "sql_seconds": 63.32688542300093,
+          "temp_read_blocks": 92025,
+          "temp_written_blocks": 92143,
+          "executor_wal_bytes": 294419083,
+          "cluster_wal_insert_bytes": 302952112,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_chunked",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 116523008,
+            "baseline_facts": 104169472,
+            "category_season_clients": 3284992
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "3min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 92025,
+          "instrumented_temp_written_blocks": 92143,
+          "staging_elapsed_sum_seconds": 0,
+          "timed_sql_sum_seconds": 63.32688542300093,
+          "staging_kinds": {},
+          "max_observed_input_relations_sum_bytes": 0,
+          "input_scan_proof": {
+            "chunks": 0,
+            "source_nodes": 0,
+            "node_types": [],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 0,
+            "sum_rows_times_loops": 0,
+            "max_exact_heap_blocks": 0,
+            "max_local_read_blocks": 0
+          }
+        },
+        {
+          "repeat": 0,
+          "variant": "monthly_chunked",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 104.113587611002,
+          "attempt_elapsed_seconds": 113.73928636199707,
+          "longest_measured_sql_seconds": 3.598011938000127,
+          "longest_batch_seconds": 1.0827101069990022,
+          "sql_seconds": 23.0559626679933,
+          "temp_read_blocks": 37306,
+          "temp_written_blocks": 98724,
+          "executor_wal_bytes": 294624390,
+          "cluster_wal_insert_bytes": 303229240,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_chunked",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 116563968,
+            "baseline_facts": 104169472,
+            "category_season_clients": 3284992,
+            "cs_monthly_input": 454131712
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "1min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 166384,
+          "instrumented_temp_written_blocks": 227928,
+          "staging_elapsed_sum_seconds": 39.859594076955545,
+          "timed_sql_sum_seconds": 62.915556744948844,
+          "staging_kinds": {
+            "input_chunk": {
+              "count": 119,
+              "sum_seconds": 34.782579451959464,
+              "max_seconds": 0.6586162470011914
+            },
+            "input_date_index": {
+              "count": 1,
+              "sum_seconds": 1.2376546019986563,
+              "max_seconds": 1.2376546019986563
+            },
+            "input_empty": {
+              "count": 1,
+              "sum_seconds": 0.0018716739978117403,
+              "max_seconds": 0.0018716739978117403
+            },
+            "input_raw_drop": {
+              "count": 1,
+              "sum_seconds": 0.0019939400008297525,
+              "max_seconds": 0.0019939400008297525
+            },
+            "input_sort": {
+              "count": 1,
+              "sum_seconds": 3.598011938000127,
+              "max_seconds": 3.598011938000127
+            },
+            "input_statistics": {
+              "count": 1,
+              "sum_seconds": 0.23748247099865694,
+              "max_seconds": 0.23748247099865694
+            }
+          },
+          "max_observed_input_relations_sum_bytes": 842186752,
+          "input_scan_proof": {
+            "chunks": 119,
+            "source_nodes": 119,
+            "node_types": [
+              "Bitmap Heap Scan"
+            ],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 40000,
+            "sum_rows_times_loops": 4600000,
+            "max_exact_heap_blocks": 370,
+            "max_local_read_blocks": 432
+          }
+        },
+        {
+          "repeat": 1,
+          "variant": "monthly_chunked",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 199.53072636399884,
+          "attempt_elapsed_seconds": 201.6232664349991,
+          "longest_measured_sql_seconds": 3.8823302870005136,
+          "longest_batch_seconds": 0.8300563720003993,
+          "sql_seconds": 22.304233058988757,
+          "temp_read_blocks": 37295,
+          "temp_written_blocks": 98839,
+          "executor_wal_bytes": 294413125,
+          "cluster_wal_insert_bytes": 303225328,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "monthly_chunked",
+            "current_variant": "baseline",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 116563968,
+            "baseline_facts": 104202240,
+            "category_season_clients": 3284992,
+            "cs_monthly_input": 454131712
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "1min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 166373,
+          "instrumented_temp_written_blocks": 228043,
+          "staging_elapsed_sum_seconds": 51.04683729502358,
+          "timed_sql_sum_seconds": 73.35107035401234,
+          "staging_kinds": {
+            "input_chunk": {
+              "count": 119,
+              "sum_seconds": 45.659323516025324,
+              "max_seconds": 0.8207554109976627
+            },
+            "input_date_index": {
+              "count": 1,
+              "sum_seconds": 1.258760220996919,
+              "max_seconds": 1.258760220996919
+            },
+            "input_empty": {
+              "count": 1,
+              "sum_seconds": 0.005382604998885654,
+              "max_seconds": 0.005382604998885654
+            },
+            "input_raw_drop": {
+              "count": 1,
+              "sum_seconds": 0.008689394002431072,
+              "max_seconds": 0.008689394002431072
+            },
+            "input_sort": {
+              "count": 1,
+              "sum_seconds": 3.8823302870005136,
+              "max_seconds": 3.8823302870005136
+            },
+            "input_statistics": {
+              "count": 1,
+              "sum_seconds": 0.23235127199950512,
+              "max_seconds": 0.23235127199950512
+            }
+          },
+          "max_observed_input_relations_sum_bytes": 842186752,
+          "input_scan_proof": {
+            "chunks": 119,
+            "source_nodes": 119,
+            "node_types": [
+              "Bitmap Heap Scan"
+            ],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 40000,
+            "sum_rows_times_loops": 4600000,
+            "max_exact_heap_blocks": 370,
+            "max_local_read_blocks": 432
+          }
+        },
+        {
+          "repeat": 1,
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "elapsed_seconds": 63.9898711349997,
+          "attempt_elapsed_seconds": 73.06753695500083,
+          "longest_measured_sql_seconds": 62.83006142200247,
+          "longest_batch_seconds": 62.83006142200247,
+          "sql_seconds": 62.83006142200247,
+          "temp_read_blocks": 92025,
+          "temp_written_blocks": 92143,
+          "executor_wal_bytes": 297327973,
+          "cluster_wal_insert_bytes": 307090888,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "monthly_chunked",
+            "current_variant": "baseline",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "storage_final": {
+            "category_season_facts": 116523008,
+            "baseline_facts": 104202240,
+            "category_season_clients": 3284992
+          },
+          "effective_settings": {
+            "transaction_isolation": "repeatable read",
+            "enable_nestloop": "on",
+            "work_mem": "4MB",
+            "temp_file_limit": "1GB",
+            "statement_timeout": "3min",
+            "max_parallel_workers_per_gather": "0",
+            "hash_mem_multiplier": "1"
+          },
+          "instrumented_temp_read_blocks": 92025,
+          "instrumented_temp_written_blocks": 92143,
+          "staging_elapsed_sum_seconds": 0,
+          "timed_sql_sum_seconds": 62.83006142200247,
+          "staging_kinds": {},
+          "max_observed_input_relations_sum_bytes": 0,
+          "input_scan_proof": {
+            "chunks": 0,
+            "source_nodes": 0,
+            "node_types": [],
+            "seq_scan_nodes": 0,
+            "max_rows_times_loops": 0,
+            "sum_rows_times_loops": 0,
+            "max_exact_heap_blocks": 0,
+            "max_local_read_blocks": 0
+          }
+        }
+      ]
+    }
+  ]
+}

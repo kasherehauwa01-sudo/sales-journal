@@ -209,3 +209,6 @@ run_lab --confirm-synthetic-lab --sales 1190000 --items 4600000 \
 LAB_ROOT и лабораторные образы остаются, чужие данные/volumes не удаляются.
 Не коммитить private.env/полные логи. В PR передать синтетические JSON и краткий
 итог; без них4,6млн не считается проверенным.
+
+Актуальное продолжение после тайм-аута staging_input на Sales29Lab:
+[порционная подготовка входа](category_snapshot_chunked_candidate.md), draft PR189.

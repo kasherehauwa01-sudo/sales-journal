@@ -10,6 +10,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from app.services.category_seasonality_snapshot import facts_statement, sqlstate
 from app.services.report_execution import REPORT_SETTINGS
+from app.services.category_snapshot_facts import INPUT_SALES_BATCH
 from benchmarks.snapshot_monthly import (
     execute_facts,
     physical_target,
@@ -214,7 +215,11 @@ def run(
             settings=list(REPORT_SETTINGS),
             temp_file_limit="1GB per backend",
             comparison_variant=comparison,
-            input_ordered_by_date=comparison == "monthly_materialized",
+            input_ordered_by_date=comparison
+            in {"monthly_materialized", "monthly_chunked"},
+            input_sales_batch=(
+                INPUT_SALES_BATCH if comparison == "monthly_chunked" else None
+            ),
             production_scale_verified=False,
             source_heap_bytes={
                 table: db.scalar(
@@ -339,7 +344,9 @@ def run(
                         chosen_joins,
                         checkpoint,
                         statement_factory=facts_statement,
-                        materialized=variant.startswith("monthly_materialized"),
+                        materialized=variant.startswith("monthly_materialized")
+                        or variant == "monthly_chunked",
+                        chunked=variant == "monthly_chunked",
                         input_ordered=variant != "monthly_materialized_unordered",
                         row_counts={"sales": sales, "sale_items": items},
                     )
@@ -477,6 +484,7 @@ def main():
             "monthly",
             "monthly_materialized",
             "monthly_materialized_unordered",
+            "monthly_chunked",
         ),
         default="no_nested_loop",
     )

@@ -5,6 +5,10 @@ from app.services.category_snapshot_facts import (
     month_ranges,
     input_statement,
     batch_statement,
+    empty_input_statement,
+    chunk_input_statement,
+    input_boundary_statement,
+    ordered_input_statement,
 )
 import time
 import sqlalchemy as sa
@@ -86,6 +90,7 @@ def sizes(db):
         "baseline_facts",
         "category_season_clients",
         "cs_monthly_input",
+        "cs_input_" + "c" * 32,
     ):
         if db.scalar(sa.text("SELECT to_regclass(:t)"), {"t": name}) is None:
             continue
@@ -112,6 +117,7 @@ def execute_facts(
     materialized=False,
     row_counts=None,
     input_ordered=True,
+    chunked=False,
 ):
     """All statements run on the caller's connection and repeatable-read transaction."""
     began = time.perf_counter()
@@ -119,7 +125,15 @@ def execute_facts(
     record["batches"] = []
     if materialized:
         stage_input(
-            db, pairs, sid, end, record, plan_nodes, checkpoint, ordered=input_ordered
+            db,
+            pairs,
+            sid,
+            end,
+            record,
+            plan_nodes,
+            checkpoint,
+            ordered=input_ordered,
+            chunked=chunked,
         )
     if monthly:
         first = db.scalar(
@@ -299,7 +313,11 @@ def materialized_statement():
     return batch_statement(INPUT)
 
 
-def stage_input(db, pairs, sid, end, record, plan_nodes, checkpoint, ordered=True):
+def stage_input(
+    db, pairs, sid, end, record, plan_nodes, checkpoint, ordered=True, chunked=False
+):
+    if chunked:
+        return stage_chunked_input(db, pairs, sid, end, record, plan_nodes, checkpoint)
     statement = str(input_statement(facts_statement(pairs), INPUT, ordered=ordered))
     record["staging"] = []
     stage = dict(kind="joined_input", status="running", actual_plan=None)
@@ -351,3 +369,69 @@ def stage_input(db, pairs, sid, end, record, plan_nodes, checkpoint, ordered=Tru
             elapsed_seconds=time.perf_counter() - started,
             storage_after=sizes(db),
         )
+
+
+RAW_INPUT = "cs_input_" + "c" * 32
+
+
+def stage_chunked_input(db, pairs, sid, end, record, plan_nodes, checkpoint):
+    record["staging"] = []
+    source = facts_statement(pairs)
+
+    def execute(kind, statement, args=None, explain=False):
+        stage = dict(kind=kind, status="running", actual_plan=None)
+        record["staging"].append(stage)
+        record["phase"] = kind
+        if explain:
+            stage["estimated_plan"] = db.scalar(
+                sa.text("EXPLAIN (FORMAT JSON, SETTINGS) " + str(statement)), args or {}
+            )
+        checkpoint("running")
+        started = time.perf_counter()
+        try:
+            if explain:
+                actual = db.scalar(
+                    sa.text(
+                        "EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS, FORMAT JSON) "
+                        + str(statement)
+                    ),
+                    args or {},
+                )
+                stage.update(
+                    actual_plan=actual, actual_nodes=plan_nodes(actual[0]["Plan"])
+                )
+            else:
+                db.execute(statement, args or {})
+        except sa.exc.DBAPIError as exc:
+            stage.update(
+                status="failed",
+                sqlstate=sqlstate(exc),
+                elapsed_seconds=time.perf_counter() - started,
+            )
+            raise
+        stage.update(
+            status="complete",
+            elapsed_seconds=time.perf_counter() - started,
+            storage_after=sizes(db),
+        )
+        checkpoint("running")
+
+    execute(
+        "input_empty", empty_input_statement(source, RAW_INPUT), dict(sid=sid, end=end)
+    )
+    start = db.scalar(sa.text("SELECT min(id) FROM sales"))
+    while start is not None:
+        last = db.scalar(input_boundary_statement(), {"start": start})
+        if last is None:
+            break
+        execute(
+            "input_chunk",
+            chunk_input_statement(source, RAW_INPUT),
+            dict(sid=sid, end=end, id_start=start, id_end=last + 1),
+            explain=True,
+        )
+        start = last + 1
+    execute("input_sort", ordered_input_statement(RAW_INPUT, INPUT), explain=True)
+    execute("input_raw_drop", sa.text("DROP TABLE pg_temp." + RAW_INPUT))
+    execute("input_date_index", sa.text("CREATE INDEX ON cs_monthly_input(sale_date)"))
+    execute("input_statistics", sa.text("ANALYZE cs_monthly_input"))
