@@ -2,7 +2,7 @@
 
 import argparse, asyncio, json
 from app.database import engine
-from app.services.category_seasonality_snapshot import rebuild
+from app.services.category_seasonality_snapshot import rebuild, sqlstate
 
 
 def main():
@@ -17,7 +17,10 @@ def main():
                 print(json.dumps(await rebuild(engine, manual=True)))
             except Exception as exc:
                 raise SystemExit(
-                    "CATEGORY_SNAPSHOT_FAILED: " + type(exc).__name__
+                    "CATEGORY_SNAPSHOT_FAILED: "
+                    + type(exc).__name__
+                    + " sqlstate="
+                    + (sqlstate(exc) or "unknown")
                 ) from None
         finally:
             await engine.dispose()
