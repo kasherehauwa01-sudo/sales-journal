@@ -92,7 +92,6 @@ const months = [
   "Ноябрь",
   "Декабрь",
 ];
-const monthIndices = months.map((_, i) => i);
 const demandThreshold = 15;
 const signed = (n: number | null) =>
   n !== null && n !== 0 && Math.abs(n) < 0.05
@@ -350,7 +349,7 @@ export function CategorySeasonalityPage() {
     [manager, setManager] = useState<string[]>([]),
     [buyer, setBuyer] = useState<string[]>([]),
     [metric, setMetric] = useState<"units" | "revenue">("units");
-  const [selectedMonths, setSelectedMonths] = useState<number[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [data, setData] = useState<Result>(),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -410,24 +409,25 @@ export function CategorySeasonalityPage() {
   }, [params, retry]);
   const options = data?.options,
     row = data?.rows.find((r) => r.key === selected);
-  const visibleGroups = useMemo(() => {
-    const groups = new Map<string, Row[]>();
-    for (const r of data?.rows ?? []) {
-      if (
-        selectedMonths.length &&
-        !selectedMonths.some((i) => {
-          const index = r[metric].cells[i]?.index;
-          return index != null && index > demandThreshold;
-        })
-      )
-        continue;
+  const visibleGroups = useMemo<[string | null, Row[]][]>(() => {
+    const rows = data?.rows ?? [];
+    if (selectedMonth !== null) {
+      const ranked = rows.flatMap((row) => {
+        const index = row[metric].cells[selectedMonth]?.index;
+        return index != null && index > demandThreshold ? [{ row, index }] : [];
+      });
+      ranked.sort((a, b) => b.index - a.index);
+      return ranked.length ? [[null, ranked.map(({ row }) => row)]] : [];
+    }
 
-      const members = groups.get(r.parent_key);
-      if (members) members.push(r);
-      else groups.set(r.parent_key, [r]);
+    const groups = new Map<string, Row[]>();
+    for (const row of rows) {
+      const members = groups.get(row.parent_key);
+      if (members) members.push(row);
+      else groups.set(row.parent_key, [row]);
     }
     return Array.from(groups);
-  }, [data, metric, selectedMonths]);
+  }, [data, metric, selectedMonth]);
   function open(key: string) {
     origin.current = document.activeElement as HTMLElement | null;
     setSelected(key);
@@ -632,7 +632,7 @@ export function CategorySeasonalityPage() {
             style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           >
             {months.map((m, i) => {
-              const pressed = selectedMonths.includes(i);
+              const pressed = selectedMonth === i;
               return (
                 <button
                   key={m}
@@ -641,11 +641,7 @@ export function CategorySeasonalityPage() {
                   className={pressed ? "primary" : ""}
                   style={{ borderRadius: 999 }}
                   onClick={() =>
-                    setSelectedMonths((current) =>
-                      current.includes(i)
-                        ? current.filter((month) => month !== i)
-                        : [...current, i],
-                    )
+                    setSelectedMonth((current) => (current === i ? null : i))
                   }
                 >
                   {m}
@@ -654,30 +650,23 @@ export function CategorySeasonalityPage() {
             })}
             <button
               type="button"
-              disabled={selectedMonths.length === months.length}
-              onClick={() => setSelectedMonths(monthIndices)}
+              disabled={selectedMonth === null}
+              onClick={() => setSelectedMonth(null)}
             >
-              Выбрать все
-            </button>
-            <button
-              type="button"
-              disabled={!selectedMonths.length}
-              onClick={() => setSelectedMonths([])}
-            >
-              Снять все
+              Снять выбор
             </button>
           </div>
           <p>
-            {selectedMonths.length
-              ? `Показаны подкатегории с индексом выше +${demandThreshold}% хотя бы в одном выбранном месяце.`
-              : `Выберите месяцы, чтобы найти подкатегории с индексом выше +${demandThreshold}%.`}
+            {selectedMonth !== null
+              ? `Показаны подкатегории с индексом выше +${demandThreshold}% по выбранному месяцу, от большего к меньшему.`
+              : `Выберите месяц, чтобы найти подкатегории с индексом выше +${demandThreshold}%.`}
           </p>
           {!data.rows.length ? (
             <p role="status">Нет данных по выбранным фильтрам.</p>
           ) : !visibleGroups.length ? (
             <p role="status">
-              Нет подкатегорий с индексом выше +{demandThreshold}% в выбранных
-              месяцах.
+              Нет подкатегорий с индексом выше +{demandThreshold}% в выбранном
+              месяце.
             </p>
           ) : (
             <div className="category-season-scroll">
@@ -692,12 +681,14 @@ export function CategorySeasonalityPage() {
                 </thead>
                 <tbody>
                   {visibleGroups.map(([g, members]) => (
-                    <Fragment key={g}>
-                      <tr className="category-season-parent">
-                        <th colSpan={13} scope="colgroup">
-                          {members[0].parent}
-                        </th>
-                      </tr>
+                    <Fragment key={g ?? "ranked-month"}>
+                      {g !== null && (
+                        <tr className="category-season-parent">
+                          <th colSpan={13} scope="colgroup">
+                            {members[0].parent}
+                          </th>
+                        </tr>
+                      )}
                       {members.map((r) => (
                         <tr key={r.key}>
                           <th scope="row">
