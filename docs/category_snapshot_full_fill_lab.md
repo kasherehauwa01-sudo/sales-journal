@@ -157,12 +157,18 @@ SELECT datctype,datcollate FROM pg_database WHERE datname=current_database();
 
 ## Запуск на точном коде
 
-Ниже будет закреплён immutable harness commit после сохранения инструментов.
-Runtime всегда закреплён на33ed69cb0b445d7daf580c6192c05e433eff2d7d.
+Harness закреплён на **3150d8e346c871e1028d0bba232c99dc4fbe2dac**.
+Runtime всегда закреплён на **33ed69cb0b445d7daf580c6192c05e433eff2d7d**.
+Запускать из существующего checkout sales-journal на Sales29Lab. При локальных
+изменениях остановиться и сохранить их самостоятельно, без reset/clean.
 
 ```bash
 # Только WSL Sales29Lab. Не FirstVDS. Никаких .env/production Docker Compose.
-# Вставить закреплённый harness SHA из описания PR; runtime внутри script уже pinned.
+set -euo pipefail
+git fetch origin fix/category-snapshot-first-fill
+test -z "$(git status --porcelain --untracked-files=no)"
+git switch --detach 3150d8e346c871e1028d0bba232c99dc4fbe2dac
+test "$(git rev-parse HEAD)" = 3150d8e346c871e1028d0bba232c99dc4fbe2dac
 export LAB_BASE=/home/vasiliy/sales29-full-fill-lab
 mkdir -p "$LAB_BASE"
 bash tools/run_snapshot_fill_lab.sh
