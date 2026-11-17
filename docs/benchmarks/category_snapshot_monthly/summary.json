@@ -1,0 +1,578 @@
+{
+  "scope": "Synthetic native PostgreSQL 16.2; not FirstVDS or Docker; one pair per report; full actual snapshot build not measured at scale. Raw reports retain original fields. Temp counters are cumulative IO, not peak files. Monthly root counters exclude staging; staging plans are separate. Storage is post-statement relation samples, not peak. Cluster WAL includes other statements.",
+  "reports": [
+    {
+      "input": {
+        "sales": 25000,
+        "sale_items": 100000,
+        "pairs": 20000,
+        "clients": 2000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": true,
+      "physical_target": true,
+      "fresh_client_statistics": false,
+      "comparison_variant": "monthly",
+      "whole_snapshot_build_measured": false,
+      "file": "monthly-no-stats-final-100k.json.gz",
+      "raw_sha256": "63b00ab966fa51fd6849e8c14fdb7d1083e1cc3a231b2b6ba0cec47084ab1afb",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 6.764062432997889,
+          "longest_batch_seconds": 6.7506354870020004,
+          "longest_measured_sql_seconds": 6.7506354870020004,
+          "attempt_elapsed_seconds": 6.861462152002787,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15407248,
+          "executor_wal_bytes": 14618836,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803
+        },
+        {
+          "variant": "monthly",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 12.117283405998023,
+          "longest_batch_seconds": 0.229292798001552,
+          "longest_measured_sql_seconds": 0.229292798001552,
+          "attempt_elapsed_seconds": 12.317506294999475,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5931008,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15396624,
+          "executor_wal_bytes": 14615548,
+          "temp_read_blocks": 0,
+          "temp_written_blocks": 0
+        }
+      ]
+    },
+    {
+      "input": {
+        "sales": 25000,
+        "sale_items": 100000,
+        "pairs": 20000,
+        "clients": 2000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": true,
+      "physical_target": true,
+      "fresh_client_statistics": true,
+      "comparison_variant": "monthly",
+      "whole_snapshot_build_measured": false,
+      "file": "monthly-stats-final-100k.json.gz",
+      "raw_sha256": "fd8bb2822825a82c2f7a98386db62608b7ba5350ae39e56c6921aa05ef218abf",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 1.4761851619987283,
+          "longest_batch_seconds": 1.463853224999184,
+          "longest_measured_sql_seconds": 1.463853224999184,
+          "attempt_elapsed_seconds": 1.5726069760021346,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15406720,
+          "executor_wal_bytes": 14618836,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803
+        },
+        {
+          "variant": "monthly",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 7.931218165002065,
+          "longest_batch_seconds": 0.1261222489993088,
+          "longest_measured_sql_seconds": 0.1261222489993088,
+          "attempt_elapsed_seconds": 8.129642865998903,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [
+            "sale_items"
+          ],
+          "storage_final": {
+            "category_season_facts": 5931008,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15400640,
+          "executor_wal_bytes": 14615548,
+          "temp_read_blocks": 0,
+          "temp_written_blocks": 0
+        }
+      ]
+    },
+    {
+      "input": {
+        "sales": 25000,
+        "sale_items": 100000,
+        "pairs": 20000,
+        "clients": 2000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": true,
+      "physical_target": true,
+      "fresh_client_statistics": true,
+      "comparison_variant": "monthly_materialized_unordered",
+      "whole_snapshot_build_measured": false,
+      "file": "unordered-final-100k.json.gz",
+      "raw_sha256": "4be5e35332a331fd7da321accbe3b0b8a21bca735af70883fba1dbd09686e624",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 1.5848640510012046,
+          "longest_batch_seconds": 1.5726249760009523,
+          "longest_measured_sql_seconds": 1.5726249760009523,
+          "attempt_elapsed_seconds": 1.7135128430018085,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized_unordered",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15400808,
+          "executor_wal_bytes": 14618836,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803
+        },
+        {
+          "variant": "monthly_materialized_unordered",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 3.7214187950012274,
+          "longest_batch_seconds": 0.030907355998351704,
+          "longest_measured_sql_seconds": 0.5508895489983843,
+          "attempt_elapsed_seconds": 3.9356339420010045,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized_unordered",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5931008,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024,
+            "cs_monthly_input": 10158080
+          },
+          "cluster_wal_insert_bytes": 15419584,
+          "executor_wal_bytes": 14616472,
+          "temp_read_blocks": 0,
+          "temp_written_blocks": 0
+        }
+      ]
+    },
+    {
+      "input": {
+        "sales": 25000,
+        "sale_items": 100000,
+        "pairs": 20000,
+        "clients": 2000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": true,
+      "physical_target": true,
+      "fresh_client_statistics": false,
+      "comparison_variant": "analyze_clients",
+      "whole_snapshot_build_measured": false,
+      "file": "fk-statistics-final-100k.json.gz",
+      "raw_sha256": "affcf3e23f81d1a0055e47b62cd29124fd2483abc3b8896eccf269906dac1376",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 8.02958621200014,
+          "longest_batch_seconds": 8.012472517999413,
+          "longest_measured_sql_seconds": 8.012472517999413,
+          "attempt_elapsed_seconds": 8.137437678000424,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "analyze_clients",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15396720,
+          "executor_wal_bytes": 14618836,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803
+        },
+        {
+          "variant": "analyze_clients",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 1.6431768239999656,
+          "longest_batch_seconds": 1.621050051999191,
+          "longest_measured_sql_seconds": 1.621050051999191,
+          "attempt_elapsed_seconds": 1.8553944240011333,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "analyze_clients",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15401000,
+          "executor_wal_bytes": 14618836,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803
+        }
+      ]
+    },
+    {
+      "input": {
+        "sales": 25000,
+        "sale_items": 100000,
+        "pairs": 20000,
+        "clients": 2000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": true,
+      "physical_target": true,
+      "fresh_client_statistics": true,
+      "comparison_variant": "monthly_materialized",
+      "whole_snapshot_build_measured": false,
+      "file": "materialized-ordered-fks-100k.json.gz",
+      "raw_sha256": "dfa0f91dd210f613d7aa4cac70dbd9ebaedd0be9848f34722611139c8de043a5",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 1.5047194599974318,
+          "longest_batch_seconds": 1.4908581469971978,
+          "longest_measured_sql_seconds": 1.4908581469971978,
+          "attempt_elapsed_seconds": 1.6048739750003733,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5832704,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024
+          },
+          "cluster_wal_insert_bytes": 15404384,
+          "executor_wal_bytes": 14618836,
+          "temp_read_blocks": 801,
+          "temp_written_blocks": 803
+        },
+        {
+          "variant": "monthly_materialized",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 3.2581319749988324,
+          "longest_batch_seconds": 0.029792648998409277,
+          "longest_measured_sql_seconds": 0.5772713890000887,
+          "attempt_elapsed_seconds": 3.4616775720023725,
+          "totals": {
+            "groups": 39285,
+            "lines": "100000",
+            "units": "100000",
+            "revenue": "497957.50000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 5931008,
+            "baseline_facts": 5169152,
+            "category_season_clients": 385024,
+            "cs_monthly_input": 10158080
+          },
+          "cluster_wal_insert_bytes": 15427448,
+          "executor_wal_bytes": 14617088,
+          "temp_read_blocks": 0,
+          "temp_written_blocks": 0
+        }
+      ]
+    },
+    {
+      "input": {
+        "sales": 1190000,
+        "sale_items": 4600000,
+        "pairs": 73412,
+        "clients": 20000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": true,
+      "physical_target": true,
+      "fresh_client_statistics": true,
+      "comparison_variant": "monthly_materialized",
+      "whole_snapshot_build_measured": false,
+      "file": "materialized-ordered-fks-4m6.json.gz",
+      "raw_sha256": "5870761e261258c49f60c3f6b14afbe0cb8cbc555fdadff073247f6de05190e4",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 56.63808924499972,
+          "longest_batch_seconds": 56.62069522899765,
+          "longest_measured_sql_seconds": 56.62069522899765,
+          "attempt_elapsed_seconds": 58.226472998001555,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 116523008,
+            "baseline_facts": 104169472,
+            "category_season_clients": 3284992
+          },
+          "cluster_wal_insert_bytes": 302951856,
+          "executor_wal_bytes": 294419083,
+          "temp_read_blocks": 92025,
+          "temp_written_blocks": 92143
+        },
+        {
+          "variant": "monthly_materialized",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 55.1481660190002,
+          "longest_batch_seconds": 0.6553550579992589,
+          "longest_measured_sql_seconds": 31.404972086998896,
+          "attempt_elapsed_seconds": 63.89946828200118,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 116563968,
+            "baseline_facts": 104169472,
+            "category_season_clients": 3284992,
+            "cs_monthly_input": 454131712
+          },
+          "cluster_wal_insert_bytes": 304264336,
+          "executor_wal_bytes": 294412567,
+          "temp_read_blocks": 37317,
+          "temp_written_blocks": 98555
+        }
+      ]
+    },
+    {
+      "input": {
+        "sales": 1190000,
+        "sale_items": 4600000,
+        "pairs": 73412,
+        "clients": 20000
+      },
+      "status": "complete",
+      "server_version": "16.2",
+      "source_fk_validated": null,
+      "physical_target": true,
+      "fresh_client_statistics": true,
+      "comparison_variant": "monthly_materialized",
+      "whole_snapshot_build_measured": false,
+      "file": "materialized-stats-physical-4m6.json.gz",
+      "raw_sha256": "c8260140b347c973e0021c80dc43a87bbbe57506aea289ad4a81cffa38524333",
+      "runs": [
+        {
+          "variant": "baseline",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 50.91908480100028,
+          "longest_batch_seconds": 50.904908565998994,
+          "longest_measured_sql_seconds": 50.904908565998994,
+          "attempt_elapsed_seconds": 52.38261787299962,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 116523008,
+            "baseline_facts": 104169472,
+            "category_season_clients": 3284992
+          },
+          "cluster_wal_insert_bytes": 302962344,
+          "executor_wal_bytes": 294419083,
+          "temp_read_blocks": 92025,
+          "temp_written_blocks": 92143
+        },
+        {
+          "variant": "monthly_materialized",
+          "status": "complete",
+          "sqlstate": null,
+          "facts_stage_seconds": 59.761921680999876,
+          "longest_batch_seconds": 0.9817570709983556,
+          "longest_measured_sql_seconds": 25.746506805000536,
+          "attempt_elapsed_seconds": 67.90041469400057,
+          "totals": {
+            "groups": 800144,
+            "lines": "4600000",
+            "units": "4600000",
+            "revenue": "22953335.61000000000000000000"
+          },
+          "comparison": {
+            "reference_variant": "baseline",
+            "current_variant": "monthly_materialized",
+            "reference_minus_current": 0,
+            "current_minus_reference": 0
+          },
+          "repeated_full_scan_relations": [],
+          "storage_final": {
+            "category_season_facts": 116645888,
+            "baseline_facts": 104169472,
+            "category_season_clients": 3284992,
+            "cs_monthly_input": 452558848
+          },
+          "cluster_wal_insert_bytes": 303268472,
+          "executor_wal_bytes": 294651486,
+          "temp_read_blocks": 37829,
+          "temp_written_blocks": 37937
+        }
+      ]
+    }
+  ]
+}

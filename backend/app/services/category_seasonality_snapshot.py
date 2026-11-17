@@ -2,6 +2,8 @@
 
 import asyncio
 import calendar
+import re
+from contextvars import ContextVar
 import logging
 import time
 from collections import defaultdict
@@ -52,6 +54,34 @@ from app.services import clients_vr
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 log = logging.getLogger(__name__)
+
+# Context-local only: concurrent requests never share an attempt's stage.
+_BUILD_STAGE = ContextVar("category_snapshot_stage", default=("admission", None))
+
+
+def set_build_stage(stage):
+    previous, started = _BUILD_STAGE.get()
+    if started is not None:
+        log.info(
+            "category_snapshot_stage stage=%s duration_ms=%.3f",
+            previous,
+            (time.perf_counter() - started) * 1000,
+        )
+    _BUILD_STAGE.set((stage, time.perf_counter()))
+    log.info("category_snapshot_stage stage=%s event=start", stage)
+
+
+def sqlstate(exc):
+    """Never stringify a DBAPI exception: it contains SQL and bound values."""
+    current = exc
+    for _ in range(5):
+        value = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if isinstance(value, str) and re.fullmatch(r"[0-9A-Z]{5}", value):
+            return value
+        current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
+        if current is None:
+            break
+    return None
 
 
 def now():
@@ -207,14 +237,7 @@ async def freeze_clients(db, sid, end):
     return result
 
 
-async def materialize(db, sid, end):
-    groups, nodes = await directory(db)
-    pairs = await prepare_pairs(db, end, groups, sid)
-    labels = await freeze_clients(db, sid, end)
-    ensure_headroom()
-    await db.execute(
-        text(
-            f"""INSERT INTO category_season_facts(snapshot_id,category_id,client_id,store,brand,manufacturer,year,month,units,revenue,lines)
+_FACT_INSERT = """INSERT INTO category_season_facts(snapshot_id,category_id,client_id,store,brand,manufacturer,year,month,units,revenue,lines)
        SELECT :sid,p.category_id,c.id,s.department,p.brand,p.manufacturer,extract(year from s.sale_date)::int,extract(month from s.sale_date)::int,
        sum(i.quantity),coalesce(sum(i.quantity*i.actual_price),0),count(*)
        FROM sale_items i JOIN sales s ON s.id=i.sale_id
@@ -222,9 +245,29 @@ async def materialize(db, sid, end):
        JOIN category_season_clients c ON c.snapshot_id=:sid AND c.name=lower(trim(coalesce(s.client,'')))
        WHERE s.sale_date<:end
        GROUP BY p.category_id,c.id,s.department,p.brand,p.manufacturer,extract(year from s.sale_date),extract(month from s.sale_date)"""
-        ),
-        dict(sid=sid, end=end),
+
+
+def facts_statement(pairs):
+    if not re.fullmatch(r"cs_pairs_[0-9a-f]{32}", pairs):
+        raise ValueError("invalid_snapshot_temp_identifier")
+    return text(_FACT_INSERT.format(pairs=pairs))
+
+
+async def materialize(db, sid, end):
+    set_build_stage("directory")
+    groups, nodes = await directory(db)
+    set_build_stage("pairs")
+    pairs = await prepare_pairs(db, end, groups, sid)
+    set_build_stage("clients")
+    labels = await freeze_clients(db, sid, end)
+    set_build_stage("facts")
+    ensure_headroom()
+    from app.services.category_snapshot_facts import build_facts
+
+    await build_facts(
+        db, pairs, sid, end, facts_statement(pairs), ensure_headroom, set_build_stage
     )
+    set_build_stage("coverage")
     # Coverage is independent of all product/client filters. O(store/month) data.
     observed = (
         await db.execute(
@@ -309,6 +352,7 @@ async def materialize(db, sid, end):
                 ensure_headroom()
     if coverage:
         await db.execute(insert(Coverage), coverage)
+    set_build_stage("options")
     stores = sorted(starts)
     years = sorted({y for s, y, m in counts}, reverse=True)
     brands = list(
@@ -416,11 +460,14 @@ async def rebuild(engine, *, manual=False, clock=None):
                 state.next_due = next_slot(clock)
             await db.commit()
         started = time.perf_counter()
+        stage_token = _BUILD_STAGE.set(("admission", started))
         try:
             async with heavy_operation("category_season_weekly"):
                 async with sessions() as db:
+                    set_build_stage("settings")
                     await settings_sql(db)
                     options, count = await materialize(db, sid, cutoff(clock))
+                    set_build_stage("publication")
                     await verify(owner, WORKER_LOCK)
                     await verify(source_owner, SOURCE_LOCK)
                     await verify(catalog_owner, CATALOG_LOCK)
@@ -441,6 +488,7 @@ async def rebuild(engine, *, manual=False, clock=None):
                         .values(active_id=sid, next_due=next_slot(clock))
                     )
                     await db.commit()  # All facts + the active pointer publish together.
+            set_build_stage("retention")
             # Keep active and preceding published generation for rollback/readers.
             async with sessions() as db:
                 for statement in REPORT_SETTINGS:
@@ -485,6 +533,16 @@ async def rebuild(engine, *, manual=False, clock=None):
             )
             return dict(status="published", id=sid, rows=count)
         except BaseException as exc:
+            stage, stage_started = _BUILD_STAGE.get()
+            state_code = sqlstate(exc)
+            log.warning(
+                "category_snapshot_failure stage=%s sqlstate=%s error_type=%s duration_ms=%.3f",
+                stage,
+                state_code or "unknown",
+                type(exc).__name__,
+                (time.perf_counter() - (stage_started or started)) * 1000,
+            )
+
             # Rollback of data session prevents partial facts. Cancellation is
             # recorded with a fresh session; publication pointer remains intact.
             async def record():
@@ -497,7 +555,7 @@ async def rebuild(engine, *, manual=False, clock=None):
                             error_code=(
                                 "cancelled"
                                 if isinstance(exc, asyncio.CancelledError)
-                                else type(exc).__name__
+                                else stage + ":" + (state_code or type(exc).__name__)
                             ),
                         )
                     )
@@ -511,6 +569,8 @@ async def rebuild(engine, *, manual=False, clock=None):
                     pass
             task.result()
             raise
+        finally:
+            _BUILD_STAGE.reset(stage_token)
 
 
 async def tick(engine):

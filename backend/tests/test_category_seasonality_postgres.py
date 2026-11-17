@@ -546,3 +546,115 @@ def test_fast_reader_admission_is_separate_bounded_and_released(snapshot_pg):
                 ).status_code == 200
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["timeout", "cancelled", "temp_limit"])
+def test_failed_first_fill_keeps_uninitialized_and_can_retry(
+    snapshot_pg, monkeypatch, failure
+):
+    _, engine, factory, _ = snapshot_pg
+    original = service.materialize
+
+    async def fail(db, sid, end):
+        service.set_build_stage("facts")
+        if failure == "cancelled":
+            raise asyncio.CancelledError()
+        if failure == "temp_limit":
+            await db.execute(sa.text("SET LOCAL work_mem='64kB'"))
+            await db.execute(sa.text("SET LOCAL temp_file_limit='0'"))
+            await db.execute(
+                sa.text("SELECT n FROM generate_series(1,10000) n ORDER BY n DESC")
+            )
+        else:
+            await db.execute(sa.text("SET LOCAL statement_timeout='1ms'"))
+            await db.execute(sa.text("SELECT pg_sleep(0.05)"))
+
+    async def run():
+        async with factory() as db:
+            await seed(db)
+        monkeypatch.setattr(service, "materialize", fail)
+        with pytest.raises(
+            asyncio.CancelledError if failure == "cancelled" else sa.exc.DBAPIError
+        ):
+            await service.rebuild(engine, manual=True, clock=CLOCK)
+        async with factory() as db:
+            state = await db.get(State, 1)
+            assert state.active_id is None and state.next_due is None
+            assert await db.scalar(sa.select(sa.func.count()).select_from(Fact)) == 0
+            attempt = await db.scalar(sa.select(Snapshot))
+            assert attempt.status == "failed"
+            assert attempt.error_code == (
+                "cancelled"
+                if failure == "cancelled"
+                else "facts:53400" if failure == "temp_limit" else "facts:57014"
+            )
+        assert (await service.rebuild(engine, clock=CLOCK))["status"] == "uninitialized"
+        monkeypatch.setattr(service, "materialize", original)
+        result = await service.rebuild(engine, manual=True, clock=CLOCK)
+        assert result["status"] == "published"
+        async with factory() as db:
+            state = await db.get(State, 1)
+            assert state.active_id == result["id"] and state.next_due is not None
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("manual", [True, False])
+def test_timeout_preserves_active_snapshot_manual_and_scheduled(
+    snapshot_pg, monkeypatch, manual
+):
+    _, engine, factory, _ = snapshot_pg
+
+    async def fail(db, sid, end):
+        service.set_build_stage("facts")
+        await db.execute(sa.text("SET LOCAL statement_timeout='1ms'"))
+        await db.execute(sa.text("SELECT pg_sleep(0.05)"))
+
+    async def run():
+        async with factory() as db:
+            await seed(db)
+        first = await service.rebuild(engine, manual=True, clock=CLOCK)
+        monkeypatch.setattr(service, "materialize", fail)
+        due = service.next_slot(CLOCK)
+        with pytest.raises(sa.exc.DBAPIError):
+            await service.rebuild(engine, manual=manual, clock=due)
+        async with factory() as db:
+            state = await db.get(State, 1)
+            assert state.active_id == first["id"]
+            assert (
+                await db.scalar(
+                    sa.select(sa.func.count())
+                    .select_from(Fact)
+                    .where(Fact.snapshot_id == first["id"])
+                )
+                == first["rows"]
+            )
+            assert (await db.get(Snapshot, first["id"])).status == "published"
+        if not manual:
+            assert (await service.rebuild(engine, clock=due))["status"] == "current"
+
+    asyncio.run(run())
+
+
+def test_native_snapshot_metadata_only(snapshot_pg):
+    from app.category_snapshot_diagnostics import collect
+
+    _, engine, _, _ = snapshot_pg
+    result = asyncio.run(collect(engine))
+    assert result["mode"] == "metadata_only"
+    assert len(result["tables"]) > 0 and "database_temp_cumulative" in result
+    assert "most_common_vals" not in json.dumps(result, default=str)
+
+
+def test_facts_benchmark_harness_synthetic_smoke_only(snapshot_pg):
+    from benchmarks.benchmark_snapshot_facts import run
+
+    result = run(
+        snapshot_pg[0], sales=50, items=200, products=20, clients=10, repetitions=1
+    )
+    assert result["status"] == "complete" and not result["production_scale_verified"]
+    assert len(result["runs"]) == 2 and all(r["equivalent"] for r in result["runs"])
+    assert all(r["totals"]["lines"] == 200 for r in result["runs"])
+    destination = os.environ.get("SNAPSHOT_FACTS_SMOKE_OUTPUT")
+    if destination:
+        Path(destination).write_text(json.dumps(result, default=str, indent=2))

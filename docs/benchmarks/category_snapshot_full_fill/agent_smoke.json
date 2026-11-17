@@ -1,0 +1,119 @@
+{
+  "performed_at_moscow": "2026-11-17T13:37:14.147912+03:00",
+  "scope": "functional smoke only: Docker PG16.15 + host Python asyncpg, 1000 sales/4000 items/200 catalog products/20 clients; NOT the Docker16.16 full fill experiment; PGDATA unreadable by host UID, no valid RAM/disk readiness measurements",
+  "tests": "26 passed in8.97s",
+  "runs": [
+    {
+      "status": "complete",
+      "scope": "smoke",
+      "schema": {
+        "server_version_num": 160015,
+        "datctype": "en_US.utf8",
+        "datcollate": "en_US.utf8"
+      },
+      "runtime": {
+        "python": "3.12.14",
+        "asyncpg": "0.30.0",
+        "sqlalchemy": "2.0.36"
+      },
+      "analyze_executed": true,
+      "resource_measurement_complete": false,
+      "next_due_valid": true,
+      "previous_snapshot_retained": true,
+      "privileges_before": {
+        "role": "sales_fill_app",
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "owns_clients": true,
+        "acl_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "privileges_after": {
+        "role": "sales_fill_app",
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "owns_clients": true,
+        "acl_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "totals": {
+        "groups": 1083,
+        "lines": "4000",
+        "units": "4000.000",
+        "revenue": "19881.08000"
+      },
+      "expected_totals": {
+        "lines": 4000,
+        "units": "4000.000",
+        "revenue": "19881.08000"
+      },
+      "observer_error": "OSError",
+      "analyze_probe": {
+        "role": "sales_fill_app",
+        "statement_timeout": "1min",
+        "isolation": "repeatable read",
+        "work_mem": "4MB",
+        "hash_mem_multiplier": "1",
+        "max_parallel_workers_per_gather": "0",
+        "temp_file_limit": "-1"
+      },
+      "import_lock_observed": true
+    },
+    {
+      "status": "complete",
+      "scope": "smoke",
+      "schema": {
+        "server_version_num": 160015,
+        "datctype": "en_US.utf8",
+        "datcollate": "en_US.utf8"
+      },
+      "runtime": {
+        "python": "3.12.14",
+        "asyncpg": "0.30.0",
+        "sqlalchemy": "2.0.36"
+      },
+      "analyze_executed": true,
+      "resource_measurement_complete": false,
+      "next_due_valid": true,
+      "previous_snapshot_retained": true,
+      "privileges_before": {
+        "role": "sales_fill_app",
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "owns_clients": true,
+        "acl_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "privileges_after": {
+        "role": "sales_fill_app",
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "owns_clients": true,
+        "acl_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "totals": {
+        "groups": 1083,
+        "lines": "4000",
+        "units": "4000.000",
+        "revenue": "19881.08000"
+      },
+      "expected_totals": {
+        "lines": 4000,
+        "units": "4000.000",
+        "revenue": "19881.08000"
+      },
+      "observer_error": "OSError",
+      "analyze_probe": {
+        "role": "sales_fill_app",
+        "statement_timeout": "1min",
+        "isolation": "repeatable read",
+        "work_mem": "4MB",
+        "hash_mem_multiplier": "1",
+        "max_parallel_workers_per_gather": "0",
+        "temp_file_limit": "-1"
+      },
+      "import_lock_observed": true
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "source": "operator Sales29Lab report; original directory not accessed by agent",
+  "directory": "/home/vasiliy/sales29-chunked.3GmI5lGZ/results",
+  "candidate": "33ed69cb0b445d7daf580c6192c05e433eff2d7d",
+  "postgres": "16.16 Docker",
+  "sales": 1190000,
+  "items": 4600000,
+  "overall_status": "partial",
+  "partial_reason": "baseline57014 first order, NOT candidate failure",
+  "full_fill_measured": false,
+  "orders": [
+    {
+      "order": "baseline,candidate",
+      "candidate_status": "complete",
+      "candidate_benchmark_seconds": 305.82,
+      "candidate_max_sql_seconds": 9.61,
+      "max_sql_kind": "sort",
+      "input_chunks": 119,
+      "max_chunk_seconds_reported_upper": 1.06,
+      "baseline_status": "57014",
+      "baseline_sql_limit_seconds": 180,
+      "comparison": "unavailable: no completed baseline in this order"
+    },
+    {
+      "order": "candidate,baseline",
+      "candidate_status": "complete",
+      "candidate_benchmark_seconds": 437.0,
+      "candidate_max_sql_seconds": 13.71,
+      "max_sql_kind": "sort",
+      "input_chunks": 119,
+      "max_chunk_seconds_reported_upper": 1.06,
+      "baseline_status": "complete",
+      "baseline_seconds": 177.59,
+      "comparison": {
+        "forward": 0,
+        "reverse": 0
+      }
+    }
+  ],
+  "small_100k": {
+    "comparisons": [
+      {
+        "forward": 0,
+        "reverse": 0
+      },
+      {
+        "forward": 0,
+        "reverse": 0
+      }
+    ]
+  }
+}
