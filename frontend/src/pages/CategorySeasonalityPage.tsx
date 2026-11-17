@@ -92,6 +92,8 @@ const months = [
   "Ноябрь",
   "Декабрь",
 ];
+const monthIndices = months.map((_, i) => i);
+const demandThreshold = 15;
 const signed = (n: number | null) =>
   n !== null && n !== 0 && Math.abs(n) < 0.05
     ? `${n > 0 ? "+" : "−"}<0,1%`
@@ -348,6 +350,7 @@ export function CategorySeasonalityPage() {
     [manager, setManager] = useState<string[]>([]),
     [buyer, setBuyer] = useState<string[]>([]),
     [metric, setMetric] = useState<"units" | "revenue">("units");
+  const [selectedMonths, setSelectedMonths] = useState<number[]>([]);
   const [data, setData] = useState<Result>(),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -406,8 +409,25 @@ export function CategorySeasonalityPage() {
     };
   }, [params, retry]);
   const options = data?.options,
-    groups = [...new Set(data?.rows.map((r) => r.parent_key))],
     row = data?.rows.find((r) => r.key === selected);
+  const visibleGroups = useMemo(() => {
+    const groups = new Map<string, Row[]>();
+    for (const r of data?.rows ?? []) {
+      if (
+        selectedMonths.length &&
+        !selectedMonths.some((i) => {
+          const index = r[metric].cells[i]?.index;
+          return index != null && index > demandThreshold;
+        })
+      )
+        continue;
+
+      const members = groups.get(r.parent_key);
+      if (members) members.push(r);
+      else groups.set(r.parent_key, [r]);
+    }
+    return Array.from(groups);
+  }, [data, metric, selectedMonths]);
   function open(key: string) {
     origin.current = document.activeElement as HTMLElement | null;
     setSelected(key);
@@ -606,8 +626,59 @@ export function CategorySeasonalityPage() {
               Нет данных
             </span>
           </div>
+          <div
+            role="group"
+            aria-label="Месяцы пикового спроса"
+            style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
+          >
+            {months.map((m, i) => {
+              const pressed = selectedMonths.includes(i);
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={pressed}
+                  className={pressed ? "primary" : ""}
+                  style={{ borderRadius: 999 }}
+                  onClick={() =>
+                    setSelectedMonths((current) =>
+                      current.includes(i)
+                        ? current.filter((month) => month !== i)
+                        : [...current, i],
+                    )
+                  }
+                >
+                  {m}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              disabled={selectedMonths.length === months.length}
+              onClick={() => setSelectedMonths(monthIndices)}
+            >
+              Выбрать все
+            </button>
+            <button
+              type="button"
+              disabled={!selectedMonths.length}
+              onClick={() => setSelectedMonths([])}
+            >
+              Снять все
+            </button>
+          </div>
+          <p>
+            {selectedMonths.length
+              ? `Показаны подкатегории с индексом выше +${demandThreshold}% хотя бы в одном выбранном месяце.`
+              : `Выберите месяцы, чтобы найти подкатегории с индексом выше +${demandThreshold}%.`}
+          </p>
           {!data.rows.length ? (
             <p role="status">Нет данных по выбранным фильтрам.</p>
+          ) : !visibleGroups.length ? (
+            <p role="status">
+              Нет подкатегорий с индексом выше +{demandThreshold}% в выбранных
+              месяцах.
+            </p>
           ) : (
             <div className="category-season-scroll">
               <table className="category-season-heatmap">
@@ -620,68 +691,65 @@ export function CategorySeasonalityPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groups.map((g) => {
-                    const members = data.rows.filter((r) => r.parent_key === g);
-                    return (
-                      <Fragment key={g}>
-                        <tr className="category-season-parent">
-                          <th colSpan={13} scope="colgroup">
-                            {members[0].parent}
+                  {visibleGroups.map(([g, members]) => (
+                    <Fragment key={g}>
+                      <tr className="category-season-parent">
+                        <th colSpan={13} scope="colgroup">
+                          {members[0].parent}
+                        </th>
+                      </tr>
+                      {members.map((r) => (
+                        <tr key={r.key}>
+                          <th scope="row">
+                            <small>{r.parent}</small>
+                            <button onClick={() => open(r.key)}>
+                              {r.name}
+                            </button>
+                            {r[metric].estimated && (
+                              <small>Ориентировочно</small>
+                            )}
+                            {r[metric].cells.some((c) =>
+                              c.notes.includes("База по доступным месяцам"),
+                            ) && <small>База по доступным месяцам</small>}
                           </th>
-                        </tr>
-                        {members.map((r) => (
-                          <tr key={r.key}>
-                            <th scope="row">
-                              <small>{r.parent}</small>
-                              <button onClick={() => open(r.key)}>
-                                {r.name}
-                              </button>
-                              {r[metric].estimated && (
-                                <small>Ориентировочно</small>
-                              )}
-                              {r[metric].cells.some((c) =>
-                                c.notes.includes("База по доступным месяцам"),
-                              ) && <small>База по доступным месяцам</small>}
-                            </th>
-                            {r[metric].cells.map((c, i) => (
-                              <td
-                                key={i}
-                                className={c.index === null ? "no-data" : ""}
-                                style={heat(c)}
+                          {r[metric].cells.map((c, i) => (
+                            <td
+                              key={i}
+                              className={c.index === null ? "no-data" : ""}
+                              style={heat(c)}
+                            >
+                              <button
+                                className="cs-cell"
+                                onClick={() => open(r.key)}
+                                aria-label={`${r.parent} → ${r.name}. ${tooltip(c, i)}`}
                               >
-                                <button
-                                  className="cs-cell"
-                                  onClick={() => open(r.key)}
-                                  aria-label={`${r.parent} → ${r.name}. ${tooltip(c, i)}`}
+                                <span>
+                                  {c.index === null
+                                    ? "Нет данных"
+                                    : signed(c.index)}
+                                </span>
+                                {c.years.length === 1 && (
+                                  <small>Данные за один год</small>
+                                )}
+                                {r[metric].peaks.includes(i + 1) && (
+                                  <small>Пик спроса</small>
+                                )}
+                                {r[metric].troughs.includes(i + 1) && (
+                                  <small>Максимальный спад</small>
+                                )}
+                                <span
+                                  role="tooltip"
+                                  className="cs-cell-tooltip"
                                 >
-                                  <span>
-                                    {c.index === null
-                                      ? "Нет данных"
-                                      : signed(c.index)}
-                                  </span>
-                                  {c.years.length === 1 && (
-                                    <small>Данные за один год</small>
-                                  )}
-                                  {r[metric].peaks.includes(i + 1) && (
-                                    <small>Пик спроса</small>
-                                  )}
-                                  {r[metric].troughs.includes(i + 1) && (
-                                    <small>Максимальный спад</small>
-                                  )}
-                                  <span
-                                    role="tooltip"
-                                    className="cs-cell-tooltip"
-                                  >
-                                    {tooltip(c, i)}
-                                  </span>
-                                </button>
-                              </td>
-                            ))}
+                                  {tooltip(c, i)}
+                                </span>
+                              </button>
+                            </td>
+                          ))}
                           </tr>
                         ))}
                       </Fragment>
-                    );
-                  })}
+                  ))}
                 </tbody>
               </table>
             </div>
