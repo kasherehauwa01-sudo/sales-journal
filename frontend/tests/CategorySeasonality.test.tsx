@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { CategorySeasonalityPage } from "../src/pages/CategorySeasonalityPage";
 vi.mock("recharts", () => ({
@@ -17,9 +18,9 @@ vi.mock("recharts", () => ({
   YAxis: () => null,
   Tooltip: () => null,
 }));
-const profile = (peak: number, trough: number, boundary?: number) => ({
+const profile = (peak: number, trough: number, boundary?: number, peakIndex = 50) => ({
   cells: Array.from({ length: 12 }, (_, i) => ({
-    index: i === 1 ? null : i === peak ? 50 : i === trough ? -30 : i === boundary ? 15 : 0,
+    index: i === 1 ? null : i === peak ? peakIndex : i === trough ? -30 : i === boundary ? 15 : 0,
     stores: i === 1 ? [] : ["Store"],
     years: [2024, 2025, 2026],
     estimated: true,
@@ -80,6 +81,7 @@ const options = {
   buyer_types: ["Опт"],
 };
 let calls: any[], fail: boolean, missing: boolean;
+let reportRows = rows;
 const reply = (v: any, status = 200) =>
   new Response(JSON.stringify(v), {
     status,
@@ -90,7 +92,7 @@ function result(p: any) {
     state: missing ? "uninitialized" : "ready",
     rows: missing
       ? []
-      : rows.filter(
+      : reportRows.filter(
           (r) =>
             !p.categories.length ||
             p.categories.includes("category:1") ||
@@ -108,6 +110,7 @@ function result(p: any) {
 }
 beforeEach(() => {
   calls = [];
+  reportRows = rows;
   fail = false;
   missing = false;
   HTMLDialogElement.prototype.showModal = function () {
@@ -201,42 +204,52 @@ test("late response cannot overwrite newer filter result", async () => {
   expect(screen.queryByText("УСТАРЕВШИЙ")).toBeNull();
 });
 
-test("heatmap month tags filter the active metric locally and keep all month columns", async () => {
+test("heatmap selects only one month and ranks all parents by the active metric", async () => {
+  reportRows = [
+    ...rows,
+    {
+      key: '["category:2","Термосы"]',
+      parent_key: "category:2",
+      parent: "Туризм",
+      name: "Термосы",
+      units: profile(6, 0, undefined, 70),
+      revenue: profile(6, 0, undefined, 30),
+    },
+  ];
   render(<CategorySeasonalityPage />);
   await screen.findByText("Тепловая карта спроса");
-  const button = (name: string) =>
-    screen.getByRole("button", { name, exact: true });
-  const category = (name: string) =>
-    screen.queryByRole("button", { name, exact: true });
 
-  expect(category("Чашки")).not.toBeNull();
-  expect(category("Тарелки")).not.toBeNull();
-  fireEvent.click(button("Апрель"));
-  expect(button("Апрель").getAttribute("aria-pressed")).toBe("true");
-  expect(category("Чашки")).not.toBeNull();
-  expect(category("Тарелки")).toBeNull();
-  expect(screen.getByRole("columnheader", { name: "Декабрь" })).toBeTruthy();
+  const tags = within(screen.getByRole("group", { name: "Месяцы пикового спроса" }));
+  const tag = (name: string) => tags.getByRole("button", { name, exact: true });
+  const names = () =>
+    within(screen.getByRole("table")).getAllByRole("rowheader").map(
+      (cell) => within(cell).getByRole("button").textContent,
+    );
 
-  fireEvent.click(button("Выручка"));
+  expect(names()).toEqual(["Чашки", "Тарелки", "Термосы"]);
+  fireEvent.click(tag("Апрель"));
+  expect(names()).toEqual(["Чашки"]);
+
+  fireEvent.click(tag("Июль"));
+  expect(tags.getAllByRole("button", { pressed: true })).toEqual([tag("Июль")]);
+  expect(names()).toEqual(["Термосы", "Тарелки"]);
+  expect(within(screen.getByRole("table")).getAllByRole("columnheader")).toHaveLength(13);
+
+  fireEvent.click(screen.getByRole("button", { name: "Выручка", exact: true }));
+  expect(names()).toEqual(["Чашки", "Тарелки", "Термосы"]);
+
+  fireEvent.click(tag("Июль"));
+  expect(tags.queryAllByRole("button", { pressed: true })).toHaveLength(0);
+  expect(names()).toEqual(["Чашки", "Тарелки", "Термосы"]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Штуки", exact: true }));
+  fireEvent.click(tag("Февраль"));
   expect(screen.getByRole("status").textContent).toContain("выше +15%");
-  fireEvent.click(button("Штуки"));
-  fireEvent.click(button("Июль"));
-  expect(category("Чашки")).not.toBeNull();
-  expect(category("Тарелки")).not.toBeNull();
-
-  fireEvent.click(button("Снять все"));
-  fireEvent.click(button("Январь"));
-  fireEvent.click(button("Февраль"));
-  fireEvent.click(button("Март"));
+  fireEvent.click(tag("Март"));
   expect(screen.getByRole("status").textContent).toContain("выше +15%");
-  fireEvent.click(button("Выбрать все"));
-  expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(13);
-  expect(category("Чашки")).not.toBeNull();
-  expect(category("Тарелки")).not.toBeNull();
 
-  fireEvent.click(button("Снять все"));
-  expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
-  expect(category("Чашки")).not.toBeNull();
-  expect(category("Тарелки")).not.toBeNull();
+  fireEvent.click(tag("Снять выбор"));
+  expect(tags.queryAllByRole("button", { pressed: true })).toHaveLength(0);
+  expect(names()).toEqual(["Чашки", "Тарелки", "Термосы"]);
   expect(calls).toHaveLength(1);
 });
