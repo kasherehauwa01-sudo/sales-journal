@@ -59,6 +59,7 @@ export function CategoryTreeFilter({
   options = [],
   kind = "legacy",
   providedNodes,
+  includeReportFallbacks = true,
 }: {
   value: string[];
   onChange: (v: string[]) => void;
@@ -66,6 +67,7 @@ export function CategoryTreeFilter({
   options?: string[];
   kind?: "legacy" | "section" | "id";
   providedNodes?: CategoryNode[];
+  includeReportFallbacks?: boolean;
 }) {
   const [open, setOpen] = useState(false),
     [requested, setRequested] = useState(false),
@@ -109,7 +111,7 @@ export function CategoryTreeFilter({
     const known = new Set(result.flatMap(values));
     const extra = [
       ...new Set([
-        ...(kind === "legacy"
+        ...(kind === "legacy" && includeReportFallbacks
           ? ["Без категории", "Не найдено в CatalogVR"]
           : []),
         ...options,
@@ -128,7 +130,7 @@ export function CategoryTreeFilter({
         })),
       });
     return result;
-  }, [data, options, value, kind, providedNodes]);
+  }, [data, options, value, kind, providedNodes, includeReportFallbacks]);
   const byId = useMemo(() => {
     const index = new Map<string, CategoryNode>();
     function walk(items: CategoryNode[]) {
