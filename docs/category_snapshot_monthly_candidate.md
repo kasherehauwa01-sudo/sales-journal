@@ -254,3 +254,7 @@ input, actual heap/local read, не только отсутствие Seq Scan. 
    что старый active не изменился, первый next_due осталсяNULL. Не форсировать
    публикацию и не запускать retry до анализа. Откатить прежний image29 штатным
    updater при необходимости; не делать downgrade/drop/stamp или очистку продаж.
+
+
+Продолжение: [готовность полного fill и один сценарий Sales29Lab](category_snapshot_full_fill_lab.md).
+Операторский partial вызван baseline; это не отказ monthly_chunked и не замер полного CLI.

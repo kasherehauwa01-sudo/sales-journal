@@ -268,3 +268,7 @@ PR остаётся draft. Нужен повтор на PostgreSQL16.16/Docker �
 active_id/next_due. Миграций, stamp, сброса попыток и расписания этот PR не требует.
 При отказе rollback транзакции сохраняет прежний active; возврат предыдущего
 image29 не требует удаления таблиц/снимков. FirstVDS агентом не затрагивался.
+
+
+Продолжение: [готовность полного fill и один сценарий Sales29Lab](category_snapshot_full_fill_lab.md).
+Операторский partial вызван baseline; это не отказ monthly_chunked и не замер полного CLI.
