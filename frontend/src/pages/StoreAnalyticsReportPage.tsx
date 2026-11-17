@@ -1,6 +1,7 @@
 import { assertComplete, assertVisibleRows, assertSameSnapshot } from "../services/reportPdf";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
+import { CategoryTreeFilter } from "../components/CategoryTreeFilter";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
 import {useExplicitReport,reportJson,reportDownload} from '../hooks/useExplicitReport';
 import {useMemo,useState} from 'react';
@@ -18,6 +19,7 @@ const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')
 const periods:Array<[PeriodKind,string]>=[['today','Сегодня'],['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Предыдущая неделя'],['current_month','Текущий месяц'],['previous_month','Предыдущий месяц'],['year','Год'],['custom','Произвольный период']];const labels:Record<Metric,string>={revenue:'Выручка',checks:'Количество чеков',average_check:'Средний чек',items:'Продано товаров',items_per_check:'Товаров в чеке',average_discount:'Средняя скидка'};const format=(key:Metric,value:number)=>key==='revenue'||key==='average_check'?money(value):key==='average_discount'?percent(value):number(value);const change=(value:number|null)=>value==null?'—':`${value>0?'+':''}${percent(value)} ${value>0?'↑':value<0?'↓':'→'}`;
 export function StoreAnalyticsReportPage() {
   const [brands, setBrands] = useState<string[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const initial = dates("current_month");
   const [periodKind, setPeriodKind] = useState<PeriodKind>("current_month");
   const [dateFrom, setDateFrom] = useState(initial.from);
@@ -49,6 +51,7 @@ export function StoreAnalyticsReportPage() {
     manager,
     buyer_type: buyerType,
     brands,
+    categories,
     include_both: true,
   };
   const controller = useExplicitReport(params, (p, signal) => {setSelected(undefined);return reportJson<Report>(`/reports/store-analytics?${query(p)}`, signal)},
@@ -73,6 +76,7 @@ export function StoreAnalyticsReportPage() {
       manager: controller.snapshot.manager,
       buyer_type: controller.snapshot.buyer_type,
       brands: controller.snapshot.brands,
+      categories: controller.snapshot.categories,
       group_by: selectedGroup || undefined,
     });
     void controller.perform(
@@ -222,6 +226,10 @@ export function StoreAnalyticsReportPage() {
             />
           </label>
           <BrandFilter value={brands} onChange={setBrands} />
+          <div className="report-filter">
+            <span>Категория</span>
+            <CategoryTreeFilter value={categories} onChange={setCategories} includeReportFallbacks={false} />
+          </div>
           <label>
             Менеджер
             <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />

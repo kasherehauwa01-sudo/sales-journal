@@ -1,5 +1,6 @@
 import { PdfExportButton } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
+import { CategoryTreeFilter } from "../components/CategoryTreeFilter";
 import { MultiSelect } from "../components/MultiSelect";
 import {SalesClientSelect} from "../components/SalesClientSelect";
 import {ReportActions,ReportEmpty} from '../components/ReportActions';
@@ -25,6 +26,7 @@ const metricOptions:Array<[Metric,string]>=[['revenue','Выручка'],['sales
 const metricMoney=(key:Metric)=>key==='revenue'||key==='average_check';const formatMetric=(key:Metric,value:number)=>metricMoney(key)?money(value):number(value);
 export function SalesDynamicsReportPage() {
   const [brands, setBrands] = useState<string[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const initial = dates("current_month");
   const [periodKind, setPeriodKind] = useState<PeriodKind>("current_month");
   const [dateFrom, setDateFrom] = useState(initial.date_from);
@@ -52,6 +54,7 @@ export function SalesDynamicsReportPage() {
     manager,
     buyer_type: buyerType,
     brands,
+    categories,
     clients: selectedClients,
     include_both: true,
   };
@@ -135,6 +138,10 @@ export function SalesDynamicsReportPage() {
             <MultiSelect options={filters?.departments || []} value={departments} onChange={setDepartments} placeholder="Все подразделения" searchable showActions />
           </label>
           <BrandFilter value={brands} onChange={setBrands} />
+          <div className="report-filter">
+            <span>Категория</span>
+            <CategoryTreeFilter value={categories} onChange={setCategories} includeReportFallbacks={false} />
+          </div>
           <label>
             Менеджер
             <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />

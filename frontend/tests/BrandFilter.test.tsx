@@ -51,3 +51,41 @@ for (const [name, Page] of [["Динамика продаж", SalesDynamicsRepor
     expect(screen.getByText("Справочник брендов недоступен")).toBeTruthy();
   });
 }
+
+for (const [name, Page, endpoint] of [
+  ["Динамика продаж", SalesDynamicsReportPage, "/reports/sales-dynamics"],
+  ["Аналитика по магазинам", StoreAnalyticsReportPage, "/reports/store-analytics"],
+] as const) {
+  it(`${name}: submits the leaf values of a selected category group only when requested`, async () => {
+    const fetch = vi.fn(async (url: string) => {
+      const path = new URL(url, "http://test").pathname;
+      if (path.endsWith(endpoint)) {
+        return new Response(JSON.stringify({ detail: "Test response" }), { status: 400 });
+      }
+      const data = path.endsWith("/catalog/category-tree") ? {
+        nodes: [{
+          id: "tableware", name: "Посуда", children: [
+            { id: "cups", name: "Кружки", value: "КРУЖКИ", children: [] },
+            { id: "plates", name: "Тарелки", value: "ТАРЕЛКИ", children: [] },
+          ],
+        }],
+      } : path.endsWith("/filters") ? { departments: [] } : [];
+      return new Response(JSON.stringify(data));
+    });
+    vi.stubGlobal("fetch", fetch);
+    const reportCalls = () => fetch.mock.calls
+      .map(([url]) => new URL(url, "http://test"))
+      .filter(({ pathname }) => pathname.endsWith(endpoint));
+    render(<Page />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Категория" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Посуда" }));
+    expect(reportCalls()).toHaveLength(0);
+    expect(screen.getByText("Категория: выбрано 2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Сформировать отчёт" }));
+    await waitFor(() => expect(reportCalls()).toHaveLength(1));
+    expect(reportCalls()[0].searchParams.getAll("categories").sort()).toEqual(["КРУЖКИ", "ТАРЕЛКИ"]);
+    await screen.findByText("Test response");
+  });
+}
