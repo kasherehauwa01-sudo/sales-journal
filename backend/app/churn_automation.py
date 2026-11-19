@@ -69,7 +69,7 @@ async def authorize(db, job, data):
     if not schedule_agrees(row.settings_json, policy.settings_json):
         raise ValueError('SOURCE_TRUST_POLICY_MISMATCH')
     trusted = policy_mode(row.settings_json) == TRUSTED_IMPORT
-    result = await release_churn(db, job.run_id, envelope, allow_trusted_import=True) if trusted else await release_churn(db, job.run_id, envelope)
+    result = await release_churn(db, job.run_id, envelope, allow_trusted_import=True, receiver_bundle=bundle) if trusted else await release_churn(db, job.run_id, envelope)
     job.counters = dict(job.counters, prepared=result['candidates'], allowed=result['ready'])
     if result['status'] not in {'RELEASED', 'EXISTING'}:
         job.status, job.error_code = 'BLOCKED', 'RELEASE_NOT_APPROVED'

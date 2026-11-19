@@ -3,6 +3,8 @@ from fastapi import HTTPException
 from sqlalchemy import select, func
 from app.services.churn_pilot import ALGORITHM_POLICY
 from app.models import AnalyticsAutomationRelease as Release
+from app.services.churn_preliminary import PRELIMINARY
+from app.services.churn_source_trust import TRUSTED_IMPORT, policy_mode, schedule_agrees, source_decision
 
 
 async def automation_available(db):
@@ -34,6 +36,10 @@ async def current_release(db, run_id):
     from app.config import settings
     from app.models import SalesSourceState, ImportBatch, AnalyticsAutomationIdentity
     evidence=release.metadata_json['run']['source_decision']
+    trusted = evidence.get('method') == source_decision(TRUSTED_IMPORT)['method']
+    if trusted and (not permanent or policy_mode(policy.settings_json)!=TRUSTED_IMPORT
+                    or not schedule_agrees(schedule.settings_json, policy.settings_json)):
+        raise HTTPException(410,'Trusted import policy revoked')
     now=datetime.now(timezone.utc)
     revision=await db.scalar(select(SalesSourceState.source_revision).where(SalesSourceState.id==1))
     pending=await db.scalar(select(ImportBatch.id).where(ImportBatch.status.in_(['queued','processing'])).limit(1))
@@ -43,12 +49,15 @@ async def current_release(db, run_id):
         raise HTTPException(410,'Release source evidence no longer current')
     guards=release.metadata_json.get('binding_guards',[])
     aliases=await db.scalar(select(AnalyticsAutomationIdentity.client_id).where(
-        AnalyticsAutomationIdentity.status=='VERIFIED',AnalyticsAutomationIdentity.client_id.in_([g['client_id'] for g in guards])
+        AnalyticsAutomationIdentity.status.in_(('VERIFIED', PRELIMINARY) if trusted else ('VERIFIED',)),AnalyticsAutomationIdentity.client_id.in_([g['client_id'] for g in guards])
     ).group_by(AnalyticsAutomationIdentity.client_id).having(func.count()>1).limit(1)) if guards else None
     if aliases is not None:raise HTTPException(410,'Release identity aliases require history merge')
     bindings={b.subject_key:b for b in (await db.scalars(select(AnalyticsAutomationIdentity).where(AnalyticsAutomationIdentity.subject_key.in_([g['key'] for g in guards])))).all()} if guards else {}
     for guard in guards:
         binding=bindings.get(guard['key'])
-        if not binding or binding.status!='VERIFIED' or binding.revision!=guard['revision'] or binding.client_id!=guard['client_id'] or binding.manager_id!=guard['manager_id']:
+        expected=guard.get('status','VERIFIED')
+        if expected not in (('VERIFIED', PRELIMINARY) if trusted else ('VERIFIED',)):
+            raise HTTPException(410,'Release binding mode revoked')
+        if not binding or binding.status!=expected or binding.revision!=guard['revision'] or binding.client_id!=guard['client_id'] or binding.manager_id!=guard['manager_id']:
             raise HTTPException(410,'Release identity revoked')
     return release

@@ -29,3 +29,16 @@ the source description with an operator-managed trusted-import key. No
 production private key is stored in this repository. Test the actual PHP and
 MariaDB Calltrack receiver with the FirstVDS reopen/delete variants, including
 replay and a one-task budget. Deploy with both policies disabled first.
+
+## Preliminary matching
+
+The permanent trusted-import path can use a current Calltrack-signed
+PRELIMINARY_MATCH for the existing exact-name/single-manager policy. Sales
+Journal binds it to the current subject, manager, binding revision, scope and
+last purchase. It never upgrades a binding to VERIFIED. Calltrack still
+verifies the cryptographic signature and recalculates the matching group
+before creating a task. Existing independent mode still requires VERIFIED.
+
+This does not start the host provider, provision its keys, replay a real
+signal or test production MariaDB. The historical pilot file is used only as a
+wire-format reference, never as a fresh receipt.
