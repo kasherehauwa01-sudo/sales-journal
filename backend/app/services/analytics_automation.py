@@ -170,6 +170,8 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_truste
         elif (not isinstance(binding.evidence,dict) or not known_text(binding.client_id) or binding.manager_id<=0 or binding.revision<1
             or any(binding.evidence.get(k) is not True for k in ('all_sales_reviewed','complete_client_history_reviewed','client_unique','manager_unique','nontechnical','no_name_phone_conflict'))
             or not known_text(binding.evidence.get('reviewer')) or not known_text(binding.evidence.get('reason'))):why.append('IDENTITY_OR_MANAGER_UNCONFIRMED')
+        if mode==TRUSTED_IMPORT and binding and binding.status=='VERIFIED' and (not isinstance(receipts, dict) or binding.client_id not in receipts):
+            why.append('RECEIVER_BINDING_RECEIPT_MISSING')
         if type(minimum) not in (int,float) or float(candidate.confidence)<minimum:why.append('LOW_OR_UNAPPROVED_CONFIDENCE')
         if signal.get('signal_type')!='CHURN_RISK' or signal.get('status')!='ACTIVE' or signal.get('as_of')!=(run.as_of.isoformat() if run else None):why.append('SIGNAL_NOT_ACTIVE_CHURN')
         candidate_decisions.append(dict(subject_hash=digest(candidate.client_key),reasons=why))

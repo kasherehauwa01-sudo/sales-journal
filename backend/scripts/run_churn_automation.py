@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import time
 
 from collect_churn_status import command, private_json, integrity, ObservationError
@@ -45,7 +46,10 @@ def verify_code(config):
         raise ValueError('INTEGRITY_MANIFEST_INVALID')
     covered = {str(Path(name).relative_to(root)) if Path(name).is_absolute() and Path(name).is_relative_to(root)
                else name for name in files}
-    if not REQUIRED_FILES <= covered or not REQUIRED_HOST_FILES <= set(files):
+    required = REQUIRED_HOST_FILES
+    if 'trusted_import' in config:
+        required = (required - {str(EVIDENCE_PROVIDER)}) | {'/usr/local/libexec/churn_trusted_ftp.py'}
+    if not REQUIRED_FILES <= covered or not required <= set(files):
         raise ValueError('REVIEWED_CODE_COVERAGE_INCOMPLETE')
     if integrity(manifest, root) != 'match':
         raise ValueError('REVIEWED_CODE_CHANGED')
@@ -53,9 +57,9 @@ def verify_code(config):
 
 def load_config(path):
     data = private_json(path)
-    if set(data) != {'calltrack_root', 'manifest', 'php_environment'}:
+    if set(data) - {'calltrack_root', 'manifest', 'php_environment', 'trusted_import'} or not {'calltrack_root', 'manifest', 'php_environment'} <= set(data):
         raise ValueError('INVALID_HOST_CONFIGURATION')
-    for key in ('calltrack_root', 'manifest', 'php_environment'):
+    for key in data:
         if not isinstance(data[key], str) or not Path(data[key]).is_absolute():
             raise ValueError('INVALID_HOST_CONFIGURATION')
     environment = private_json(Path(data['php_environment']))
@@ -105,22 +109,27 @@ def run(config, environment, *, runner=command, max_seconds=180, verify=verify_c
             return {'status': 'RETRY_DELAY', 'job_id': job['id']}
     try:
         return process_job(job, config, environment, runner=runner, deadline=deadline, verify=verify)
-    except (OSError, ValueError, KeyError, TypeError, ObservationError):
+    except (OSError, ValueError, KeyError, TypeError, ObservationError, subprocess.SubprocessError):
         try:
             backend('failure', job_id=job['id'], runner=runner)
-        except (OSError, ValueError, KeyError, TypeError, ObservationError):
+        except (OSError, ValueError, KeyError, TypeError, ObservationError, subprocess.SubprocessError):
             pass
         raise
 
 
 def process_job(job, config, environment, *, runner, deadline, verify):
     if job['status'] in {'AWAITING_EVIDENCE', 'BLOCKED'}:
-        if not EVIDENCE_PROVIDER.is_file():
-            raise ValueError('EVIDENCE_PROVIDER_NOT_CONFIGURED')
-        # The trusted provider fetches independent source/identity evidence. It receives
-        # only run context, not raw sales or the upstream signing key from this process.
-        evidence = json.loads(runner([str(EVIDENCE_PROVIDER)],
-            input_text=json.dumps({'job_id':job['id'], 'run_id':job['run_id']}), timeout=30, max_output=MAX_BYTES))
+        if 'trusted_import' in config:
+            from churn_trusted_ftp import build
+            context = backend('trusted-context', job_id=job['id'], runner=runner)
+            if context.get('job_id') != job['id'] or context.get('statement', {}).get('source_run_id') != job['run_id']:
+                raise ValueError('TRUSTED_CONTEXT_MISMATCH')
+            evidence = build(context, config['trusted_import'])
+        else:
+            if not EVIDENCE_PROVIDER.is_file():
+                raise ValueError('EVIDENCE_PROVIDER_NOT_CONFIGURED')
+            evidence = json.loads(runner([str(EVIDENCE_PROVIDER)],
+                input_text=json.dumps({'job_id':job['id'], 'run_id':job['run_id']}), timeout=30, max_output=MAX_BYTES))
         result = backend('authorize', job_id=job['id'], payload=evidence, runner=runner)
         if result['status'] != 'RELEASED':
             backend('failure', job_id=job['id'], runner=runner)
@@ -166,7 +175,7 @@ def main():
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         config, environment = load_config(args.config)
         print(json.dumps(run(config, environment)))
-    except (OSError, ValueError, KeyError, TypeError, ObservationError):
+    except (OSError, ValueError, KeyError, TypeError, ObservationError, subprocess.SubprocessError):
         # Failures never echo token-bearing command output or customer evidence.
         print('{"status":"BLOCKED","code":"HOST_AUTOMATION_FAILED"}')
         raise SystemExit(1)

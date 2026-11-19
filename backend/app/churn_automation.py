@@ -127,6 +127,9 @@ async def execute(args, data):
                 job = await db.get(ChurnJob, args.job_id, with_for_update=True)
                 if not job:
                     raise ValueError('JOB_NOT_FOUND')
+                if args.command == 'trusted-context':
+                    from app.services.churn_ftp_context import trusted_context
+                    return await trusted_context(db, job, now())
                 if args.command == 'authorize':
                     await authorize(db, job, data)
                 elif args.command == 'page':
@@ -166,7 +169,7 @@ async def execute(args, data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['tick', 'status', 'draft', 'approve', 'enable', 'disable', 'authorize', 'page', 'ack', 'failure', 'retry'])
+    parser.add_argument('command', choices=['tick', 'status', 'draft', 'approve', 'enable', 'disable', 'trusted-context', 'authorize', 'page', 'ack', 'failure', 'retry'])
     parser.add_argument('--job-id')
     parser.add_argument('--revision', type=int)
     parser.add_argument('--actor', default='host-scheduler')

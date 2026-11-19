@@ -42,3 +42,27 @@ before creating a task. Existing independent mode still requires VERIFIED.
 This does not start the host provider, provision its keys, replay a real
 signal or test production MariaDB. The historical pilot file is used only as a
 wire-format reference, never as a fresh receipt.
+
+## Host adapter (draft implementation)
+
+The trusted helper reads an optional absolute `trusted_import` configuration path
+from the root-owned host configuration and replaces the legacy external
+evidence provider for this installation. Add the installed
+`/usr/local/libexec/churn_trusted_ftp.py` and the usual delivery unit and Calltrack
+files to the reviewed integrity manifest.
+
+The host helper's private JSON accepts only `export_url`, `export_token_file`,
+`ed25519_key_file`, `key_id` and `hmac_key_file`. Use the existing HTTPS
+Calltrack read-only `analytics_verified_export.php` endpoint and a dedicated
+export token. All three secret files must be root-owned and private. Use a
+new Ed25519 signer only for the owner-declared import mode and configure its
+public key on the receiver, plus a matching private HMAC key on the producer.
+Set the same trust policy identifier on both sides and required source names
+`sales_ftp` and `clientsvr`. The signed ClientsVR revision is the cache
+revision in the fresh receipts. If the receiver pins a separate ClientsVR
+revision, verify the actual deployment contract before enabling.
+
+The adapter does not follow redirects, does not include tokens in URLs or
+argv and does not send or create any tasks through the export endpoint.
+Before deployment verify the existing read-only export connectivity and
+practice one real task and replay on the isolated production-compatible stack.
