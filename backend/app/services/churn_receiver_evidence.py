@@ -5,8 +5,10 @@ This adapter cannot sign facts, assert completeness in trusted-import mode,
 or promote preliminary identities.
 """
 import json
+from datetime import datetime, timezone
 from hashlib import sha256
 from app.services.analytics_automation import digest
+from app.services.churn_preliminary import PRELIMINARY, MATCHING_POLICY, preliminary_matching
 from app.services.churn_source_trust import TRUSTED_IMPORT, accepts_statement, policy_mode
 
 
@@ -30,10 +32,23 @@ def attach(event, bundle, *, expected_hash, policy_revision, config, producer_pr
             or (mode == TRUSTED_IMPORT and (producer_proof is None
                 or not accepts_statement(config, producer_proof, event['as_of'])))):
         raise ValueError('RECEIVER_SOURCE_TRUST_MISMATCH')
+    matching = event.get('matching')
+    expected_status = 'VERIFIED'
+    if 'matching' in event:
+        expected_status = PRELIMINARY
+        if (mode != TRUSTED_IMPORT or source.get('matching_policy') != MATCHING_POLICY
+                or producer_proof.get('matching_policy') != MATCHING_POLICY
+                or not isinstance(matching, dict) or not isinstance(review.get('client_key'), str)
+                or matching != preliminary_matching(receipt, client_key=review['client_key'],
+                    client_id=client, manager_id=event['assignment']['manager_id'],
+                    revision=event['assignment']['binding_revision'],
+                    last_purchase=event['last_purchase'], scope=event['run']['scope'],
+                    now=datetime.now(timezone.utc))):
+            raise ValueError('RECEIVER_PRELIMINARY_MISMATCH')
     if (source.get('source_run_id') != event['provenance']['shadow_run_id']
             or source.get('source_revision') != event['run']['source_revision']
             or source.get('as_of') != event['as_of']
-            or review.get('status') != 'VERIFIED' or review.get('client_id') != client
+            or review.get('status') != expected_status or review.get('client_id') != client
             or review.get('manager_id') != event['assignment']['manager_id']
             or review.get('binding_revision') != event['assignment']['binding_revision']
             or review.get('last_purchase') != event['last_purchase']):

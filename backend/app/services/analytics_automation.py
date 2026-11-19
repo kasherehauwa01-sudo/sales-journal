@@ -23,6 +23,7 @@ from app.services.churn_pilot import ALGORITHM_POLICY, GENERATOR_VERSION, POLICY
 from app.services.analytics_scope import SCOPE_POLICY
 from app.services.analytics_source import stored_sales_contract_valid
 from app.services.churn_ftp_trigger import ftp_cycle_ready
+from app.services.churn_preliminary import PRELIMINARY, MATCHING_POLICY, preliminary_matching
 from app.services.churn_source_trust import (INDEPENDENT, TRUSTED_IMPORT, accepts_statement, policy_mode, source_decision)
 
 
@@ -63,7 +64,7 @@ async def source_manifest_summary(db,run):
     return count,hashed.hexdigest()
 
 
-async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_trusted_import=False):
+async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_trusted_import=False,receiver_bundle=None):
     now=now or datetime.now(timezone.utc)
     # Shared importer/worker lock: revision and frozen source cannot change mid-release.
     await db.execute(text('SELECT pg_advisory_xact_lock(:key)'),{'key':SOURCE_LOCK})
@@ -113,6 +114,11 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_truste
     valid_signature=(len(key)>=32 and isinstance(payload,dict) and isinstance(signature,str) and len(signature)==64 and signature.isascii()
         and hmac.compare_digest(hmac.new(key.encode(),canonical(payload).encode(),'sha256').hexdigest(),signature))
     if not valid_signature:reasons.append('UPSTREAM_SIGNATURE_INVALID')
+    accepted_statuses = ('VERIFIED', PRELIMINARY) if mode==TRUSTED_IMPORT and allow_trusted_import else ('VERIFIED',)
+    receipts = receiver_bundle.get('binding_receipts') if isinstance(receiver_bundle, dict) else None
+    prelim_proof_ok = (valid_signature and isinstance(receipts, dict)
+        and payload.get('matching_policy')==MATCHING_POLICY
+        and payload.get('receiver_evidence_hash')==digest(receiver_bundle))
     candidates=[]; assignments=[]; bindings={}; alias_clients=set()
     if run:
         candidates=list((await db.scalars(select(AnalyticsClientEvaluation).where(
@@ -122,7 +128,7 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_truste
         keys=[identity_key(c.client_key,public_scope) for c in candidates]
         if keys:
             bindings={b.subject_key:b for b in (await db.scalars(select(Identity).where(Identity.subject_key.in_(keys)).order_by(Identity.subject_key).with_for_update())).all()}
-        alias_clients=set((await db.scalars(select(Identity.client_id).where(Identity.status=='VERIFIED').group_by(Identity.client_id).having(func.count()>1))).all())
+        alias_clients=set((await db.scalars(select(Identity.client_id).where(Identity.status.in_(accepted_statuses)).group_by(Identity.client_id).having(func.count()>1))).all())
         for candidate in candidates:
             binding=bindings.get(identity_key(candidate.client_key,public_scope))
             assignments.append(dict(subject_hash=digest(candidate.client_key),client_id=binding.client_id,
@@ -150,15 +156,24 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_truste
         why=[]
         binding=bindings.get(identity_key(candidate.client_key,public_scope))
         if binding and binding.client_id in alias_clients:why.append('CLIENT_ID_MULTIPLE_SUBJECTS_REQUIRES_HISTORY_MERGE')
-        if not binding or binding.status!='VERIFIED':why.append('IDENTITY_NOT_VERIFIED')
+        signal=candidate.data.get('signal') or {}
+        matching=None
+        if not binding or binding.status not in accepted_statuses:
+            why.append('IDENTITY_NOT_VERIFIED')
+        elif binding.status==PRELIMINARY:
+            if prelim_proof_ok and known_text(binding.client_id):
+                matching=preliminary_matching(receipts.get(binding.client_id),
+                    client_key=candidate.client_key, client_id=binding.client_id, manager_id=binding.manager_id,
+                    revision=binding.revision, last_purchase=signal.get('anchor_purchase_date'),
+                    scope=public_scope, now=now)
+            if matching is None:why.append('IDENTITY_OR_MANAGER_UNCONFIRMED')
         elif (not isinstance(binding.evidence,dict) or not known_text(binding.client_id) or binding.manager_id<=0 or binding.revision<1
             or any(binding.evidence.get(k) is not True for k in ('all_sales_reviewed','complete_client_history_reviewed','client_unique','manager_unique','nontechnical','no_name_phone_conflict'))
             or not known_text(binding.evidence.get('reviewer')) or not known_text(binding.evidence.get('reason'))):why.append('IDENTITY_OR_MANAGER_UNCONFIRMED')
         if type(minimum) not in (int,float) or float(candidate.confidence)<minimum:why.append('LOW_OR_UNAPPROVED_CONFIDENCE')
-        signal=candidate.data.get('signal') or {}
         if signal.get('signal_type')!='CHURN_RISK' or signal.get('status')!='ACTIVE' or signal.get('as_of')!=(run.as_of.isoformat() if run else None):why.append('SIGNAL_NOT_ACTIVE_CHURN')
         candidate_decisions.append(dict(subject_hash=digest(candidate.client_key),reasons=why))
-        if not why:ready.append((candidate,binding,signal))
+        if not why:ready.append((candidate,binding,signal,matching))
     # Global proof failure always blocks the entire release. Per-candidate refusal is audited.
     result=dict(status='BLOCKED' if reasons or not ready else 'READY',reasons=list(dict.fromkeys(reasons)),
                 candidates=len(candidates),ready=len(ready) if not reasons else 0,decisions=candidate_decisions,
@@ -186,9 +201,10 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_truste
             valid_until=payload['valid_until'],policy_revision=policy.revision))
     db.add(Release(id=rid,sequence=policy.sequence,source_run_id=run_id,created_at=now,proof_hash=proof,
                    metadata_json=dict(algorithm_policy=ALGORITHM_POLICY,run=run_public,policy_revision=policy.revision,policy_settings=result['policy_settings'],manifest=envelope,
-                       binding_guards=[dict(key=b.subject_key,revision=b.revision,client_id=b.client_id,manager_id=b.manager_id) for _,b,_ in ready])))
+                       binding_guards=[dict(key=b.subject_key,revision=b.revision,client_id=b.client_id,manager_id=b.manager_id)
+                       | ({'status': PRELIMINARY} if m is not None else {}) for _,b,_,m in ready])))
     await db.flush()
-    for candidate,binding,signal in ready:
+    for candidate,binding,signal,matching in ready:
         metrics={k:signal['metrics'][k] for k in ('last_purchase_date','median_interval','mean_interval','q75','mad','days_without_purchase','overdue_threshold','churn_threshold','deviation_ratio','distinct_purchase_days','history_span_days','reference_revenue','source_period_end') if k in signal['metrics']}
         event=dict(source='sales-journal',signal_id=str(uuid5(NAMESPACE_URL,'churn-approved:'+signal['id'])),revision=signal['revision'],
             event_type='AUTOMATION_APPROVED',status='ACTIVE',family='INACTIVITY',signal_type='CHURN_RISK',
@@ -197,6 +213,8 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_truste
             analytical_eligible=True,generator_version=GENERATOR_VERSION,as_of=signal['as_of'],calculated_at=now.isoformat(),
             metrics=metrics,mode='AUTOMATION_APPROVED',automation_allowed=True,run=run_public,
             provenance=dict(shadow_signal_id=signal['id'],shadow_run_id=run_id,proof_hash=proof))
+        if matching is not None:
+            event['matching']=matching
         db.add(Event(release_id=rid,payload=json_value(event)))
     await db.flush()
     audit.data=dict(result,status='RELEASED',release_id=rid)
