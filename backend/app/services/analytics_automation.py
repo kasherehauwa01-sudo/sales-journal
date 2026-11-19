@@ -1,8 +1,9 @@
 """Explicit phase-1 release, never promotion of stored SHADOW rows.
 
-Caller owns transaction. Authorization needs independently signed upstream facts
-and reviewed ClientsVR assignments. A local checksum alone is not evidence of
-upstream completeness. No production signer/configuration is supplied.
+Caller owns transaction. The default policy requires independently signed facts.
+The permanent trusted-import policy instead accepts a signed description of
+locally imported data without claiming completeness. Both policies require
+reviewed ClientsVR assignments and retain source-revision checks.
 """
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -21,6 +22,8 @@ from app.services.inactivity import json_value
 from app.services.churn_pilot import ALGORITHM_POLICY, GENERATOR_VERSION, POLICY as INACTIVITY_POLICY
 from app.services.analytics_scope import SCOPE_POLICY
 from app.services.analytics_source import stored_sales_contract_valid
+from app.services.churn_ftp_trigger import ftp_cycle_ready
+from app.services.churn_source_trust import (INDEPENDENT, TRUSTED_IMPORT, accepts_statement, policy_mode, source_decision)
 
 
 def canonical(value):
@@ -60,7 +63,7 @@ async def source_manifest_summary(db,run):
     return count,hashed.hexdigest()
 
 
-async def release_churn(db,run_id,envelope,*,preview=False,now=None):
+async def release_churn(db,run_id,envelope,*,preview=False,now=None,allow_trusted_import=False):
     now=now or datetime.now(timezone.utc)
     # Shared importer/worker lock: revision and frozen source cannot change mid-release.
     await db.execute(text('SELECT pg_advisory_xact_lock(:key)'),{'key':SOURCE_LOCK})
@@ -68,6 +71,13 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
     run=await db.get(AnalyticsSignalRun,run_id)
     reasons=[]; candidate_decisions=[]
     conf=(policy.settings_json if policy and isinstance(policy.settings_json,dict) else {})
+    try:
+        mode=policy_mode(conf)
+    except ValueError:
+        mode=INDEPENDENT
+        reasons.append('SOURCE_TRUST_POLICY_INVALID')
+    if mode==TRUSTED_IMPORT and not allow_trusted_import:
+        reasons.append('TRUSTED_IMPORT_REQUIRES_PERMANENT_JOB')
     if not settings.analytics_automation_enabled:reasons.append('PRODUCER_DISABLED')
     if not policy or not policy.enabled or not policy.approved:reasons.append('POLICY_NOT_APPROVED')
     if conf.get('algorithm_policy')!=ALGORITHM_POLICY:reasons.append('ALGORITHM_POLICY_NOT_APPROVED')
@@ -87,6 +97,8 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
         if run.as_of!=closed-timedelta(days=1):reasons.append('RUN_NOT_LAST_CLOSED_DAY')
         if not control or control.published_run_id!=run.id:reasons.append('RUN_NOT_CURRENT_PUBLICATION')
         if revision!=run.source_revision or pending is not None:reasons.append('SOURCE_CHANGED_OR_PENDING')
+        if mode==TRUSTED_IMPORT and not await ftp_cycle_ready(db, run.as_of):
+            reasons.append('FTP_IMPORT_NOT_READY')
         if settings.autoload_timezone!='Europe/Moscow' or run.metadata_json.get('source_decision',{}).get('timezone')!=settings.autoload_timezone:reasons.append('AUTOMATION_TIMEZONE_UNSUPPORTED_OR_CHANGED')
         if not stored_sales_contract_valid(run.metadata_json):reasons.append('SHADOW_SOURCE_CONTRACT_INVALID')
         if (run.metadata_json.get('generator_version')!=GENERATOR_VERSION
@@ -125,8 +137,10 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
             source_revision=run.source_revision if run else None,as_of=run.as_of.isoformat() if run else None,
             scope_hash=digest(full_scope),identities_hash=digest(assignments),complete_through=run.as_of.isoformat() if run else None)
         if any(payload.get(k)!=v for k,v in expected.items()) or not known_text(conf.get('issuer')) or type(payload.get('source_revision')) is not int or type(payload.get('version')) is not int:reasons.append('UPSTREAM_PROOF_MISMATCH')
-        if payload.get('complete') is not True or payload.get('clients_current') is not True or not known_text(payload.get('clients_revision')):
-            reasons.append('COMPLETENESS_OR_CLIENTS_UNCONFIRMED')
+        if 'SOURCE_TRUST_POLICY_INVALID' not in reasons and not accepts_statement(conf, payload, expected['as_of']):
+            reasons.append('SOURCE_TRUST_STATEMENT_MISMATCH' if mode==TRUSTED_IMPORT else 'COMPLETENESS_OR_CLIENTS_UNCONFIRMED')
+        if payload.get('clients_current') is not True or not known_text(payload.get('clients_revision')):
+            reasons.append('CLIENTS_UNCONFIRMED' if mode==TRUSTED_IMPORT else 'COMPLETENESS_OR_CLIENTS_UNCONFIRMED')
         revisions=payload.get('source_revisions')
         if not required_valid or not isinstance(revisions,dict) or set(revisions)!=set(required) or any(not known_text(v) for v in revisions.values()):reasons.append('UPSTREAM_SOURCE_SET_UNCONFIRMED')
         fact_count,facts_hash=await source_manifest_summary(db,run) if run else (0,'')
@@ -149,7 +163,8 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
     result=dict(status='BLOCKED' if reasons or not ready else 'READY',reasons=list(dict.fromkeys(reasons)),
                 candidates=len(candidates),ready=len(ready) if not reasons else 0,decisions=candidate_decisions,
                 policy_revision=policy.revision if policy else None,
-                policy_settings={k:conf.get(k) for k in ('min_confidence','max_manifest_age_seconds','issuer','required_sources')},
+                policy_settings={k:conf.get(k) for k in ('min_confidence','max_manifest_age_seconds','issuer','required_sources')}
+                | ({k:conf[k] for k in ('source_trust_mode','import_trust_approval_id')} if mode==TRUSTED_IMPORT else {}),
                 proof_hash=digest(envelope))
     if not ready and not reasons:result['reasons']=['NO_ELIGIBLE_VERIFIED_CHURN']
     existing=await db.scalar(select(Release).where(Release.source_run_id==run_id)) if run else None
@@ -166,9 +181,9 @@ async def release_churn(db,run_id,envelope,*,preview=False,now=None):
     proof=digest(envelope)
     run_public=dict(id=rid,status='SUCCEEDED',as_of=run.as_of.isoformat(),source_revision=run.source_revision,
         finished_at=now.isoformat(),mode='AUTOMATION_APPROVED',automation_allowed=True,scope=public_scope,
-        source_decision=dict(coverage_status='CONFIRMED',business_freshness='CURRENT',accepted_data_through=run.as_of.isoformat(),
+        source_decision=dict(**source_decision(mode),accepted_data_through=run.as_of.isoformat(),
             effective_as_of=run.as_of.isoformat(),source_revision=run.source_revision,proof_hash=proof,
-            method='INDEPENDENT_SIGNED_UPSTREAM_MANIFEST_V1',valid_until=payload['valid_until'],policy_revision=policy.revision))
+            valid_until=payload['valid_until'],policy_revision=policy.revision))
     db.add(Release(id=rid,sequence=policy.sequence,source_run_id=run_id,created_at=now,proof_hash=proof,
                    metadata_json=dict(algorithm_policy=ALGORITHM_POLICY,run=run_public,policy_revision=policy.revision,policy_settings=result['policy_settings'],manifest=envelope,
                        binding_guards=[dict(key=b.subject_key,revision=b.revision,client_id=b.client_id,manager_id=b.manager_id) for _,b,_ in ready])))
@@ -199,10 +214,12 @@ async def manage_policy(db,action,payload,*,actor,expected_revision):
         policy=Policy(id=1,enabled=False,approved=False,revision=0,sequence=0,settings_json={});db.add(policy)
     if policy.revision!=expected_revision:raise ValueError('Policy revision conflict')
     if action=='draft':
-        if not isinstance(payload,dict) or set(payload)-{'min_confidence','max_manifest_age_seconds','issuer','required_sources','algorithm_policy'}:raise ValueError('Unknown policy fields')
+        if not isinstance(payload,dict) or set(payload)-{'min_confidence','max_manifest_age_seconds','issuer','required_sources','algorithm_policy','source_trust_mode','import_trust_approval_id'}:raise ValueError('Unknown policy fields')
+        policy_mode(payload)
         policy.settings_json=payload;policy.enabled=False;policy.approved=False
     elif action=='approve':
         c=policy.settings_json
+        policy_mode(c)
         if not isinstance(payload,dict) or set(payload)!={'confirm_business_approval'} or payload['confirm_business_approval'] is not True:raise ValueError('Explicit business approval required')
         if c.get('algorithm_policy')!=ALGORITHM_POLICY:raise ValueError('Explicit pilot algorithm approval required')
         minimum=c.get('min_confidence');sources=c.get('required_sources')

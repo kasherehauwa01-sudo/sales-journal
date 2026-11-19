@@ -13,6 +13,7 @@ from app.models import (ChurnJob, ChurnSchedule, AnalyticsSignalRun, AnalyticsAu
 from app.services import churn_schedule as schedule
 from app.services.analytics_automation import release_churn, digest, canonical
 from app.services.churn_receiver_evidence import attach
+from app.services.churn_source_trust import TRUSTED_IMPORT, policy_mode, schedule_agrees
 from app.services.analytics_signal_worker import run_batch, WORKER_LOCK
 from app.services.source_control import advisory, verify
 
@@ -65,7 +66,10 @@ async def authorize(db, job, data):
     envelope, bundle = data['manifest'], data['receiver_evidence']
     if envelope.get('payload', {}).get('receiver_evidence_hash') != digest(bundle):
         raise ValueError('RECEIVER_EVIDENCE_NOT_BOUND')
-    result = await release_churn(db, job.run_id, envelope)
+    if not schedule_agrees(row.settings_json, policy.settings_json):
+        raise ValueError('SOURCE_TRUST_POLICY_MISMATCH')
+    trusted = policy_mode(row.settings_json) == TRUSTED_IMPORT
+    result = await release_churn(db, job.run_id, envelope, allow_trusted_import=True) if trusted else await release_churn(db, job.run_id, envelope)
     job.counters = dict(job.counters, prepared=result['candidates'], allowed=result['ready'])
     if result['status'] not in {'RELEASED', 'EXISTING'}:
         job.status, job.error_code = 'BLOCKED', 'RELEASE_NOT_APPROVED'

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy import select
@@ -14,6 +15,8 @@ from app.models import (ChurnSchedule, ChurnJob, ChurnReceipt,
                         AnalyticsAutomationDecision, AnalyticsAutomationEvent)
 from app.services.analytics_automation import digest
 from app.services.churn_pilot import ALGORITHM_POLICY
+from app.services.churn_ftp_trigger import ftp_cycle_ready
+from app.services.churn_source_trust import TRUSTED_IMPORT, policy_mode
 
 SCHEDULE_LOCK = 734190225
 POLICY = 'churn-permanent/1'
@@ -28,6 +31,8 @@ class ScheduleSettings(BaseModel):
     cooldown_days: StrictInt = Field(ge=1, le=3650)
     algorithm_policy: str
     receiver_policy_revision: StrictInt = Field(ge=1)
+    source_trust_mode: Literal["INDEPENDENT", "TRUSTED_IMPORT"] = "INDEPENDENT"
+    import_trust_approval_id: str | None = None
     producer_policy_revision: StrictInt = Field(ge=1)
 
 
@@ -60,13 +65,15 @@ async def change(db, action, payload, *, revision, actor):
     if type(revision) is not int or revision != row.revision:
         raise ValueError('POLICY_REVISION_CONFLICT')
     if action == 'draft':
-        config = ScheduleSettings.model_validate(payload).model_dump()
+        config = ScheduleSettings.model_validate(payload).model_dump(exclude_unset=True)
+        policy_mode(config)
         if config['algorithm_policy'] != ALGORITHM_POLICY:
             raise ValueError('ALGORITHM_POLICY_MISMATCH')
         row.settings_json = config
         row.approved = row.enabled = False
     elif action == 'approve':
         ScheduleSettings.model_validate(row.settings_json)
+        policy_mode(row.settings_json)
         if row.settings_json['algorithm_policy'] != ALGORITHM_POLICY:
             raise ValueError('ALGORITHM_POLICY_MISMATCH')
         if payload != {'confirm_business_approval': True} or type(payload.get('confirm_business_approval')) is not bool:
@@ -108,6 +115,9 @@ async def enqueue(db, *, now, diagnostic=False):
     # Caller holds the schedule row lock. Unique constraint also fences other writers.
     job = await db.scalar(select(ChurnJob).where(ChurnJob.business_date == day, ChurnJob.kind == kind))
     if job is None:
+        if not diagnostic and policy_mode(config) == TRUSTED_IMPORT:
+            if not await ftp_cycle_ready(db, day - timedelta(days=1)):
+                return None
         job = ChurnJob(id=str(uuid4()), business_date=day, kind=kind, policy_revision=row.revision,
             status='QUEUED', created_at=now, updated_at=now, counters={})
         db.add(job)
