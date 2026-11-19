@@ -1,11 +1,13 @@
-"""Bind independently produced receiver evidence to the existing HMAC release.
+"""Bind receiver evidence to the existing HMAC release.
 
 Ed25519 verification remains mandatory in Calltrack's analyticsVerifiedApproval.
-This adapter cannot sign source facts or promote preliminary identities.
+This adapter cannot sign facts, assert completeness in trusted-import mode,
+or promote preliminary identities.
 """
 import json
 from hashlib import sha256
 from app.services.analytics_automation import digest
+from app.services.churn_source_trust import TRUSTED_IMPORT, accepts_statement, policy_mode
 
 
 def attach(event, bundle, *, expected_hash, policy_revision, config, producer_proof=None):
@@ -23,9 +25,14 @@ def attach(event, bundle, *, expected_hash, policy_revision, config, producer_pr
             'source_run_id', 'source_revision', 'as_of', 'complete_through', 'fact_count', 'facts_hash',
             'clients_current', 'clients_revision', 'source_revisions')):
         raise ValueError('RECEIVER_PROOF_CONTEXT_MISMATCH')
+    mode = policy_mode(config)
+    if (not accepts_statement(config, source, event['as_of'])
+            or (mode == TRUSTED_IMPORT and (producer_proof is None
+                or not accepts_statement(config, producer_proof, event['as_of'])))):
+        raise ValueError('RECEIVER_SOURCE_TRUST_MISMATCH')
     if (source.get('source_run_id') != event['provenance']['shadow_run_id']
             or source.get('source_revision') != event['run']['source_revision']
-            or source.get('as_of') != event['as_of'] or source.get('complete') is not True
+            or source.get('as_of') != event['as_of']
             or review.get('status') != 'VERIFIED' or review.get('client_id') != client
             or review.get('manager_id') != event['assignment']['manager_id']
             or review.get('binding_revision') != event['assignment']['binding_revision']
