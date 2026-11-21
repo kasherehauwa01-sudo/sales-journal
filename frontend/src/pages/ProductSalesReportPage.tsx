@@ -1,3 +1,4 @@
+import { FolderFilter } from "../components/FolderFilter";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import { serializeReportSelection } from "../utils/reportFilters";
@@ -7,7 +8,7 @@ import {useExplicitReport,reportJson,reportDownload,ReportHttpError} from '../ho
 import {Bar,BarChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {Download,FolderOpen,Plus,Save,Trash2,X} from 'lucide-react';import {useEffect,useMemo,useState} from 'react';
 import {api,query} from '../api/client';import {CatalogTreeMultiSelect} from '../components/CatalogTreeMultiSelect';import {MultiSelect} from '../components/MultiSelect';import {Empty,ErrorBox,Loading} from '../components/States';import {PeriodPicker,type Period} from '../components/PeriodPicker';import {useApi} from '../hooks/useApi';import {date,money,number,percent} from '../utils/format';
-type Product={key:string;article?:string;code?:string;name:string;image_url?:string|null};type ProductPage={items:Product[];total:number;page:number;pages:number};type Filters={period:Period;date_from:string;date_to:string;manager:string[];buyer_type:string[];brands:string[];departments:string[];compare:boolean;comparison_mode:'previous_period'|'previous_year';products:Product[]};type Report={total:number;summary:any;products:any[];dynamics:any[];managers:any[];departments:any[]};type SavedSet={id:number;name:string;products:Product[]};type CatalogFilterDef={key:string;label:string};
+type Product={key:string;article?:string;code?:string;name:string;image_url?:string|null};type ProductPage={items:Product[];total:number;page:number;pages:number};type Filters={period:Period;date_from:string;date_to:string;manager:string[];buyer_type:string[];brands:string[];folders:string[];departments:string[];compare:boolean;comparison_mode:'previous_period'|'previous_year';products:Product[]};type Report={total:number;summary:any;products:any[];dynamics:any[];managers:any[];departments:any[]};type SavedSet={id:number;name:string;products:Product[]};type CatalogFilterDef={key:string;label:string};
 const iso=(d:Date)=>d.toISOString().slice(0,10);
 function range(value:string){const now=new Date(),from=new Date(now),to=new Date(now);if(value==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(value==='week')from.setDate(from.getDate()-((from.getDay()+6)%7));if(value==='month')from.setDate(1);if(value==='previous'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {date_from:iso(from),date_to:iso(to)}}
 export function ProductSalesReportPage() {
@@ -18,6 +19,7 @@ export function ProductSalesReportPage() {
     manager: [],
     buyer_type: [],
     brands: [],
+    folders: [],
     departments: [],
     compare: false,
     comparison_mode: "previous_period",
@@ -49,6 +51,7 @@ export function ProductSalesReportPage() {
     manager: serializeReportSelection(f.manager),
     buyer_type: serializeReportSelection(f.buyer_type),
     brands: f.brands,
+    folders: f.folders,
     departments: f.departments,
     compare: f.compare,
     comparison_mode: f.comparison_mode,
@@ -62,7 +65,7 @@ export function ProductSalesReportPage() {
     { filters, group },
     async (p, signal) => {
       setDetails(undefined);
-      if (!p.filters.products.length)
+      if (!p.filters.products.length && !p.filters.folders.length)
         throw new Error("Выберите хотя бы один товар");
       const init = {
         method: "POST",
@@ -275,6 +278,7 @@ export function ProductSalesReportPage() {
             />
           </div>
           <BrandFilter value={filters.brands} onChange={brands => setFilters({ ...filters, brands })} />
+          <FolderFilter value={filters.folders} onChange={folders => setFilters({ ...filters, folders })} />
           <label>
             Менеджер
             <MultiSelect options={managers || []} value={filters.manager} onChange={value => setFilters({ ...filters, manager: value })} searchable showActions />

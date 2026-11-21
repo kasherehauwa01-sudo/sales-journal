@@ -1,3 +1,4 @@
+from app.services.report_folders import FolderPairs, FolderRequest, folder_selection, resolve_folders
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Annotated
@@ -41,7 +42,7 @@ def _conditions(
     department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
-    brands: list[str] | None = None, categories: list[str] | None = None):
+    brands: list[str] | None = None, categories: list[str] | None = None, folders: FolderPairs = None):
     result = [Sale.sale_date >= start, Sale.sale_date <= end]
     if department:
         result.append(Sale.department.in_(department) if isinstance(department, list) else Sale.department == department)
@@ -52,7 +53,7 @@ def _conditions(
         )
     if client:
         result.append(func.lower(func.trim(Sale.client)) == client.strip().casefold())
-    result.extend(report_sale_conditions(brands, categories))
+    result.extend(report_sale_conditions(brands, categories, folders=folders))
     return result
 
 
@@ -62,18 +63,18 @@ def _sales_rows(
     department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
-    brands: list[str] | None = None, categories: list[str] | None = None):
+    brands: list[str] | None = None, categories: list[str] | None = None, folders: FolderPairs = None):
     """Сначала агрегирует позиции только для отфильтрованных продаж, сохраняя одну строку на чек."""
     return (
         select(
             Sale.id,
             Sale.sale_date,
-            report_sale_amount(brands, categories).label("total_amount"),
+            report_sale_amount(brands, categories, folders=folders).label("total_amount"),
             func.coalesce(func.sum(SaleItem.quantity), 0).label("items_count"),
         )
         .outerjoin(SaleItem, SaleItem.sale_id == Sale.id)
-        .where(*_conditions(start, end, department, clients, client, **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {})), report_item_condition(brands, categories))
-        .group_by(Sale.id, Sale.sale_date, report_sale_amount(brands, categories))
+        .where(*_conditions(start, end, department, clients, client, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {})), report_item_condition(brands, categories, folders=folders))
+        .group_by(Sale.id, Sale.sale_date, report_sale_amount(brands, categories, folders=folders))
         .subquery()
     )
 
@@ -85,8 +86,8 @@ async def _metrics(
     department: str | list[str] | None,
     clients: list[str] | None,
     client: str | None = None,
-    brands: list[str] | None = None, categories: list[str] | None = None):
-    sales = _sales_rows(start, end, department, clients, client, **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {}))
+    brands: list[str] | None = None, categories: list[str] | None = None, folders: FolderPairs = None):
+    sales = _sales_rows(start, end, department, clients, client, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {}))
     row = (
         await db.execute(
             select(
@@ -108,8 +109,8 @@ async def _chart(
     clients: list[str] | None,
     client: str | None = None,
     all_groupings: bool = False,
-    brands: list[str] | None = None, categories: list[str] | None = None):
-    sales = _sales_rows(start, end, department, clients, client, **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {}))
+    brands: list[str] | None = None, categories: list[str] | None = None, folders: FolderPairs = None):
+    sales = _sales_rows(start, end, department, clients, client, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {}))
     bucket = func.date_trunc(
         "day" if all_groupings else group_by, sales.c.sale_date
     ).label("period")
@@ -162,7 +163,7 @@ async def report(
     selected_clients: Annotated[
         list[str] | None, Query(alias="clients", max_length=500)
     ] = None,
-    brands: Annotated[list[str] | None, Query()] = None, categories: Annotated[list[str] | None, Query()] = None,
+    brands: Annotated[list[str] | None, Query()] = None, folders: Annotated[FolderPairs, Depends(folder_selection)] = None, categories: Annotated[list[str] | None, Query()] = None,
     departments: Annotated[list[str] | None, Query()] = None,
 ):
     # Legacy singular department remains supported for existing callers.
@@ -190,7 +191,7 @@ async def report(
         clients = sorted(chosen if allowed is None else chosen & allowed)
     current = await _metrics(
         db, effective_from, effective_to, department_scope, clients, client,
-        **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {}),
+        **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {}),
     )
     current_points = await _chart(
         db,
@@ -201,7 +202,7 @@ async def report(
         clients,
         client,
         **({"all_groupings": True} if include_groupings else {}),
-     **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {}))
+     **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {}))
     comparisons = {}
     for mode in (
         ("previous_period", "previous_year") if include_both else (comparison_mode,)
@@ -209,7 +210,7 @@ async def report(
         start, end = dynamics_comparison_period(
             effective_from, effective_to, mode, period_kind
         )
-        previous = await _metrics(db, start, end, department_scope, clients, client, **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {}))
+        previous = await _metrics(db, start, end, department_scope, clients, client, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {}))
         previous_points = await _chart(
             db,
             start,
@@ -219,7 +220,7 @@ async def report(
             clients,
             client,
             **({"all_groupings": True} if include_groupings else {}),
-         **({"brands": brands} if brands else {}), **({"categories": categories} if categories else {}))
+         **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}), **({"categories": categories} if categories else {}))
         comparisons[mode] = {
             "period": {"start": start, "end": end},
             "metrics": {

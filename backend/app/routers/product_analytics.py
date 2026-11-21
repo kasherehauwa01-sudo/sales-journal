@@ -1,3 +1,4 @@
+from app.services.report_folders import FolderRequest, folder_item_condition, resolve_folders, folder_revision
 from datetime import date
 from io import BytesIO
 import json
@@ -55,7 +56,7 @@ class HeavyAnalyticsRoute(APIRoute):
 router=APIRouter(route_class=HeavyAnalyticsRoute,prefix="/reports/product-analytics",tags=["Отчеты"])
 logger=logging.getLogger(__name__)
 
-class AnalyticsRequest(BaseModel):
+class AnalyticsRequest(FolderRequest):
  date_from:date;date_to:date;compare_from:date|None=None;compare_to:date|None=None;departments:list[str]=Field(default_factory=list);managers:list[str]=Field(default_factory=list);buyer_types:list[str]=Field(default_factory=list);brands:list[str]=Field(default_factory=list);manufacturers:list[str]=Field(default_factory=list);subcategories:list[str]=Field(default_factory=list);group_by:str="product";article:str|None=None;search:str|None=None
 
 def _dates(data):
@@ -63,8 +64,9 @@ def _dates(data):
  if bool(data.compare_from)!=bool(data.compare_to):raise HTTPException(422,"Укажите обе даты периода сравнения")
  return (data.compare_from,data.compare_to) if data.compare_from else previous_period(data.date_from,data.date_to)
 
-def _conditions(data,start,end,manager_clients=None):
+def _conditions(data,start,end,manager_clients=None,folders=None):
  result=[Sale.sale_date>=start,Sale.sale_date<=end]
+ result.append(folder_item_condition(folders))
  if data.departments:result.append(Sale.department.in_(data.departments))
  if manager_clients is not None:
   if manager_clients:
@@ -79,7 +81,7 @@ def _conditions(data,start,end,manager_clients=None):
 async def _period_rows(data,db,start,end,manager_clients):
  revenue=func.coalesce(func.sum(SaleItem.quantity*SaleItem.actual_price),0);units=func.coalesce(func.sum(SaleItem.quantity),0)
  fallback_name=case((and_(or_(SaleItem.article.is_(None),func.trim(SaleItem.article)==""),or_(SaleItem.code.is_(None),func.trim(SaleItem.code)=="")),func.lower(func.trim(SaleItem.name))),else_="")
- q=select(SaleItem.article,SaleItem.code,func.max(SaleItem.name).label("name"),revenue.label("revenue"),units.label("units"),func.count(distinct(Sale.id)).label("checks"),func.min(Sale.sale_date).label("first_sale"),func.max(Sale.sale_date).label("last_sale")).join(Sale,Sale.id==SaleItem.sale_id).where(*_conditions(data,start,end,manager_clients)).group_by(SaleItem.article,SaleItem.code,fallback_name)
+ q=select(SaleItem.article,SaleItem.code,func.max(SaleItem.name).label("name"),revenue.label("revenue"),units.label("units"),func.count(distinct(Sale.id)).label("checks"),func.min(Sale.sale_date).label("first_sale"),func.max(Sale.sale_date).label("last_sale")).join(Sale,Sale.id==SaleItem.sale_id).where(*_conditions(data,start,end,manager_clients, folders=await resolve_folders(data.folders))).group_by(SaleItem.article,SaleItem.code,fallback_name)
  rows=[]
  result=await db.stream(q.execution_options(yield_per=512))
  try:
@@ -178,7 +180,7 @@ async def _dataset(data,db):
  # max(id) использует PK-индекс и инвалидирует кеш между worker-процессами.
  revision=int(await db.scalar(select(func.max(Sale.id))) or 0)
  source_revision=f"local-catalog:{await catalog_revision(db)}:" if settings.product_analytics_local_catalog_enabled else "legacy-catalog:"
- key=source_revision+_dataset_cache_key(data,revision)
+ key=source_revision+folder_revision(await resolve_folders(data.folders))+_dataset_cache_key(data,revision)
  product_data=data.model_copy(update={"group_by":"product"})
  result,hit=await cached_product_dataset(key,lambda:_build_dataset(product_data,db))
  logger.info("product_analytics dataset cache_hit=%s result_rows=%s",hit,len(result[0]))
@@ -216,7 +218,7 @@ def _selected_products_condition(rows,metric):
 async def _unique_checks(data,db,rows,start,end,manager_clients,metric):
  """Считает каждый документ один раз, даже если в нём несколько отобранных SKU."""
  return await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(
-  *_conditions(data,start,end,manager_clients),_selected_products_condition(rows,metric))) or 0
+  *_conditions(data,start,end,manager_clients, folders=await resolve_folders(data.folders)),_selected_products_condition(rows,metric))) or 0
 
 def _source(payload):
  if isinstance(payload,list):return payload
@@ -329,8 +331,8 @@ async def report_summary(data:AnalyticsRequest,db:AsyncSession=Depends(get_db)):
   current_checks=await _unique_checks(data,db,rows,data.date_from,data.date_to,manager_clients,"revenue")
   old_checks=await _unique_checks(data,db,rows,old_from,old_to,manager_clients,"previous_revenue")
  else:
-  current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0
-  old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0
+  current_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients, folders=await resolve_folders(data.folders)))) or 0
+  old_checks=await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients, folders=await resolve_folders(data.folders)))) or 0
  result["checks"]={"current":current_checks,"previous":old_checks}
  return {"period":{"start":data.date_from,"end":data.date_to},"comparison":{"start":old_from,"end":old_to},"summary":result}
 
@@ -351,8 +353,8 @@ async def full_report(data:AnalyticsRequest,section:str=Query("top",pattern="^(t
   }
  else:
   result["checks"]={
-   "current":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients))) or 0,
-   "previous":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients))) or 0,
+   "current":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,data.date_from,data.date_to,manager_clients, folders=await resolve_folders(data.folders)))) or 0,
+   "previous":await db.scalar(select(func.count(distinct(Sale.id))).join(SaleItem,SaleItem.sale_id==Sale.id).where(*_conditions(data,old_from,old_to,manager_clients, folders=await resolve_folders(data.folders)))) or 0,
   }
  all_items=await run_cpu(_sorted,grouped,section,sort_by,None)
  items=all_items if full else all_items[:limit]
@@ -397,7 +399,7 @@ async def _detail_manager_clients(data:DetailRequest,db:AsyncSession,product_con
   try:mapping=await get_client_managers()
   except ClientsVrError as exc:raise HTTPException(502,str(exc)) from exc
  normalized=func.coalesce(func.lower(func.trim(Sale.client)),"")
- conditions=[*_conditions(data,data.date_from,data.date_to),product_condition]
+ conditions=[*_conditions(data,data.date_from,data.date_to, folders=await resolve_folders(data.folders)),product_condition]
  clients=list((await db.scalars(select(normalized).join(SaleItem,SaleItem.sale_id==Sale.id).where(*conditions).distinct())).all())
  return _selected_clients(data,clients,mapping,buyer_scope)
 
@@ -420,7 +422,7 @@ async def details(data:DetailRequest,group_by:str=Query("day",pattern="^(day|wee
   func.max(SaleItem.name).label("name"),func.min(Sale.sale_date).label("first_sale"),
   func.max(Sale.sale_date).label("last_sale"),
  ).join(Sale,Sale.id==SaleItem.sale_id).where(
-  *_conditions(data,data.date_from,data.date_to,manager_clients),condition
+  *_conditions(data,data.date_from,data.date_to,manager_clients, folders=await resolve_folders(data.folders)),condition
  ).group_by(bucket).order_by(bucket)
  rows=(await db.execute(query)).all()
  points=[{"period":row.period.date(),"revenue":float(row.revenue or 0),

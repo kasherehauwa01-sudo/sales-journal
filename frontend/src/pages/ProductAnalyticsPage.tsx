@@ -1,4 +1,5 @@
 import {CategoryTreeFilter} from "../components/CategoryTreeFilter";
+import { FolderFilter } from "../components/FolderFilter";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import { useEffect, useState } from "react";
@@ -71,6 +72,7 @@ type Parameters = {
   managers: string[];
   buyer_types: string[];
   brands: string[];
+  folders: string[];
   manufacturers: string[];
   subcategories: string[];
   group_by: string;
@@ -226,6 +228,7 @@ export function ProductAnalyticsPage() {
     [debouncedName, setDebouncedName] = useState(""),
     [article, setArticle] = useState(""),
     [brands, setBrands] = useState<string[]>([]),
+    [folders, setFolders] = useState<string[]>([]),
     [brandSearch, setBrandSearch] = useState(""),
     [debouncedBrandSearch, setDebouncedBrandSearch] = useState(""),
     [manufacturers, setManufacturers] = useState<string[]>([]),
@@ -290,6 +293,7 @@ export function ProductAnalyticsPage() {
     managers,
     buyer_types: buyerTypes,
     brands,
+    folders,
     manufacturers,
     subcategories,
     group_by: groupBy,
@@ -597,6 +601,7 @@ export function ProductAnalyticsPage() {
               ))}
             </datalist>
           </label>
+          <FolderFilter value={folders} onChange={setFolders} />
           <label>
             Бренд
             <MultiSelect

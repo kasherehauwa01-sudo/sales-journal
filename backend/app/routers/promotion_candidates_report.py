@@ -1,3 +1,4 @@
+from app.services.report_folders import FolderRequest, folder_item_condition, resolve_folders
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from app.config import settings
@@ -65,7 +66,7 @@ class Criteria(BaseModel):
     recent_promotion_months: int = 3
 
 
-class Request(BaseModel):
+class Request(FolderRequest):
     model_config=ConfigDict(extra="forbid")
     date_from: date
     date_to: date
@@ -81,8 +82,8 @@ class Request(BaseModel):
     criteria: Criteria = Field(default_factory=Criteria)
 
 
-def _conditions(data, clients):
-    conditions = [Sale.sale_date >= data.date_from, Sale.sale_date <= data.date_to]
+def _conditions(data, clients, folders=None):
+    conditions = [Sale.sale_date >= data.date_from, Sale.sale_date <= data.date_to, folder_item_condition(folders)]
     if data.departments:
         conditions.append(Sale.department.in_(data.departments))
     if clients is not None:
@@ -132,7 +133,7 @@ async def _sales(data, db, clients):
             func.count(distinct(Sale.department)).label("stores"),
         )
         .join(Sale)
-        .where(*_conditions(data, clients))
+        .where(*_conditions(data, clients, folders=await resolve_folders(data.folders)))
         .group_by(SaleItem.code, SaleItem.article)
         .execution_options(yield_per=250)
     )

@@ -1,0 +1,14 @@
+.folder-filter{position:relative;display:flex;flex-direction:column;gap:6px;min-width:200px;font-size:13px}
+.folder-filter>button{text-align:left;min-height:38px}
+.folder-filter-panel{position:absolute;top:100%;left:0;z-index:30;width:min(420px,calc(100vw - 48px));padding:12px;background:var(--panel,#fff);color:var(--text,#182638);border:1px solid #d7dfe9;border-radius:10px;box-shadow:0 8px 24px #18263826;display:flex;flex-direction:column;gap:8px}
+.folder-filter-panel>input{width:100%;box-sizing:border-box}
+.folder-filter-tree{max-height:350px;overflow:auto;overscroll-behavior:contain}
+.folder-filter-panel ul{list-style:none;margin:0;padding:0}
+.folder-filter-panel ul ul{padding-left:20px}
+.folder-filter-row{display:flex;align-items:center;min-height:36px}
+.folder-filter-row>button,.folder-filter-spacer{width:32px;flex-shrink:0}
+.folder-filter-row>button{padding:4px;border:0;background:transparent}
+.folder-filter-row label{display:flex;flex-direction:row;align-items:center;gap:8px;overflow-wrap:anywhere;cursor:pointer}
+.folder-filter-row input[type=checkbox]{width:16px;height:16px;flex-shrink:0;margin:0}
+.folder-filter-selected{display:flex;flex-wrap:wrap;gap:4px;max-height:100px;overflow:auto}
+.folder-filter-selected button{font-size:12px;white-space:normal;text-align:left}

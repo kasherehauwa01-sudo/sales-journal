@@ -1,3 +1,4 @@
+from app.services.report_folders import FolderRequest, folder_item_condition, resolve_folders
 from datetime import date,timedelta
 from io import BytesIO
 from fastapi import APIRouter,Depends,HTTPException,Query,Response
@@ -20,7 +21,7 @@ from app.services.vrcatalog import VrCatalogError,get_catalog_brands,get_catalog
 router=APIRouter(route_class=ReportRoute,prefix="/reports/product-sales",tags=["Отчеты"])
 
 class ProductRef(BaseModel):article:str|None=None;code:str|None=None;name:str;image_url:str|None=None
-class ReportRequest(BaseModel):
+class ReportRequest(FolderRequest):
  date_from:date;date_to:date;brands:list[str]=Field(default_factory=list);manager: str | list[str] | None=None;buyer_type: str | list[str] | None=None;departments:list[str]=Field(default_factory=list);products:list[ProductRef]=Field(default_factory=list);compare:bool=False;comparison_mode:str=Field("previous_period",pattern="^(previous_period|previous_year)$")
 class DetailRequest(ReportRequest):product:ProductRef
 class SetIn(BaseModel):name:str=Field(min_length=1,max_length=255);products:list[ProductRef]
@@ -54,10 +55,11 @@ def _product_condition(products):
 
 async def _conditions(data:ReportRequest,start=None,end=None):
  conditions=[Sale.sale_date>=(start or data.date_from),Sale.sale_date<=(end or data.date_to)]
- if data.brands:conditions.append(brand_item_condition(data.brands))
+ conditions.append(brand_item_condition(data.brands, await resolve_folders(data.folders)))
  if data.departments:conditions.append(array_membership(Sale.department, data.departments, parameter_name="report_departments"))
  product_condition=_product_condition(data.products)
- if product_condition is None:conditions.append(False)
+ if product_condition is None:
+  if not data.folders:conditions.append(False)
  else:conditions.append(product_condition)
  for value, loader in ((data.manager, get_manager_clients), (data.buyer_type, get_buyer_type_clients)):
   if value:
@@ -216,3 +218,9 @@ async def export(data:ReportRequest,db:AsyncSession=Depends(get_report_db)):
 
  book=Workbook();book.remove(book.active);_sheet(book,"Итоги",["Показатель","Значение"],localized_summary_rows(summary_data));_sheet(book,"Товары",["Артикул","Код","Наименование","Продано","Продажи","Чеков","Клиентов","Средняя цена","Скидка","Средняя скидка","Последняя продажа","Доля"],[(x["article"],x["code"],x["name"],x["units"],x["revenue"],x["checks"],x["clients"],x["average_price"],x["discount_amount"],x["average_discount"],x["last_sale"],x["revenue_share"]) for x in product_data]);_sheet(book,"Менеджеры",["Менеджер","Продажи","Продано","Чеков","Клиентов"],[(x["manager"],x["revenue"],x["units"],x["checks"],x["clients"]) for x in manager_data]);_sheet(book,"Подразделения",["Подразделение","Продажи","Продано","Чеков","Клиентов"],[(x["department"],x["revenue"],x["units"],x["checks"],x["clients"]) for x in department_data]);_sheet(book,"Детализация продаж",["Дата","Документ","Клиент","Менеджер","Подразделение","Количество","Сумма","Цена","Скидка"],[(x["sale_date"],x["document_number"],x["client"],x["manager"],x["department"],x["quantity"],x["amount"],x["actual_price"],x["discount"]) for x in details_rows]);output=BytesIO();book.save(output)
  return Response(output.getvalue(),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":"attachment; filename=product-sales.xlsx"})
+
+
+@router.get("/catalog/folders")
+async def catalog_folders():
+ from app.services.report_folders import folder_paths
+ return await folder_paths()

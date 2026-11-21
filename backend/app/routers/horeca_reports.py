@@ -1,3 +1,5 @@
+from typing import Annotated
+from app.services.report_folders import FolderPairs, folder_selection
 import asyncio
 from io import BytesIO
 from datetime import datetime,timezone
@@ -27,9 +29,14 @@ async def _report(token:str,db):
  return report
 
 @router.get("/{token}")
-async def get_report(token:str,db:AsyncSession=Depends(get_db)):
+async def get_report(token:str,db:AsyncSession=Depends(get_db),folders:Annotated[FolderPairs,Depends(folder_selection)]=None):
  report=await _report(token,db)
- return {"period_start":report.period_start,"period_end":report.period_end,"products":limit_horeca_products(report.products)}
+ products=limit_horeca_products(report.products)
+ if folders is not None:
+  from app.services.product_analytics import product_key
+  keys={product_key(article,code) for code,article in folders}
+  products=[item for item in products if item.get("key") in keys or product_key(item.get("article"),item.get("code")) in keys]
+ return {"period_start":report.period_start,"period_end":report.period_end,"products":products}
 
 @router.get("/{token}/images")
 async def get_report_images(token:str,db:AsyncSession=Depends(get_db)):

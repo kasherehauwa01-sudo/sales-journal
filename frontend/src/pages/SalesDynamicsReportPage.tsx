@@ -1,3 +1,4 @@
+import { FolderFilter } from "../components/FolderFilter";
 import { PdfExportButton } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
 import { CategoryTreeFilter } from "../components/CategoryTreeFilter";
@@ -25,6 +26,7 @@ const periodOptions:Array<[PeriodKind,string]>=[['yesterday','Вчера'],['cur
 const metricOptions:Array<[Metric,string]>=[['revenue','Выручка'],['sales_count','Количество продаж'],['items_count','Количество товаров'],['average_check','Средний чек'],['average_items_per_sale','Товаров в чеке']];
 const metricMoney=(key:Metric)=>key==='revenue'||key==='average_check';const formatMetric=(key:Metric,value:number)=>metricMoney(key)?money(value):number(value);
 export function SalesDynamicsReportPage() {
+  const [folders, setFolders] = useState<string[]>([]);
   const [brands, setBrands] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const initial = dates("current_month");
@@ -55,6 +57,7 @@ export function SalesDynamicsReportPage() {
     buyer_type: buyerType,
     brands,
     categories,
+    folders,
     clients: selectedClients,
     include_both: true,
   };
@@ -142,6 +145,7 @@ export function SalesDynamicsReportPage() {
             <span>Категория</span>
             <CategoryTreeFilter value={categories} onChange={setCategories} includeReportFallbacks={false} />
           </div>
+          <FolderFilter value={folders} onChange={setFolders} />
           <label>
             Менеджер
             <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />
