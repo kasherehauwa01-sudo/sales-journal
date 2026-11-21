@@ -1,3 +1,4 @@
+from app.services.report_folders import FolderPairs, FolderRequest, folder_selection, resolve_folders
 import logging
 import time
 from app.services.report_execution import FullReportRoute
@@ -62,13 +63,13 @@ router = APIRouter(
 )
 
 
-def _sale_conditions(start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None):
+def _sale_conditions(start: date, end: date, stores: list[str], clients: list[str] | None, brands: list[str] | None = None, folders: FolderPairs = None):
     result = [Sale.sale_date >= start, Sale.sale_date <= end]
     if stores: result.append(Sale.department.in_(stores))
     if clients is not None:
         names = [name.strip().casefold() for name in clients if name.strip()]
         result.append(client_names_condition(Sale.client, names) if names else false())
-    result.extend([brand_item_condition(brands)] if brands else [])
+    result.extend([brand_item_condition(brands, folders)] if brands or folders is not None else [])
     return result
 
 
@@ -86,7 +87,7 @@ async def _product_keys(
     stores: list[str],
     clients: list[str] | None,
     additional_period=None,
-    brands: list[str] | None = None):
+    brands: list[str] | None = None, folders: FolderPairs = None):
     period = or_(
         and_(Sale.sale_date >= start, Sale.sale_date <= end),
         and_(Sale.sale_date >= previous_start, Sale.sale_date <= previous_end),
@@ -100,7 +101,7 @@ async def _product_keys(
             ),
         )
     conditions = [period]
-    if brands: conditions.append(brand_item_condition(brands))
+    if brands or folders is not None: conditions.append(brand_item_condition(brands, folders))
     if stores:
         conditions.append(Sale.department.in_(stores))
     if clients is not None:
@@ -202,15 +203,15 @@ def _mapped_items(category_map):
     return category_map, join, category
 
 
-async def _category_rows(db, start, end, stores, clients, category_map, brands: list[str] | None = None):
+async def _category_rows(db, start, end, stores, clients, category_map, brands: list[str] | None = None, folders: FolderPairs = None):
     category_map, join, category = _mapped_items(category_map)
-    query = select(category, func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0).label("revenue"), func.coalesce(func.sum(SaleItem.quantity), 0).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients, **({"brands": brands} if brands else {}))).group_by(category)
+    query = select(category, func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0).label("revenue"), func.coalesce(func.sum(SaleItem.quantity), 0).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*_sale_conditions(start, end, stores, clients, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))).group_by(category)
     rows = (await db.execute(query)).all()
     return [{"category": row.category, "revenue": float(row.revenue), "units": float(row.units), "checks": int(row.checks)} for row in rows]
 
 
-async def _scope_checks(db, start, end, stores, clients, brands: list[str] | None = None):
-    query = select(func.count(func.distinct(Sale.id))).select_from(SaleItem).join(Sale).where(*_sale_conditions(start, end, stores, clients, **({"brands": brands} if brands else {})))
+async def _scope_checks(db, start, end, stores, clients, brands: list[str] | None = None, folders: FolderPairs = None):
+    query = select(func.count(func.distinct(Sale.id))).select_from(SaleItem).join(Sale).where(*_sale_conditions(start, end, stores, clients, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {})))
     return int(await db.scalar(query) or 0)
 
 
@@ -225,7 +226,7 @@ async def _scope(
     db,
     comparison_mode="previous_period",
     include_year=False,
-    brands: list[str] | None = None):
+    brands: list[str] | None = None, folders: FolderPairs = None):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     today = datetime.now(ZoneInfo(settings.autoload_timezone)).date()
@@ -248,13 +249,13 @@ async def _scope(
         stores,
         clients,
         (year_start, year_end) if include_year else None,
-     **({"brands": brands} if brands else {}))
+     **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
     mapping, catalog = await _catalog_map(products)
     category_map = await _mapping_table(db, mapping)
-    current = await _category_rows(db, start, end, stores, clients, category_map, **({"brands": brands} if brands else {}))
+    current = await _category_rows(db, start, end, stores, clients, category_map, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
     previous = await _category_rows(
         db, previous_start, previous_end, stores, clients, category_map,
-        **({"brands": brands} if brands else {}),
+        **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
     )
     rows = categorized_only(aggregate_categories(current, previous))
     if category_filter:
@@ -281,10 +282,10 @@ async def _scope(
             0,
         )
     else:
-        current_checks = await _scope_checks(db, start, end, stores, clients, **({"brands": brands} if brands else {}))
+        current_checks = await _scope_checks(db, start, end, stores, clients, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
         previous_checks = await _scope_checks(
             db, previous_start, previous_end, stores, clients
-        , **({"brands": brands} if brands else {}))
+        , **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
     base = (
         start,
         end,
@@ -301,15 +302,15 @@ async def _scope(
     if include_year:
         year = await _category_rows(
             db, year_start, year_end, stores, clients, category_map
-        , **({"brands": brands} if brands else {}))
+        , **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
         year_rows = categorized_only(aggregate_categories(current, year))
-        year_checks = await _scope_checks(db, year_start, year_end, stores, clients, **({"brands": brands} if brands else {}))
+        year_checks = await _scope_checks(db, year_start, year_end, stores, clients, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
         return (*base, year_rows, year_checks, year_start, year_end)
     return base
 
 
 async def _selected_checks(
-    db, start, end, stores, clients, category_map, names, brands=None
+    db, start, end, stores, clients, category_map, names, brands=None, folders=None
 ):
     if not names:
         return 0
@@ -321,7 +322,7 @@ async def _selected_checks(
             .join(Sale)
             .outerjoin(category_map, join)
             .where(
-                *_sale_conditions(start, end, stores, clients, brands),
+                *_sale_conditions(start, end, stores, clients, brands, folders),
                 category.in_(names),
             )
         )
@@ -349,7 +350,7 @@ async def report(
     buyer_type: Annotated[list[str] | None, Query()] = None,
     category: str | None = None,
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None,
+    brands: Annotated[list[str] | None, Query()] = None, folders: Annotated[FolderPairs, Depends(folder_selection)] = None,
     categories: Annotated[list[str] | None, Query()] = None,
 ):
     (
@@ -378,7 +379,7 @@ async def report(
         None,
         db,
         include_year=True,
-        **({"brands": brands} if brands else {}),
+        **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
     )
     year_rows = _select_categories(year_rows, category, categories)
     options = sorted(row["category"] for row in all_rows)
@@ -390,10 +391,10 @@ async def report(
     elif categories:
         names = [r["category"] for r in rows]
         checks = await _selected_checks(
-            db, start, end, stores, clients, category_map, names, brands
+            db, start, end, stores, clients, category_map, names, brands, folders
         )
         old_checks = await _selected_checks(
-            db, old_start, old_end, stores, clients, category_map, names, brands
+            db, old_start, old_end, stores, clients, category_map, names, brands, folders
         )
         year_checks = await _selected_checks(
             db,
@@ -403,7 +404,7 @@ async def report(
             clients,
             category_map,
             [r["category"] for r in year_rows],
-            brands,
+            brands, folders,
         )
     elif category:
         checks = rows[0]["current_checks"] if rows else 0
@@ -449,7 +450,7 @@ async def report(
     }
 
 
-class CategoryReportRequest(BaseModel):
+class CategoryReportRequest(FolderRequest):
     model_config = ConfigDict(extra="forbid")
     date_from:date
     date_to:date
@@ -464,13 +465,13 @@ class CategoryReportRequest(BaseModel):
 
 @router.post('')
 async def report_post(data:CategoryReportRequest,db:AsyncSession=Depends(get_db)):
-    return await report(**data.model_dump(),db=db)
+    return await report(**data.model_dump(exclude={"folders"}),folders=await resolve_folders(data.folders),db=db)
 
 
-async def _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name, brands: list[str] | None = None):
+async def _product_details(db, start, end, old_start, old_end, stores, clients, category_map, category_name, brands: list[str] | None = None, folders: FolderPairs = None):
     category_map, join, category = _mapped_items(category_map)
     async def period_rows(period_start, period_end):
-        conditions = _sale_conditions(period_start, period_end, stores, clients, **({"brands": brands} if brands else {}))
+        conditions = _sale_conditions(period_start, period_end, stores, clients, **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}))
         if category_name: conditions.append(category == category_name)
         rows = (await db.execute(select(category, SaleItem.article, SaleItem.code, func.max(SaleItem.name).label("name"), func.sum(SaleItem.quantity * SaleItem.actual_price).label("revenue"), func.sum(SaleItem.quantity).label("units"), func.count(func.distinct(Sale.id)).label("checks")).select_from(SaleItem).join(Sale).outerjoin(category_map, join).where(*conditions).group_by(category, SaleItem.article, SaleItem.code))).all()
         return {(row.category, row.code or row.article or row.name): row for row in rows}
@@ -497,7 +498,7 @@ async def details(
     buyer_type: Annotated[list[str] | None, Query()] = None,
     group_by: str | None = Query(None, pattern="^(day|week|month)$"),
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None,
+    brands: Annotated[list[str] | None, Query()] = None, folders: Annotated[FolderPairs, Depends(folder_selection)] = None,
 ):
     started = time.perf_counter()
     start, end, old_start, old_end, _, clients, category_map, _, rows, _, _ = (
@@ -511,7 +512,7 @@ async def details(
             category_name,
             db,
             comparison_mode=comparison_mode,
-            **({"brands": brands} if brands else {}),
+            **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
         )
     )
     if not rows:
@@ -526,7 +527,7 @@ async def details(
         clients,
         category_map,
         category_name,
-        **({"brands": brands} if brands else {}),
+        **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
     )
     category_map, join, category = _mapped_items(category_map)
     grouping = group_by or default_grouping(start, end)
@@ -547,7 +548,7 @@ async def details(
                     end,
                     stores,
                     clients,
-                    **({"brands": brands} if brands else {}),
+                    **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
                 ),
                 category == category_name,
             )
@@ -593,7 +594,7 @@ async def export(
     buyer_type: Annotated[list[str] | None, Query()] = None,
     category: str | None = None,
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None,
+    brands: Annotated[list[str] | None, Query()] = None, folders: Annotated[FolderPairs, Depends(folder_selection)] = None,
     categories: Annotated[list[str] | None, Query()] = None,
 ):
     (
@@ -617,16 +618,16 @@ async def export(
         buyer_type,
         category,
         db,
-        **({"brands": brands} if brands else {}),
+        **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
     )
     rows = _select_categories(rows, category, categories)
     if categories:
         names = [r["category"] for r in rows]
         checks = await _selected_checks(
-            db, start, end, stores, clients, category_map, names, brands
+            db, start, end, stores, clients, category_map, names, brands, folders
         )
         old_checks = await _selected_checks(
-            db, old_start, old_end, stores, clients, category_map, names, brands
+            db, old_start, old_end, stores, clients, category_map, names, brands, folders
         )
     metrics = report_summary(rows, checks, old_checks)
     products = await _product_details(
@@ -639,7 +640,7 @@ async def export(
         clients,
         category_map,
         None,
-        **({"brands": brands} if brands else {}),
+        **({"brands": brands} if brands else {}), **({"folders": folders} if folders is not None else {}),
     )
     products = _select_categories(products, category, categories)
     book = Workbook()
@@ -744,7 +745,7 @@ async def export(
 
 @router.post('/export/xlsx')
 async def export_post(data:CategoryReportRequest,db:AsyncSession=Depends(get_db)):
-    return await export(**data.model_dump(),db=db)
+    return await export(**data.model_dump(exclude={"folders"}),folders=await resolve_folders(data.folders),db=db)
 
 
 @router.get("/product-sales/list")
@@ -761,7 +762,7 @@ async def product_sales(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    brands: Annotated[list[str] | None, Query()] = None, full: bool = False):
+    brands: Annotated[list[str] | None, Query()] = None, folders: Annotated[FolderPairs, Depends(folder_selection)] = None, full: bool = False):
     if date_from > date_to:
         raise HTTPException(422, "Дата начала не может быть позже даты окончания")
     start, end, _ = effective_period(
@@ -786,8 +787,8 @@ async def product_sales(
         )
     else:
         raise HTTPException(422, "Не указан товар")
-    matches = select(SaleItem.id).where(SaleItem.sale_id == Sale.id, product).exists()
-    conditions = [*_sale_conditions(start, end, stores, clients, **({"brands": brands} if brands else {})), matches]
+    matches = select(SaleItem.id).where(SaleItem.sale_id == Sale.id, product, brand_item_condition(brands, folders)).correlate(Sale).exists()
+    conditions = [*_sale_conditions(start, end, stores, clients), matches]
     total = int(
         await db.scalar(select(func.count()).select_from(Sale).where(*conditions)) or 0
     )

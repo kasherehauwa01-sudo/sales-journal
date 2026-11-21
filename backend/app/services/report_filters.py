@@ -1,3 +1,5 @@
+from app.services.report_folders import folder_item_condition
+from sqlalchemy import and_
 """Bounded client predicates and item filters against resolved local catalog pairs."""
 from sqlalchemy import String, any_, bindparam, cast, func, select
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -22,9 +24,9 @@ def client_names_condition(column, clients):
     return array_membership(func.lower(func.trim(column)), names, parameter_name="report_clients")
 
 
-def report_item_condition(brands=None, categories=None):
+def report_item_condition(brands=None, categories=None, folders=None):
     if not brands and not categories:
-        return True
+        return folder_item_condition(folders)
     catalog_conditions = []
     if brands:
         catalog_conditions.append(array_membership(
@@ -43,35 +45,35 @@ def report_item_condition(brands=None, categories=None):
         ))
     norm = lambda column: func.lower(func.trim(func.coalesce(column, "")))
     # Match the entire resolved pair, never an ambiguous article alone.
-    return select(CatalogLookup.identity).join(
+    return and_(folder_item_condition(folders), select(CatalogLookup.identity).join(
         CatalogProduct, CatalogProduct.product_id == CatalogLookup.product_id
     ).where(
         CatalogLookup.status == "matched",
         norm(CatalogLookup.code) == norm(SaleItem.code),
         norm(CatalogLookup.article) == norm(SaleItem.article),
         *catalog_conditions,
-    ).correlate(SaleItem).exists()
+    ).correlate(SaleItem).exists())
 
 
-def report_sale_conditions(brands=None, categories=None):
-    if not brands and not categories:
+def report_sale_conditions(brands=None, categories=None, folders=None):
+    if not brands and not categories and folders is None:
         return []
     return [select(SaleItem.id).where(
-        SaleItem.sale_id == Sale.id, report_item_condition(brands, categories)
+        SaleItem.sale_id == Sale.id, report_item_condition(brands, categories, folders)
     ).correlate(Sale).exists()]
 
 
-def brand_item_condition(brands):
-    return report_item_condition(brands)
+def brand_item_condition(brands, folders=None):
+    return report_item_condition(brands, folders=folders)
 
 
-def brand_sale_conditions(brands):
-    return report_sale_conditions(brands)
+def brand_sale_conditions(brands, folders=None):
+    return report_sale_conditions(brands, folders=folders)
 
 
-def report_sale_amount(brands=None, categories=None):
-    if not brands and not categories:
+def report_sale_amount(brands=None, categories=None, folders=None):
+    if not brands and not categories and folders is None:
         return Sale.total_amount
     return select(func.coalesce(func.sum(SaleItem.quantity * SaleItem.actual_price), 0)).where(
-        SaleItem.sale_id == Sale.id, report_item_condition(brands, categories)
+        SaleItem.sale_id == Sale.id, report_item_condition(brands, categories, folders)
     ).correlate(Sale).scalar_subquery()

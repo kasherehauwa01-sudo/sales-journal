@@ -1,3 +1,4 @@
+import { FolderFilter } from "../components/FolderFilter";
 import { assertComplete, assertVisibleRows, assertSameSnapshot } from "../services/reportPdf";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { BrandFilter } from "../components/BrandFilter";
@@ -18,6 +19,7 @@ type PeriodKind='today'|'yesterday'|'current_week'|'previous_week'|'current_mont
 const iso=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;function dates(kind:PeriodKind){const now=new Date(),from=new Date(now),to=new Date(now),day=(now.getDay()+6)%7;if(kind==='yesterday'){from.setDate(from.getDate()-1);to.setDate(to.getDate()-1)}if(kind==='current_week')from.setDate(from.getDate()-day);if(kind==='previous_week'){from.setDate(from.getDate()-day-7);to.setDate(from.getDate()+6)}if(kind==='year')from.setMonth(0,1);if(kind==='current_month')from.setDate(1);if(kind==='previous_month'){from.setMonth(from.getMonth()-1,1);to.setDate(0)}return {from:iso(from),to:iso(to)}}
 const periods:Array<[PeriodKind,string]>=[['today','Сегодня'],['yesterday','Вчера'],['current_week','Текущая неделя'],['previous_week','Предыдущая неделя'],['current_month','Текущий месяц'],['previous_month','Предыдущий месяц'],['year','Год'],['custom','Произвольный период']];const labels:Record<Metric,string>={revenue:'Выручка',checks:'Количество чеков',average_check:'Средний чек',items:'Продано товаров',items_per_check:'Товаров в чеке',average_discount:'Средняя скидка'};const format=(key:Metric,value:number)=>key==='revenue'||key==='average_check'?money(value):key==='average_discount'?percent(value):number(value);const change=(value:number|null)=>value==null?'—':`${value>0?'+':''}${percent(value)} ${value>0?'↑':value<0?'↓':'→'}`;
 export function StoreAnalyticsReportPage() {
+  const [folders, setFolders] = useState<string[]>([]);
   const [brands, setBrands] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const initial = dates("current_month");
@@ -52,6 +54,7 @@ export function StoreAnalyticsReportPage() {
     buyer_type: buyerType,
     brands,
     categories,
+    folders,
     include_both: true,
   };
   const controller = useExplicitReport(params, (p, signal) => {setSelected(undefined);return reportJson<Report>(`/reports/store-analytics?${query(p)}`, signal)},
@@ -77,6 +80,7 @@ export function StoreAnalyticsReportPage() {
       buyer_type: controller.snapshot.buyer_type,
       brands: controller.snapshot.brands,
       categories: controller.snapshot.categories,
+      folders: controller.snapshot.folders,
       group_by: selectedGroup || undefined,
     });
     void controller.perform(
@@ -230,6 +234,7 @@ export function StoreAnalyticsReportPage() {
             <span>Категория</span>
             <CategoryTreeFilter value={categories} onChange={setCategories} includeReportFallbacks={false} />
           </div>
+          <FolderFilter value={folders} onChange={setFolders} />
           <label>
             Менеджер
             <MultiSelect options={managers || []} value={manager} onChange={setManager} placeholder="Все менеджеры" searchable showActions />

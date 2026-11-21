@@ -142,7 +142,7 @@ def _integration_get(path:str,params:dict|None=None):
  from app.config import settings
  headers={"Accept":"application/json"}
  if settings.vrcatalog_api_token:headers["Authorization"]=f"Bearer {settings.vrcatalog_api_token}"
- query=f"?{urlencode({key:value for key,value in (params or {}).items() if value is not None})}" if params else ""
+ query=f"?{urlencode({key:value for key,value in (params or {}).items() if value is not None},doseq=True)}" if params else ""
  request=Request(f"{settings.vrcatalog_api_url.rstrip('/')}/{path.lstrip('/')}{query}",headers=headers,method="GET")
  with urlopen(request,timeout=30) as response:return json.load(response)
 

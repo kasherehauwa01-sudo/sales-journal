@@ -1,3 +1,4 @@
+import { FolderFilter } from "../components/FolderFilter";
 import {CategoryTreeFilter} from "../components/CategoryTreeFilter";
 import { assertComplete, assertVisibleRows, assertSameSnapshot } from "../services/reportPdf";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
@@ -49,6 +50,7 @@ function CategoryMetrics({ row }: { row: CategoryRow }) {
 }
 
 export function CategoryAnalyticsReportPage() {
+  const [folders, setFolders] = useState<string[]>([]);
   const [brands, setBrands] = useState<string[]>([]);
   const initial = periodDates("current_month");
   const [kind, setKind] = useState<PeriodKind>("current_month"),
@@ -109,6 +111,7 @@ export function CategoryAnalyticsReportPage() {
     manager,
     buyer_type: buyerType,
     brands,
+    folders,
     categories,
   };
   const controller = useExplicitReport(params, (p, signal) => {
@@ -349,6 +352,7 @@ export function CategoryAnalyticsReportPage() {
             />
           </label>
           <BrandFilter value={brands} onChange={setBrands} />
+          <FolderFilter value={folders} onChange={setFolders} />
           <label>
             Менеджер
             <MultiSelect

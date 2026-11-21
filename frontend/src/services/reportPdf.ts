@@ -4,7 +4,7 @@ import { reportResponse } from "../hooks/useExplicitReport";
 export const FILTER_LABELS: Record<string,string> = {
  date_from:"Начало",date_to:"Конец",departments:"Подразделения",stores:"Магазины",store:"Магазин",
  manager:"Менеджер",managers:"Менеджеры",buyer_type:"Вид покупателя",buyer_types:"Виды покупателей",
- brands:"Бренды",brand:"Бренд",category:"Категория",manufacturers:"Производители",manufacturer:"Производитель",
+ folders:"Поиск по папке",brands:"Бренды",brand:"Бренд",category:"Категория",manufacturers:"Производители",manufacturer:"Производитель",
  subcategories:"Подкатегории",segment:"Сегмент",search:"Поиск",article:"Артикул",products:"Товары",clients:"Клиенты",
  compare:"Сравнение",comparison_mode:"Режим сравнения",group:"Группировка",group_by:"Группировка",tab:"Раздел",
  years:"Годы",reason:"Причина",status:"Статус",criteria:"Критерии",
@@ -25,7 +25,7 @@ export function filterText(snapshot: Record<string,unknown>): string {
  const source = (snapshot.filters || snapshot.parameters || snapshot) as Record<string,unknown>;
  return Object.entries(source).filter(([key,value])=>
   !['page','after','limit','include_both','include_groupings'].includes(key) && value!==undefined && value!==null && value!=='' && (!Array.isArray(value)||value.length)
- ).map(([key,value])=>`${FILTER_LABELS[key]||key}: ${valueText(value)}`).join(' · ');
+ ).map(([key,value])=>`${FILTER_LABELS[key]||key}: ${(key === "folders" && Array.isArray(value) ? value.map(path=>String(path).split("|").join(" / ")).join(", ") : valueText(value))}`).join(' · ');
 }
 export function periodText(snapshot: Record<string,unknown>): string {
  const p=(snapshot.filters || snapshot.parameters || snapshot) as Record<string,unknown>;

@@ -1,3 +1,4 @@
+import {FolderFilter} from "../components/FolderFilter";
 import {useState} from 'react';
 import {query} from '../api/client';
 import {useApi} from '../hooks/useApi';
@@ -47,7 +48,7 @@ const columns=[['last_purchase_date','Последняя покупка'],['days
 const value=(v:unknown)=>v==null?'—':typeof v==='number'?Number(v.toFixed(4)).toString():String(v);
 
 export function AnalyticsSignalsPage(){
- const [draft,setDraft]=useState({search:'',signal_type:'',status:'',reason:'',min_score:'0',min_confidence:'0',eligible:''});
+ const [draft,setDraft]=useState({folders:[] as string[],search:'',signal_type:'',status:'',reason:'',min_score:'0',min_confidence:'0',eligible:''});
  const [filters,setFilters]=useState(draft);const [cursors,setCursors]=useState<string[]>([]);
  const page=cursors.length+1;
  const qs=query({...Object.fromEntries(Object.entries(filters).filter(([,v])=>v!=='')),after:cursors.at(-1),page_size:50});
@@ -65,6 +66,7 @@ export function AnalyticsSignalsPage(){
  <details><summary>Диагностика запуска</summary><dl>{Object.entries(data.run.diagnostics).map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl></details></>}
  </section>
  <form className="panel" style={{padding:16,display:'flex',flexWrap:'wrap',gap:12}} onSubmit={e=>{e.preventDefault();setFilters({...draft});setCursors([])}}>
+ <FolderFilter value={draft.folders} onChange={folders=>setDraft({...draft,folders})}/><small>Папки отбирают клиентов по покупкам до даты среза. Показатели сигналов не пересчитываются.</small>
  <label>Клиент<input aria-label="Клиент" value={draft.search} onChange={e=>change('search',e.target.value)}/></label>
  <label>Тип<select aria-label="Тип" value={draft.signal_type} onChange={e=>change('signal_type',e.target.value)}><option value="">Все</option><option>PURCHASE_OVERDUE</option><option>CHURN_RISK</option></select></label>
  <label>Статус<select aria-label="Статус" value={draft.status} onChange={e=>change('status',e.target.value)}><option value="">Все</option>{['ACTIVE','SUSPENDED','RESOLVED','NORMAL'].map(v=><option key={v}>{v}</option>)}</select></label>

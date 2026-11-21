@@ -1,4 +1,5 @@
 import {CategoryTreeFilter} from "../components/CategoryTreeFilter";
+import { FolderFilter } from "../components/FolderFilter";
 import { PdfExportButton, usePdfData } from "../components/PdfExportButton";
 import { assertSameSnapshot, assertVisibleRows, assertComplete } from "../services/reportPdf";
 import {ProductPhoto} from "../components/ProductPhoto";
@@ -26,6 +27,7 @@ export function PromotionCandidatesPage() {
   const [catalogDetail,setCatalogDetail]=useState<{stocks:{name:string;quantity:number|null}[];manager:string|null}|null>(null);
   const [catalogError,setCatalogError]=useState("");
 
+  const [folders, setFolders] = useState<string[]>([]);
   const [tab, setTab] = useState<"candidates" | "history">("candidates"),
     [from, setFrom] = useState(iso(start)),
     [to, setTo] = useState(iso(end)),
@@ -69,6 +71,7 @@ export function PromotionCandidatesPage() {
     date_from: from,
     date_to: to,
     departments,
+    folders,
     reason: reason || undefined,
     status: status || undefined,
     categories,
@@ -244,6 +247,7 @@ export function PromotionCandidatesPage() {
             <span>Категория</span>
             <CategoryTreeFilter value={categories} onChange={setCategories}/>
           </div>
+          <FolderFilter value={folders} onChange={setFolders} />
           <div className="report-filter">
             <span>Бренд</span>
             <CatalogValueSelect field="brand" label="Бренд" value={brand} onChange={setBrand}/>

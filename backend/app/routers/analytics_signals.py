@@ -1,5 +1,8 @@
 """Read-only shadow diagnostics. GET never starts/rebuilds analytics."""
-from typing import Literal
+from typing import Literal, Annotated
+from app.services.report_folders import FolderPairs, folder_selection, folder_item_condition, folder_revision
+from app.services.client_identity import analytical_name_sql
+from app.models import Sale, SaleItem
 import base64
 import hashlib
 import json
@@ -25,7 +28,8 @@ async def report(search: str = Query("", max_length=200),
                  eligible: bool | None = None, reason: str | None = Query(None, max_length=64),
                  min_score: float = Query(0, ge=0, le=100), min_confidence: float = Query(0, ge=0, le=1),
                  after: str | None = Query(None, max_length=4096), page_size: int = Query(50, ge=1, le=100),
-                 db: AsyncSession = Depends(get_db)):
+                 db: AsyncSession = Depends(get_db),
+                 folders: Annotated[FolderPairs, Depends(folder_selection)] = None):
     if db.bind.dialect.name == "postgresql":
         await db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
         await db.execute(text("SET LOCAL statement_timeout = '10s'"))
@@ -54,6 +58,13 @@ async def report(search: str = Query("", max_length=200),
         diagnostics=run.counters, **public_metadata))
     table = AnalyticsClientEvaluation
     conditions = [table.run_id == run.id, table.score >= min_score, table.confidence >= min_confidence]
+    if folders is not None:
+        purchases = [analytical_name_sql(Sale.client) == table.client_key,
+                     Sale.sale_date <= run.as_of, Sale.id <= run.upper_sale_id,
+                     Sale.total_amount > 0, folder_item_condition(folders)]
+        if scope and scope.get("department"):
+            purchases.append(Sale.department == scope["department"])
+        conditions.append(select(SaleItem.id).join(Sale, Sale.id == SaleItem.sale_id).where(*purchases).correlate(table).exists())
     if search:conditions.append(table.display_name.ilike(f"%{search}%") | table.client_key.ilike(f"%{search}%"))
     if signal_type:conditions.append(table.signal_type == signal_type)
     if status:conditions.append(table.status == status)
@@ -61,7 +72,7 @@ async def report(search: str = Query("", max_length=200),
     if reason:conditions.append(table.reason == reason)
     total = int(await db.scalar(select(func.count()).select_from(table).where(*conditions)) or 0)
     rank = case((table.status == "ACTIVE", 0), (table.status == "SUSPENDED", 1), else_=2)
-    signature = hashlib.sha256(json.dumps([search,signal_type,status,eligible,reason,float(min_score),float(min_confidence)]).encode()).hexdigest()
+    signature = hashlib.sha256(json.dumps([search,signal_type,status,eligible,reason,float(min_score),float(min_confidence),folder_revision(folders)]).encode()).hexdigest()
     if after:
         try:
             cursor=json.loads(base64.urlsafe_b64decode(after.encode()).decode())
