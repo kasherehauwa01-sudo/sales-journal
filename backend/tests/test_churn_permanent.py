@@ -188,7 +188,7 @@ def test_host_delivery_replays_identical_page_after_lost_ack():
         calls.append((argv,kw))
         action=argv[argv.index('app.churn_automation')+1] if 'app.churn_automation' in argv else argv[-1]
         if action=='page':return json.dumps(page)
-        if action in {'preflight','deliver'}:return json.dumps({'job_id':'job','release_id':'release','receipts':[{'decision':'TASK_EXISTS'}]})
+        if action in {'preflight','deliver'}:return json.dumps({'job_id':'job','release_id':'release','receipts':[{'event_id':1,'event_hash':'hash','decision':'TASK_EXISTS','task_id':'task-1','created_for_release':True,'reasons':[]}]})
         if action=='ack':return json.dumps({'status':'SUCCEEDED'})
         raise AssertionError(argv)
     job={'id':'job','status':'RELEASED'}
