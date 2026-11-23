@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check by default. Explicit --apply copies host code only; never starts/enables anything."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ from collect_churn_status import private_json
 
 ROOT = Path('/var/www/html/vr/calltrack-v3-20261026')
 STORAGE = ROOT/'storage'
+MONITOR = Path('/run/sales-churn-monitor')
 UNITS = ('sales-churn-permanent.service', 'sales-churn-permanent.timer')
 MAPPING = {
  'backend/scripts/run_churn_automation.py': '/usr/local/libexec/run_churn_automation.py',
@@ -32,9 +34,9 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def secure(path, *, private=False):
+def secure(path, *, private=False, root_owned=True):
     info = path.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+    if (not stat.S_ISREG(info.st_mode) or (root_owned and info.st_uid != 0)
             or info.st_mode & (0o077 if private else 0o022) or info.st_size > 2*1024*1024):
         raise ValueError('UNTRUSTED_FILE')
     return info
@@ -114,12 +116,15 @@ def plan(config_path, source_mode, provider=None):
     for name, expected_hash in entries.items():
         path = Path(name)
         if path not in planned:
-            secure(path)
+            # Existing reviewed application PHP may be owned by its deployment user.
+            application_php = path.is_relative_to(ROOT) and path.suffix == '.php' and path.name != 'config.local.php'
+            secure(path, root_owned=not application_php)
             if digest(path) != expected_hash:
                 raise ValueError('REVIEWED_RUNTIME_FILE_CHANGED')
-    for directory in (STORAGE, Path('/run/sales-churn-monitor')):
+    for directory in (STORAGE, MONITOR):
         info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o002:
+        if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o002
+                or (directory == MONITOR and (info.st_uid != 0 or info.st_mode & 0o022))):
             raise ValueError('PROVISIONED_STORAGE_REQUIRED')
     frozen = {}
     for target, source in planned.items():
@@ -186,9 +191,16 @@ def main():
     parser.add_argument('--config', type=Path, default=Path('/etc/sales/churn-permanent/host.json'))
     parser.add_argument('--evidence-provider', type=Path)
     args = parser.parse_args()
+    lock = None
     try:
         if os.geteuid() != 0:
             raise ValueError('ROOT_REVIEW_CONTEXT_REQUIRED')
+        if args.apply:
+            lock = os.open('/run/lock/sales-churn-host-install.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            info = os.fstat(lock)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+                raise ValueError('UNTRUSTED_INSTALL_LOCK')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         check_host()
         planned = plan(args.config, args.source_mode, args.evidence_provider)
         for target, source in planned.items():
@@ -204,6 +216,9 @@ def main():
         print('No daemon-reload, enable, start, timer activation or migration performed')
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         parser.exit(1, 'HOST_INSTALL_BLOCKED: review package/config/manifest, inactive units and host prerequisites\n')
+    finally:
+        if lock is not None:
+            os.close(lock)
 
 
 if __name__ == '__main__':

@@ -158,7 +158,8 @@ def transport():
 
 
 @pytest.mark.parametrize('mutation', ['context', 'hash', 'id', 'duplicate', 'decision', 'shape'])
-def test_malformed_receipt_is_never_acknowledged(mutation):
+@pytest.mark.parametrize('stage', ['preflight', 'deliver'])
+def test_malformed_receipt_is_never_acknowledged(mutation, stage):
     page, receipt = transport()
     calls = []
     if mutation == 'context': receipt['release_id'] = 'other'
@@ -168,14 +169,16 @@ def test_malformed_receipt_is_never_acknowledged(mutation):
     if mutation == 'decision': receipt['receipts'][0]['decision'] = 'READY'
     if mutation == 'shape': receipt['receipts'] = None
     def runner(argv, **kw):
-        calls.append(argv[-1])
-        if argv[-1] == 'page': return json.dumps(page)
-        if argv[-1] == 'preflight': return json.dumps(receipt)
-        raise AssertionError('Must not deliver/ACK malformed preview')
+        action = argv[argv.index('app.churn_automation')+1] if 'app.churn_automation' in argv else argv[-1]
+        calls.append(action)
+        if action == 'page': return json.dumps(page)
+        if action in ('preflight', 'deliver'):
+            return json.dumps(receipt if action == stage else transport()[1])
+        raise AssertionError('Must not ACK malformed response')
     with pytest.raises(ValueError, match='RESPONSE_INVALID'):
         host.process_job({'id': 'job', 'status': 'RELEASED'}, {'calltrack_root': '/synthetic'}, {},
                          runner=runner, deadline=host.time.monotonic()+5, verify=lambda c: None)
-    assert calls == ['page', 'preflight']
+    assert calls == (['page', 'preflight'] if stage == 'preflight' else ['page', 'preflight', 'deliver'])
 
 
 def test_lost_ack_replays_exact_event_and_does_not_convert_failure_to_success():
@@ -329,3 +332,49 @@ def test_installation_config_can_be_checked_while_receiver_is_disabled(tmp_path,
     assert host.load_config(config, require_enabled=False)[1]['CALLTRACK_ANALYTICS_MODE'] == 'disabled'
     with pytest.raises(ValueError, match='RECEIVER_DISABLED'):
         host.load_config(config)
+
+
+def test_install_plan_checks_package_and_approved_hashes_without_writes(tmp_path, monkeypatch):
+    module = installer()
+    package = tmp_path/'package'
+    root, storage, monitor = tmp_path/'application', tmp_path/'storage', tmp_path/'monitor'
+    for directory in (root, storage, monitor): directory.mkdir()
+    mapping = {name: str(tmp_path/'targets'/Path(target).name) for name, target in module.MAPPING.items()}
+    hashes = {}
+    for name in set(mapping) | {'deploy/churn-permanent/install_host.py'}:
+        path = package/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(('reviewed '+name).encode())
+        hashes[name] = module.digest(path)
+    (package/'deploy/churn-permanent/host-package.sha256.json').write_text(json.dumps(hashes))
+    entries = {target: hashes[name] for name, target in mapping.items()}
+    config = {'calltrack_root': str(root), 'trusted_import': str(tmp_path/'trusted.json')}
+    environment = {'CALLTRACK_ANALYTICS_MODE': 'disabled', 'CALLTRACK_STORAGE_DIR': str(storage)}
+    monkeypatch.setattr(module, 'PACKAGE', package)
+    monkeypatch.setattr(module, 'ROOT', root)
+    monkeypatch.setattr(module, 'STORAGE', storage)
+    monkeypatch.setattr(module, 'MONITOR', monitor)
+    monkeypatch.setattr(module, 'MAPPING', mapping)
+    monkeypatch.setattr(module, 'load_config', lambda *a, **k: (config, environment))
+    monkeypatch.setattr(module, 'manifest_entries', lambda c: entries)
+    monkeypatch.setattr(module, 'validate_runtime', lambda *a, **k: None)
+    original_lstat = Path.lstat
+    def root_owner(path):
+        values = list(original_lstat(path))
+        values[4] = 0
+        values[0] &= ~0o022  # synthetic protected installation ancestors
+        return os.stat_result(values)
+    monkeypatch.setattr(Path, 'lstat', root_owner)
+    planned = module.plan(tmp_path/'host.json', 'TRUSTED_IMPORT')
+    assert set(planned) == {Path(p) for p in mapping.values()}
+    assert all(isinstance(content, bytes) for content in planned.values())
+    assert not (tmp_path/'targets').exists()
+    first = next(iter(mapping))
+    entries[mapping[first]] = '0'*64
+    with pytest.raises(ValueError, match='NOT_APPROVED'):
+        module.plan(tmp_path/'host.json', 'TRUSTED_IMPORT')
+    entries[mapping[first]] = hashes[first]
+    (package/first).write_bytes(b'unreviewed change')
+    with pytest.raises(ValueError, match='PACKAGE_CHANGED'):
+        module.plan(tmp_path/'host.json', 'TRUSTED_IMPORT')
+    assert not (tmp_path/'targets').exists()
