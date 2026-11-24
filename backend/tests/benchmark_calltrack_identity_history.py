@@ -16,7 +16,7 @@ async def main():
     url = make_url(raw)
     assert url.host == "127.0.0.1" and url.database == "calltrack_history_test", "Test DB only"
     size = int(os.environ.get("CALLTRACK_HISTORY_BENCH_ROWS", "100000"))
-    assert 1000 <= size <= 250000
+    assert 1000 <= size <= 1000000
     schema = "bench_" + uuid4().hex
     admin = create_async_engine(raw, poolclass=NullPool)
     engine = create_async_engine(raw, poolclass=NullPool,
