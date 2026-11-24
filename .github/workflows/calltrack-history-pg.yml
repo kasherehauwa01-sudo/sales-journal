@@ -8,6 +8,9 @@ on:
       - 'backend/tests/test_calltrack_identity_history.py'
       - 'backend/tests/test_calltrack_history_php_contract.py'
       - 'backend/tests/benchmark_calltrack_identity_history.py'
+      - 'backend/tests/fixtures/calltrack_review_source.py'
+      - 'backend/tests/fixtures/calltrack_review_seed.php'
+      - 'backend/tests/fixtures/calltrack_review_web_e2e.py'
       - '.github/workflows/calltrack-history-pg.yml'
   push:
     branches:
@@ -33,7 +36,23 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+      analytics-test-mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: test
+          MARIADB_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
+      CALLTRACK_E2E_FIXTURE: '1'
+      ANALYTICS_TASK_TEST_DSN: mysql:host=analytics-test-mariadb;dbname=analytics_http_test
+      ANALYTICS_TASK_TEST_USER: root
+      ANALYTICS_TASK_TEST_PASSWORD: test
       CALLTRACK_HISTORY_TEST_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/calltrack_history_test
       PYTHONPATH: backend
       CALLTRACK_HISTORY_PHP_HELPER: calltrack/api/analytics_history_page.php
@@ -48,7 +67,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mbstring
+          extensions: pdo_mysql, mbstring, pdo_sqlite, sqlite3
           coverage: none
       - uses: actions/setup-python@v5
         with:
@@ -61,6 +80,12 @@ jobs:
           python -m pip install -r backend/requirements.txt httpx
       - name: Verify source history against real isolated PostgreSQL
         run: python -m pytest -q backend/tests/test_calltrack_identity_history.py backend/tests/test_calltrack_history_php_contract.py
+      - name: Set test MariaDB hostname and schema
+        run: |
+          echo '127.0.0.1 analytics-test-mariadb' | sudo tee -a /etc/hosts
+          php -r '$p=new PDO("mysql:host=analytics-test-mariadb","root","test");$p->exec("CREATE DATABASE analytics_http_test CHARACTER SET utf8mb4") ;'
+      - name: Complete synthetic PHP web-session/MariaDB/PostgreSQL E2E
+        run: python backend/tests/fixtures/calltrack_review_web_e2e.py
       - name: Representative synthetic history performance and EXPLAIN
         env:
           CALLTRACK_HISTORY_BENCH_ROWS: '100000'
