@@ -53,7 +53,12 @@ sales=subprocess.Popen(["python","backend/tests/fixtures/calltrack_review_source
     env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
 php=None
 try:
-    ready("http://127.0.0.1:18080/api/integrations/calltrack/analytics/identity-history?client_key=x")
+    try:
+        ready("http://127.0.0.1:18080/api/integrations/calltrack/analytics/identity-history?client_key=x")
+    except RuntimeError:
+        if sales.poll() is not None:
+            print("Sales fixture exited:",sales.stdout.read(),flush=True)
+        raise
     seed=subprocess.run(["php","backend/tests/fixtures/calltrack_review_seed.php"],
         env=env,capture_output=True,text=True,timeout=30)
     assert seed.returncode==0,(seed.stdout,seed.stderr)
