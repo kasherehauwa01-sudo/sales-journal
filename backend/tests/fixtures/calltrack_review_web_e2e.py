@@ -45,7 +45,10 @@ def ready(url):
         try:
             urllib.request.urlopen(url,timeout=1)
             return
-        except (OSError,urllib.error.HTTPError):
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401,403,404,422):return
+            time.sleep(0.3)
+        except OSError:
             time.sleep(0.3)
     raise RuntimeError("Service did not start: "+url)
 
