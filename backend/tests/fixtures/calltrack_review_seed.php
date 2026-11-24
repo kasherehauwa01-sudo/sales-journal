@@ -4,8 +4,8 @@ declare(strict_types=1);
 if(getenv('CALLTRACK_E2E_FIXTURE')!=='1')throw new RuntimeException('CI fixture only');
 if(getenv('ANALYTICS_TASK_TEST_DSN')!=='mysql:host=analytics-test-mariadb;dbname=analytics_http_test')
  throw new RuntimeException('Disposable DB required');
-require_once __DIR__.'/../../../../calltrack/api/analytics_sync.php';
-require_once __DIR__.'/../../../../calltrack/tests/fixtures/analytics/database.php';
+require_once __DIR__.'/../../../calltrack/api/analytics_sync.php';
+require_once __DIR__.'/../../../calltrack/tests/fixtures/analytics/database.php';
 $db=analyticsTestDatabase();
 $admin=['id'=>1,'role'=>'admin'];
 saveManagerBinding($db,$admin,'Fixture owner three',3,null);
@@ -32,7 +32,7 @@ file_put_contents($storage.'/cache/clients/clients.json',json_encode([
   'fields'=>['manager'=>'Fixture owner three','Менеджер'=>'Fixture owner three',
              'status'=>'active']]
 ],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
-require_once __DIR__.'/../../../../calltrack/api/web_auth.php';
+require_once __DIR__.'/../../../calltrack/api/web_auth.php';
 ini_set('session.save_path',$storage.'/sessions');
 @mkdir($storage.'/sessions',0770,true);
 startWebSession();
