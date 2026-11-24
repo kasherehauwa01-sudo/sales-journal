@@ -56,8 +56,13 @@ try:
     try:
         ready("http://127.0.0.1:18080/api/integrations/calltrack/analytics/identity-history?client_key=x")
     except RuntimeError:
-        if sales.poll() is not None:
-            print("Sales fixture exited:",sales.stdout.read(),flush=True)
+        if sales.poll() is None:
+            sales.terminate()
+        try:
+            output=sales.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:
+            sales.kill();output=sales.communicate()[0]
+        print("Sales fixture output:",output,flush=True)
         raise
     seed=subprocess.run(["php","backend/tests/fixtures/calltrack_review_seed.php"],
         env=env,capture_output=True,text=True,timeout=30)
