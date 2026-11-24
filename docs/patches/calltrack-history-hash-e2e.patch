@@ -1,0 +1,11 @@
+--- a/tests/verified_pipeline_e2e.php
++++ b/tests/verified_pipeline_e2e.php
+@@ -23,7 +23,7 @@
+   processAnalyticsEvent($db,$event,null,[],'dry_run',time());
+   $clientKey=$event['subject']['key'];$scope=$event['run']['scope'];
+   $history=salesJournalRequest('GET','/api/integrations/calltrack/analytics/identity-history?client_key='.rawurlencode($clientKey));
+-  $rows=[];$after=0;do{$h=salesJournalRequest('GET','/api/integrations/calltrack/analytics/identity-history/rows?client_key='.rawurlencode($clientKey).'&after='.$after);$rows=array_merge($rows,$h['items']);$after=$h['next_after'];}while($after!==null);
++  $rows=[];$after=0;do{$h=salesJournalRequest('GET','/api/integrations/calltrack/analytics/identity-history/rows?client_key='.rawurlencode($clientKey).'&after='.$after.'&history_hash='.rawurlencode($history['history_hash']));verifiedCheck(($h['history_hash']??null)===$history['history_hash']&&($h['sale_count']??null)===$history['sale_count'],'Stable full history hash');$rows=array_merge($rows,$h['items']);$after=$h['next_after'];}while($after!==null);
+   // Reviewer independently checks every synthetic source row, not an injected VERIFIED flag.
+   verifiedCheck($rows===$config['expected_history'][$clientKey],'Entire synthetic history reconciled');
+   $group=analyticsReviewGroup($event,analyticsReviewDirectoryRows(),managerBindingRows($db),clientCatalogRevision());

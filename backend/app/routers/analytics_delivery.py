@@ -4,7 +4,7 @@ The audit sequence is a cursor ONLY within one SUCCEEDED frozen run. Poll latest
 again after completing pagination; consumers compare per-signal revisions.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import AnalyticsSignalRun, AnalyticsSignalState, AnalyticsSignalChange, AnalyticsDeliveryPublication
@@ -97,3 +97,70 @@ async def automation_changes(run_id:str,after:int=Query(0,ge=0),page_size:int=Qu
     rows=list((await db.scalars(select(Event).where(Event.release_id==run_id,Event.id>after).order_by(Event.id).limit(page_size+1))).all())
     more=len(rows)>page_size;rows=rows[:page_size]
     return dict(run=release.metadata_json['run'],items=[r.payload for r in rows],next_after=rows[-1].id if more else None,automation_allowed=True)
+
+
+# Source-history evidence is independent of frozen analytical runs/releases.
+from contextlib import asynccontextmanager
+import logging
+from sqlalchemy.exc import DBAPIError
+from app.services import calltrack_identity_history as identity_source
+from app.services.product_analytics_runtime import heavy_operation
+from app.services.report_execution import REPORT_SETTINGS
+
+
+@asynccontextmanager
+async def identity_history_transaction(db):
+    async with heavy_operation("calltrack_identity_history"):
+        try:
+            await db.connection(
+                execution_options={"isolation_level": "REPEATABLE READ"}
+            )
+            await db.execute(text("SET TRANSACTION READ ONLY"))
+            for statement in REPORT_SETTINGS:
+                await db.execute(text(statement))
+            yield
+        except DBAPIError as exc:
+            logging.getLogger(__name__).warning(
+                "calltrack_identity_history failed sqlstate=%s",
+                getattr(exc.orig, "sqlstate", None)
+                or getattr(exc.orig, "pgcode", None)
+                or "unknown",
+            )
+            # Never serialize driver exceptions (SQL, parameters or client identity).
+            raise HTTPException(
+                503, "Не удалось прочитать полную историю; подтверждение недоступно"
+            ) from None
+        finally:
+            await db.rollback()
+
+
+@router.get("/identity-history")
+async def identity_history(
+    client_key: str = Query(..., min_length=1, max_length=512),
+    db: AsyncSession = Depends(get_db),
+):
+    identity_source.validate_key(client_key)
+    async with identity_history_transaction(db):
+        summary, _, _ = await identity_source.scan(db, client_key)
+        return summary
+
+
+@router.get("/identity-history/rows")
+async def identity_history_rows(
+    client_key: str = Query(..., min_length=1, max_length=512),
+    history_hash: str = Query(..., pattern="^[a-f0-9]{64}$"),
+    after: int = Query(0, ge=0, le=9223372036854775807),
+    page_size: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    identity_source.validate_key(client_key)
+    async with identity_history_transaction(db):
+        summary, items, next_after = await identity_source.scan(
+            db, client_key, after=after, page_size=page_size
+        )
+        if summary["history_hash"] != history_hash:
+            raise HTTPException(
+                409,
+                "История продаж изменилась; получите сводку и начните просмотр заново",
+            )
+        return dict(**summary, items=items, next_after=next_after)
