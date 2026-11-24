@@ -28,17 +28,17 @@ async def main():
             await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[
                 ImportBatch.__table__, Sale.__table__]))
             await conn.execute(text("""
-                INSERT INTO import_batches(id, filename, file_size, status)
-                VALUES (1, 'synthetic benchmark', 1, 'completed')
+                INSERT INTO import_batches(id, filename, file_size, status, total_rows, processed_rows, added_rows, duplicate_rows, skipped_rows, error_rows)
+                VALUES (1, 'synthetic benchmark', 1, 'completed', 0, 0, 0, 0, 0, 0)
             """))
             # Populate real Sale header columns only with synthetic values.
             await conn.execute(text("""
                 INSERT INTO sales(id,sale_date,document_number,client,department,
-                                  total_amount,fingerprint,import_id)
+                                  total_amount,fingerprint,import_id,social)
                 SELECT i, DATE '2026-01-01' + (i % 300),
                        'R-' || i,
                        CASE WHEN i % 100 = 0 THEN 'ООО РАДУГА' ELSE 'Клиент ' || i END,
-                       'Авиаторов', 10.20, 'test-' || i, 1
+                       'Авиаторов', 10.20, 'test-' || i, 1, false
                 FROM generate_series(1,:count) i
             """), {"count":size})
             await conn.execute(text("ANALYZE sales"))
