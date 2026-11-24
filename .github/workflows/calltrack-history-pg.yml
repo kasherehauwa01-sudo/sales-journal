@@ -6,6 +6,7 @@ on:
       - 'backend/app/routers/analytics_delivery.py'
       - 'backend/app/services/calltrack_identity_history.py'
       - 'backend/tests/test_calltrack_identity_history.py'
+      - 'backend/tests/test_calltrack_history_php_contract.py'
       - '.github/workflows/calltrack-history-pg.yml'
   push:
     branches:
@@ -34,8 +35,20 @@ jobs:
     env:
       CALLTRACK_HISTORY_TEST_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/calltrack_history_test
       PYTHONPATH: backend
+      CALLTRACK_HISTORY_PHP_HELPER: calltrack/api/analytics_history_page.php
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout Calltrack draft verifier
+        uses: actions/checkout@v4
+        with:
+          repository: kasherehauwa01-sudo/Calltrack
+          ref: 72e0265de202194dc65a526026862f11667ee37f
+          path: calltrack
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring
+          coverage: none
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -46,4 +59,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements.txt httpx
       - name: Verify source history against real isolated PostgreSQL
-        run: python -m pytest -q backend/tests/test_calltrack_identity_history.py
+        run: python -m pytest -q backend/tests/test_calltrack_identity_history.py backend/tests/test_calltrack_history_php_contract.py
