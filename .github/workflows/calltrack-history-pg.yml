@@ -88,5 +88,5 @@ jobs:
         run: python backend/tests/fixtures/calltrack_review_web_e2e.py
       - name: Representative synthetic history performance and EXPLAIN
         env:
-          CALLTRACK_HISTORY_BENCH_ROWS: '100000'
+          CALLTRACK_HISTORY_BENCH_ROWS: '1000000'
         run: python backend/tests/benchmark_calltrack_identity_history.py
