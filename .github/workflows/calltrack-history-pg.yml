@@ -7,6 +7,7 @@ on:
       - 'backend/app/services/calltrack_identity_history.py'
       - 'backend/tests/test_calltrack_identity_history.py'
       - 'backend/tests/test_calltrack_history_php_contract.py'
+      - 'backend/tests/benchmark_calltrack_identity_history.py'
       - '.github/workflows/calltrack-history-pg.yml'
   push:
     branches:
@@ -60,3 +61,7 @@ jobs:
           python -m pip install -r backend/requirements.txt httpx
       - name: Verify source history against real isolated PostgreSQL
         run: python -m pytest -q backend/tests/test_calltrack_identity_history.py backend/tests/test_calltrack_history_php_contract.py
+      - name: Representative synthetic history performance and EXPLAIN
+        env:
+          CALLTRACK_HISTORY_BENCH_ROWS: '100000'
+        run: python backend/tests/benchmark_calltrack_identity_history.py
