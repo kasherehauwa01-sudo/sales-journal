@@ -1,0 +1,8 @@
+{
+  "backend/scripts/run_churn_automation.py": "a2975cfe5fa5a24b360b8fe09528f39e7c2395e8288c426361769b19823dc554",
+  "backend/scripts/collect_churn_status.py": "1d1be6ad953fba106b440c24bfa190db79df7a2fcbd7550482373152e9023733",
+  "backend/scripts/churn_trusted_ftp.py": "ebefaaeeaa9ed58e7e6af02822d87b4d4049375567ebf43f23e3fe4a99d915be",
+  "deploy/churn-permanent/systemd/sales-churn-permanent.service": "f575e5c4c50e7538510d983532fa2afb762552f83d193073d061ec95b855387f",
+  "deploy/churn-permanent/systemd/sales-churn-permanent.timer": "02bab963de85b28812918db1998d3ce4f0e9ba95f55d0c0ac6b078acdaed9299",
+  "deploy/churn-permanent/install_host.py": "a2b9e050e113d31f5aeac939bbdb6e4ff2c8c3300b3927313f24dd320529a73c"
+}

@@ -1,0 +1,86 @@
+name: Permanent churn sender
+on:
+  push:
+    branches: [feat/permanent-sender-518]
+  pull_request:
+    paths:
+      - 'backend/scripts/**'
+      - 'backend/tests/*churn*'
+      - 'deploy/churn-permanent/**'
+      - '.github/workflows/churn-sender.yml'
+permissions:
+  contents: read
+jobs:
+  sender:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sales-journal
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: kasherehauwa01-sudo/Calltrack
+          ref: 00a8c9c85c7c03835187e152f5b7fd9a60714971
+          path: calltrack
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test dependencies
+        run: python -m pip install -r sales-journal/backend/requirements-test.txt
+      - name: Sender, policies, integrity and installer checks
+        working-directory: sales-journal/backend
+        env:
+          CALLTRACK_COMPAT_ROOT: ${{ github.workspace }}/calltrack
+        run: |
+          python -m pytest -q tests/test_churn_sender_safety.py tests/test_churn_permanent.py tests/test_churn_host_tools.py tests/test_churn_trusted_host.py tests/test_churn_source_trust.py tests/test_churn_preliminary.py
+          python -B ../deploy/churn-permanent/install_host.py --help
+          python - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('..')
+          data=json.loads((root/'deploy/churn-permanent/host-package.sha256.json').read_text())
+          for name,digest in data.items():
+              assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest,name
+          print('Host package hashes verified')
+          PY
+  receiver518:
+    name: Sender to receiver 518 / PHP 8.5.12 / MariaDB 11.8.6
+    runs-on: ubuntu-24.04
+    container:
+      image: php:8.5.12-cli-bookworm
+    services:
+      analytics-test-mariadb:
+        image: mariadb:11.8.6
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: 'yes'
+          MARIADB_ROOT_HOST: '%'
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - name: Isolated test tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git python3 libsqlite3-dev libonig-dev libsodium-dev
+          missing=$(php -r 'foreach(["pdo_mysql","pdo_sqlite","sqlite3","mbstring","sodium","posix"] as $e)if(!extension_loaded($e))echo $e." ";')
+          if [ -n "$missing" ]; then docker-php-ext-install -j2 $missing; fi
+          php -r 'echo "PHP: ".PHP_VERSION.PHP_EOL;if(PHP_VERSION!=="8.5.12")exit(1);'
+      - uses: actions/checkout@v4
+        with:
+          path: sales-journal
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: kasherehauwa01-sudo/Calltrack
+          ref: 00a8c9c85c7c03835187e152f5b7fd9a60714971
+          path: calltrack
+          persist-credentials: false
+      - name: Real signed delivery with exhausted pilot and lost ACK
+        env:
+          CALLTRACK_COMPAT_ROOT: ${{ github.workspace }}/calltrack
+          ANALYTICS_TASK_TEST_DSN: mysql:host=analytics-test-mariadb;dbname=analytics_tasks_test
+          ANALYTICS_TASK_TEST_USER: root
+          ANALYTICS_TASK_TEST_PASSWORD: ''
+        run: |
+          git config --global --add safe.directory "$CALLTRACK_COMPAT_ROOT"
+          php -r '$p=new PDO("mysql:host=analytics-test-mariadb","root","");$v=$p->query("SELECT VERSION()")->fetchColumn();echo "MariaDB: ".$v.PHP_EOL;if(!str_starts_with($v,"11.8.6-"))exit(1);$p->exec("CREATE DATABASE analytics_tasks_test CHARACTER SET utf8mb4");'
+          python3 -B sales-journal/backend/tests/churn_receiver_518_e2e.py

@@ -22,7 +22,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/run/sales-churn-permanent /run/sales-churn-monitor
+ReadWritePaths=/run/sales-churn-permanent /run/sales-churn-monitor /var/www/html/vr/calltrack-v3-20261026/storage
 # Calltrack persists its existing private cache locks outside the read-only code tree.
-# Operator must review/add the actual storage path and compatible AppArmor/SELinux rules.
+# This package supports exactly the reviewed production storage path above.
+# A different path or unit override requires a new package/manifest review.
 # No Docker socket is mounted into the backend. Host-root access is deployment-only.
